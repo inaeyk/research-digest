@@ -9,11 +9,13 @@ from research_digest.analysis.base import AnalyzerError, LLMAnalyzer, article_an
 from research_digest.db import SOURCE_ARXIV, Database
 from research_digest.errors import sanitize_error
 from research_digest.models import (
+    AnalysisOrigin,
     AnalysisResult,
     Article,
     DigestItem,
     DigestResult,
     InterestProfile,
+    is_above_threshold,
     sorted_digest_items,
     utc_now,
 )
@@ -44,7 +46,10 @@ def run_digest(
     retrieved_count = 0
     stored_count = 0
     analyzed_count = 0
-    relevant_items: list[DigestItem] = []
+    new_analysis_count = 0
+    reused_analysis_count = 0
+    above_threshold_count = 0
+    all_items: list[DigestItem] = []
     status = "success"
     error_message: str | None = None
 
@@ -55,15 +60,18 @@ def run_digest(
         saved_articles = _unique_articles(saved_articles)
 
         analyses_by_key: dict[str, AnalysisResult] = {}
+        origins_by_key: dict[str, AnalysisOrigin] = {}
         missing_articles: list[Article] = []
         for article in saved_articles:
             if article.id is None or profile.id is None:
                 raise DigestPipelineError("saved articles and profiles must have ids")
+            key = article_analysis_key(article)
             analysis = db.get_analysis(article.id, profile.id)
             if analysis is None:
                 missing_articles.append(article)
             else:
-                analyses_by_key[article_analysis_key(article)] = analysis
+                analyses_by_key[key] = analysis
+                origins_by_key[key] = AnalysisOrigin.REUSED
 
         if missing_articles and analyzer is not None:
             new_analyses = analyzer.analyze_many(profile=profile, articles=missing_articles)
@@ -71,19 +79,35 @@ def run_digest(
             for article in missing_articles:
                 if article.id is None or profile.id is None:
                     raise DigestPipelineError("saved articles and profiles must have ids")
-                analysis = new_analyses[article_analysis_key(article)]
+                key = article_analysis_key(article)
+                analysis = new_analyses[key]
                 db.upsert_analysis(article_id=article.id, profile_id=profile.id, analysis=analysis)
-                analyses_by_key[article_analysis_key(article)] = analysis
+                analyses_by_key[key] = analysis
+                origins_by_key[key] = AnalysisOrigin.NEW_THIS_RUN
 
         for article in saved_articles:
-            analysis = analyses_by_key.get(article_analysis_key(article))
+            key = article_analysis_key(article)
+            analysis = analyses_by_key.get(key)
             if analysis is None:
                 continue
-            analyzed_count += 1
-            if analysis.relevance_score >= profile.relevance_threshold:
-                relevant_items.append(DigestItem(article=article, analysis=analysis))
+            origin = origins_by_key.get(key)
+            if origin is None:
+                raise DigestPipelineError("analysis origin is missing for analyzed article")
+            all_items.append(
+                DigestItem(article=article, analysis=analysis, analysis_origin=origin)
+            )
 
-        relevant_items = sorted_digest_items(relevant_items)
+        all_items = sorted_digest_items(all_items)
+        analyzed_count = len(all_items)
+        new_analysis_count = sum(
+            item.analysis_origin == AnalysisOrigin.NEW_THIS_RUN for item in all_items
+        )
+        reused_analysis_count = sum(
+            item.analysis_origin == AnalysisOrigin.REUSED for item in all_items
+        )
+        above_threshold_count = sum(
+            is_above_threshold(item, profile.relevance_threshold) for item in all_items
+        )
         if analyzer is None:
             status = "analysis_unavailable"
         completed_at = utc_now()
@@ -93,7 +117,7 @@ def run_digest(
             retrieved_count=retrieved_count,
             stored_count=stored_count,
             analyzed_count=analyzed_count,
-            relevant_count=len(relevant_items),
+            relevant_count=above_threshold_count,
         )
         return DigestResult(
             run_id=run_id,
@@ -102,9 +126,11 @@ def run_digest(
             retrieved_count=retrieved_count,
             stored_count=stored_count,
             analyzed_count=analyzed_count,
-            relevant_count=len(relevant_items),
+            new_analysis_count=new_analysis_count,
+            reused_analysis_count=reused_analysis_count,
+            above_threshold_count=above_threshold_count,
             analysis_available=analyzer is not None,
-            items=relevant_items,
+            items=all_items,
             started_at=started_at,
             completed_at=completed_at,
         )
@@ -116,7 +142,7 @@ def run_digest(
             retrieved_count=retrieved_count,
             stored_count=stored_count,
             analyzed_count=analyzed_count,
-            relevant_count=len(relevant_items),
+            relevant_count=above_threshold_count,
             error_message=error_message,
         )
         raise

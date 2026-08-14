@@ -3,18 +3,37 @@
 from __future__ import annotations
 
 import json
-from typing import TypeAlias
+from typing import Literal, TypeAlias, TypeGuard
 
 from research_digest.errors import sanitize_error
-from research_digest.models import ArxivSourceConfig, DigestResult, ModelValidationError
+from research_digest.models import (
+    AnalysisOrigin,
+    ArxivSourceConfig,
+    DigestItem,
+    DigestResult,
+    InterestProfile,
+    ModelValidationError,
+    above_threshold_digest_items,
+    below_threshold_digest_items,
+    is_above_threshold,
+    sorted_digest_items,
+)
 from research_digest.pipeline import DigestPipelineError, run_digest
 from research_digest.sources.arxiv import ArxivSource
 from research_digest.sources.base import SourceError
 from research_digest.ui.common import get_analyzer, get_database
 
-DigestInputSignature: TypeAlias = tuple[int | None, str]
+DigestInputSignature: TypeAlias = tuple[str, str]
+DigestView: TypeAlias = Literal["relevant", "all_analyzed", "below_threshold"]
 _LAST_DIGEST_RESULT_KEY = "last_digest_result"
 _LAST_DIGEST_SIGNATURE_KEY = "last_digest_signature"
+_RELEVANT_VIEW: DigestView = "relevant"
+_VIEW_OPTIONS: tuple[DigestView, ...] = ("relevant", "all_analyzed", "below_threshold")
+_VIEW_TITLES: dict[DigestView, str] = {
+    "relevant": "Relevant",
+    "all_analyzed": "All analyzed",
+    "below_threshold": "Below threshold",
+}
 
 
 def render() -> None:
@@ -46,7 +65,7 @@ def render() -> None:
         options=profiles,
         format_func=lambda item: f"{item.name} (threshold {item.relevance_threshold:.2f})",
     )
-    current_signature = digest_input_signature(profile.id, source_config)
+    current_signature = digest_input_signature(profile, source_config)
 
     analyzer, analyzer_message = get_analyzer()
     if analyzer_message is not None:
@@ -71,11 +90,14 @@ def render() -> None:
 
     result = st.session_state.get(_LAST_DIGEST_RESULT_KEY)
     result_signature = st.session_state.get(_LAST_DIGEST_SIGNATURE_KEY)
-    if isinstance(result, DigestResult) and result_signature == current_signature:
+    if is_current_digest_result(result, result_signature, current_signature):
         _render_run_confirmation(result)
         _render_metrics(result)
         if not result.analysis_available:
-            st.info("Papers were fetched and stored, but no new analysis was run.")
+            if result.analyzed_count:
+                st.info("Analysis provider unavailable; showing reused analyses for this run.")
+            else:
+                st.info("Papers were fetched and stored, but no analyses are available.")
         _render_items(result)
     else:
         st.session_state.pop(_LAST_DIGEST_RESULT_KEY, None)
@@ -84,10 +106,23 @@ def render() -> None:
 
 
 def digest_input_signature(
-    profile_id: int | None,
+    profile: InterestProfile,
     source_config: ArxivSourceConfig,
 ) -> DigestInputSignature:
-    return profile_id, source_config_fingerprint(source_config)
+    return profile_fingerprint(profile), source_config_fingerprint(source_config)
+
+
+def profile_fingerprint(profile: InterestProfile) -> str:
+    return json.dumps(
+        {
+            "id": profile.id,
+            "name": profile.name,
+            "description": profile.description,
+            "relevance_threshold": profile.relevance_threshold,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
 
 
 def source_config_fingerprint(source_config: ArxivSourceConfig) -> str:
@@ -101,6 +136,38 @@ def source_config_fingerprint(source_config: ArxivSourceConfig) -> str:
         sort_keys=True,
         separators=(",", ":"),
     )
+
+
+def is_current_digest_result(
+    result: object,
+    result_signature: object,
+    current_signature: DigestInputSignature,
+) -> TypeGuard[DigestResult]:
+    return isinstance(result, DigestResult) and result_signature == current_signature
+
+
+def digest_view_items(result: DigestResult, view: DigestView) -> list[DigestItem]:
+    if view == "relevant":
+        return above_threshold_digest_items(result)
+    if view == "all_analyzed":
+        return sorted_digest_items(result.items)
+    if view == "below_threshold":
+        return below_threshold_digest_items(result)
+    raise ValueError(f"unknown digest view: {view}")
+
+
+def digest_view_counts(result: DigestResult) -> dict[DigestView, int]:
+    return {view: len(digest_view_items(result, view)) for view in _VIEW_OPTIONS}
+
+
+def digest_view_label(view: DigestView, count: int) -> str:
+    return f"{_VIEW_TITLES[view]} ({count})"
+
+
+def coerce_digest_view(value: object) -> DigestView:
+    if value in _VIEW_OPTIONS:
+        return value
+    return _RELEVANT_VIEW
 
 
 def _render_run_confirmation(result: DigestResult) -> None:
@@ -117,6 +184,9 @@ def _render_empty_metrics() -> None:
     col1.metric("Retrieved", "-")
     col2.metric("Analyzed", "-")
     col3.metric("Above threshold", "-")
+    col4, col5 = st.columns(2)
+    col4.metric("New analyses", "-")
+    col5.metric("Reused analyses", "-")
 
 
 def _render_metrics(result: DigestResult) -> None:
@@ -125,38 +195,80 @@ def _render_metrics(result: DigestResult) -> None:
     col1, col2, col3 = st.columns(3)
     col1.metric("Retrieved", result.retrieved_count)
     col2.metric("Analyzed", result.analyzed_count)
-    col3.metric("Above threshold", result.relevant_count)
+    col3.metric("Above threshold", result.above_threshold_count)
+    col4, col5 = st.columns(2)
+    col4.metric("New analyses", result.new_analysis_count)
+    col5.metric("Reused analyses", result.reused_analysis_count)
 
 
 def _render_items(result: DigestResult) -> None:
     import streamlit as st
 
-    if not result.items:
-        st.info("No papers are above the relevance threshold for this run.")
+    threshold = result.profile.relevance_threshold
+    st.caption(f"Current profile threshold: {threshold:.2f}. Relevant means score >= threshold.")
+
+    counts = digest_view_counts(result)
+    selected = st.segmented_control(
+        "Result view",
+        options=_VIEW_OPTIONS,
+        default=_RELEVANT_VIEW,
+        required=True,
+        format_func=lambda view: digest_view_label(view, counts[view]),
+        key=f"digest_view_{result.run_id}",
+        width="stretch",
+    )
+    view = coerce_digest_view(selected)
+    items = digest_view_items(result, view)
+
+    if not items:
+        st.info(_empty_view_message(view))
         return
 
-    for item in result.items:
-        article = item.article
-        analysis = item.analysis
-        with st.container(border=True):
-            st.subheader(article.title)
-            authors = ", ".join(article.authors) if article.authors else "Unknown authors"
-            st.caption(
-                f"{authors} | Published {article.published_at:%Y-%m-%d %H:%M UTC} | "
-                f"Categories: {', '.join(article.categories)}"
-            )
-            score_col, priority_col = st.columns([1, 1])
-            score_col.metric("Relevance", f"{analysis.relevance_score:.2f}")
-            priority_col.metric("Priority", analysis.reading_priority)
-            st.write(analysis.relevance_reason)
-            st.markdown("**Summary**")
-            st.write(analysis.summary)
-            st.markdown("**Why it matters**")
-            st.write(analysis.why_it_matters)
-            if analysis.matched_topics:
-                st.markdown("**Matched topics**")
-                st.write(", ".join(analysis.matched_topics))
-            link_col, pdf_col = st.columns([1, 1])
-            link_col.link_button("arXiv", article.abstract_url)
-            if article.pdf_url:
-                pdf_col.link_button("PDF", article.pdf_url)
+    for item in items:
+        _render_item(item, threshold)
+
+
+def _empty_view_message(view: DigestView) -> str:
+    if view == "relevant":
+        return "No papers are above the relevance threshold for this run."
+    if view == "below_threshold":
+        return "No analyzed papers are below the relevance threshold for this run."
+    return "No analyzed papers are available for this run."
+
+
+def _render_item(item: DigestItem, threshold: float) -> None:
+    import streamlit as st
+
+    article = item.article
+    analysis = item.analysis
+    origin_label = "NEW" if item.analysis_origin == AnalysisOrigin.NEW_THIS_RUN else "REUSED"
+    threshold_status = (
+        "Above threshold" if is_above_threshold(item, threshold) else "Below threshold"
+    )
+
+    with st.container(border=True):
+        st.subheader(article.title)
+        authors = ", ".join(article.authors) if article.authors else "Unknown authors"
+        categories = ", ".join(article.categories) if article.categories else "Uncategorized"
+        st.caption(
+            f"{article.source}:{article.source_article_id} | {authors} | "
+            f"Published {article.published_at:%Y-%m-%d %H:%M UTC} | "
+            f"Categories: {categories}"
+        )
+        score_col, priority_col, origin_col, status_col = st.columns(4)
+        score_col.metric("Relevance score", f"{analysis.relevance_score:.2f}")
+        priority_col.metric("Priority", analysis.reading_priority)
+        origin_col.metric("Analysis", origin_label)
+        status_col.metric("Threshold status", threshold_status)
+        st.markdown("**Relevance reason**")
+        st.write(analysis.relevance_reason)
+        st.markdown("**Summary**")
+        st.write(analysis.summary)
+        st.markdown("**Why it matters**")
+        st.write(analysis.why_it_matters)
+        st.markdown("**Matched topics**")
+        st.write(", ".join(analysis.matched_topics) if analysis.matched_topics else "None")
+        link_col, pdf_col = st.columns([1, 1])
+        link_col.link_button("arXiv", article.abstract_url)
+        if article.pdf_url:
+            pdf_col.link_button("PDF", article.pdf_url)

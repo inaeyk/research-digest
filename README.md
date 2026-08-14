@@ -49,6 +49,11 @@ normal configured/default model.
 streamlit run src/research_digest/ui/app.py
 ```
 
+After a digest completes, the Today page shows run-specific retrieval and
+analysis counts. You can switch between relevant papers, all analyzed papers,
+and below-threshold papers, and each paper indicates whether its analysis was
+newly generated for the run or reused from SQLite.
+
 ## Tests
 
 ```bash

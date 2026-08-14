@@ -1,9 +1,106 @@
 from __future__ import annotations
 
 import unittest
+from datetime import UTC, datetime
 
-from research_digest.models import ArxivSourceConfig
-from research_digest.ui.pages.today import digest_input_signature, source_config_fingerprint
+from research_digest.models import (
+    AnalysisOrigin,
+    AnalysisResult,
+    Article,
+    ArxivSourceConfig,
+    DigestItem,
+    DigestResult,
+    InterestProfile,
+)
+from research_digest.ui.pages.today import (
+    coerce_digest_view,
+    digest_input_signature,
+    digest_view_counts,
+    digest_view_items,
+    digest_view_label,
+    is_current_digest_result,
+    profile_fingerprint,
+    source_config_fingerprint,
+)
+
+
+def _article(source_article_id: str, title: str, published_hour: int) -> Article:
+    return Article(
+        id=published_hour,
+        source="arxiv",
+        source_article_id=source_article_id,
+        title=title,
+        authors=["Ada Lovelace"],
+        abstract=f"{title} abstract.",
+        categories=["hep-th"],
+        published_at=datetime(2026, 8, 14, published_hour, 0, tzinfo=UTC),
+        updated_at=datetime(2026, 8, 14, published_hour, 10, tzinfo=UTC),
+        abstract_url=f"http://arxiv.org/abs/{source_article_id}",
+        pdf_url=None,
+    )
+
+
+def _analysis(score: float) -> AnalysisResult:
+    return AnalysisResult(
+        relevance_score=score,
+        relevance_reason=f"Score {score}.",
+        matched_topics=["gravity"] if score >= 0.6 else [],
+        summary=f"Summary for {score}.",
+        why_it_matters=f"Reason for {score}.",
+        reading_priority="HIGH" if score >= 0.8 else "MEDIUM" if score >= 0.6 else "LOW",
+    )
+
+
+def _profile(
+    *,
+    profile_id: int | None = 1,
+    name: str = "Gravity",
+    description: str = "Higher-dimensional gravity.",
+    threshold: float = 0.6,
+) -> InterestProfile:
+    return InterestProfile(
+        id=profile_id,
+        name=name,
+        description=description,
+        relevance_threshold=threshold,
+    )
+
+
+def _digest_result() -> DigestResult:
+    profile = _profile()
+    source_config = ArxivSourceConfig(categories=["hep-th"], lookback_hours=24, max_results=10)
+    items = [
+        DigestItem(
+            article=_article("2608.00003", "Low score", 8),
+            analysis=_analysis(0.2),
+            analysis_origin=AnalysisOrigin.REUSED,
+        ),
+        DigestItem(
+            article=_article("2608.00001", "High score", 10),
+            analysis=_analysis(0.9),
+            analysis_origin=AnalysisOrigin.NEW_THIS_RUN,
+        ),
+        DigestItem(
+            article=_article("2608.00002", "Boundary score", 9),
+            analysis=_analysis(0.6),
+            analysis_origin=AnalysisOrigin.NEW_THIS_RUN,
+        ),
+    ]
+    return DigestResult(
+        run_id=23,
+        profile=profile,
+        source_config=source_config,
+        retrieved_count=3,
+        stored_count=3,
+        analyzed_count=3,
+        new_analysis_count=2,
+        reused_analysis_count=1,
+        above_threshold_count=2,
+        analysis_available=True,
+        items=items,
+        started_at=datetime(2026, 8, 14, 11, 40, tzinfo=UTC),
+        completed_at=datetime(2026, 8, 14, 11, 42, tzinfo=UTC),
+    )
 
 
 class TodayStateTests(unittest.TestCase):
@@ -23,14 +120,138 @@ class TodayStateTests(unittest.TestCase):
 
         self.assertEqual(source_config_fingerprint(first), source_config_fingerprint(second))
 
-    def test_digest_input_signature_changes_with_profile_or_source_config(self) -> None:
+    def test_profile_fingerprint_is_deterministic_for_semantically_identical_profiles(
+        self,
+    ) -> None:
+        first = _profile()
+        second = InterestProfile(
+            id=1,
+            name="Gravity",
+            description="Higher-dimensional gravity.",
+            relevance_threshold=0.6,
+        )
+
+        self.assertEqual(profile_fingerprint(first), profile_fingerprint(second))
+
+    def test_digest_input_signature_matches_for_unchanged_profile_and_source(self) -> None:
         source = ArxivSourceConfig(categories=["hep-th"], lookback_hours=24, max_results=10)
         same = ArxivSourceConfig(categories=["hep-th"], lookback_hours=24, max_results=10)
-        changed = ArxivSourceConfig(categories=["gr-qc"], lookback_hours=24, max_results=10)
+        first = _profile()
+        second = _profile()
 
-        self.assertEqual(digest_input_signature(1, source), digest_input_signature(1, same))
-        self.assertNotEqual(digest_input_signature(1, source), digest_input_signature(2, source))
-        self.assertNotEqual(digest_input_signature(1, source), digest_input_signature(1, changed))
+        self.assertEqual(
+            digest_input_signature(first, source),
+            digest_input_signature(second, same),
+        )
+
+    def test_digest_input_signature_changes_when_threshold_is_edited_in_place(self) -> None:
+        source = ArxivSourceConfig(categories=["hep-th"], lookback_hours=24, max_results=10)
+        original = _profile(threshold=0.6)
+        changed = _profile(threshold=0.7)
+
+        self.assertNotEqual(
+            digest_input_signature(original, source),
+            digest_input_signature(changed, source),
+        )
+
+    def test_digest_input_signature_changes_when_description_is_edited_in_place(self) -> None:
+        source = ArxivSourceConfig(categories=["hep-th"], lookback_hours=24, max_results=10)
+        original = _profile(description="Higher-dimensional gravity.")
+        changed = _profile(description="Condensed matter dualities.")
+
+        self.assertNotEqual(
+            digest_input_signature(original, source),
+            digest_input_signature(changed, source),
+        )
+
+    def test_digest_input_signature_changes_when_prompt_visible_name_changes(self) -> None:
+        source = ArxivSourceConfig(categories=["hep-th"], lookback_hours=24, max_results=10)
+        original = _profile(name="Gravity")
+        changed = _profile(name="Quantum gravity")
+
+        self.assertNotEqual(
+            digest_input_signature(original, source),
+            digest_input_signature(changed, source),
+        )
+
+    def test_digest_input_signature_changes_with_profile_id_or_source_config(self) -> None:
+        source = ArxivSourceConfig(categories=["hep-th"], lookback_hours=24, max_results=10)
+        changed_source = ArxivSourceConfig(
+            categories=["gr-qc"],
+            lookback_hours=24,
+            max_results=10,
+        )
+        profile = _profile(profile_id=1)
+        changed_profile_id = _profile(profile_id=2)
+
+        self.assertNotEqual(
+            digest_input_signature(profile, source),
+            digest_input_signature(changed_profile_id, source),
+        )
+        self.assertNotEqual(
+            digest_input_signature(profile, source),
+            digest_input_signature(profile, changed_source),
+        )
+
+    def test_digest_result_current_check_rejects_stale_signature(self) -> None:
+        result = _digest_result()
+        current = digest_input_signature(result.profile, result.source_config)
+        changed_profile_id = digest_input_signature(
+            _profile(profile_id=2),
+            result.source_config,
+        )
+        changed_threshold = digest_input_signature(
+            _profile(threshold=0.7),
+            result.source_config,
+        )
+        changed_description = digest_input_signature(
+            _profile(description="Condensed matter dualities."),
+            result.source_config,
+        )
+        changed_name = digest_input_signature(
+            _profile(name="Quantum gravity"),
+            result.source_config,
+        )
+        changed_source = digest_input_signature(
+            result.profile,
+            ArxivSourceConfig(categories=["gr-qc"], lookback_hours=24, max_results=10),
+        )
+
+        self.assertTrue(is_current_digest_result(result, current, current))
+        self.assertFalse(is_current_digest_result(result, changed_profile_id, current))
+        self.assertFalse(is_current_digest_result(result, changed_threshold, current))
+        self.assertFalse(is_current_digest_result(result, changed_description, current))
+        self.assertFalse(is_current_digest_result(result, changed_name, current))
+        self.assertFalse(is_current_digest_result(result, changed_source, current))
+        self.assertFalse(is_current_digest_result(object(), current, current))
+
+    def test_digest_view_counts_labels_and_sorted_items(self) -> None:
+        result = _digest_result()
+
+        self.assertEqual(
+            digest_view_counts(result),
+            {"relevant": 2, "all_analyzed": 3, "below_threshold": 1},
+        )
+        self.assertEqual(digest_view_label("relevant", 2), "Relevant (2)")
+        self.assertEqual(
+            [item.article.source_article_id for item in digest_view_items(result, "relevant")],
+            ["2608.00001", "2608.00002"],
+        )
+        self.assertEqual(
+            [item.article.source_article_id for item in digest_view_items(result, "all_analyzed")],
+            ["2608.00001", "2608.00002", "2608.00003"],
+        )
+        self.assertEqual(
+            [
+                item.article.source_article_id
+                for item in digest_view_items(result, "below_threshold")
+            ],
+            ["2608.00003"],
+        )
+
+    def test_coerce_digest_view_defaults_to_relevant_for_unexpected_value(self) -> None:
+        self.assertEqual(coerce_digest_view("all_analyzed"), "all_analyzed")
+        self.assertEqual(coerce_digest_view(None), "relevant")
 
 
 if __name__ == "__main__":

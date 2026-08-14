@@ -6,6 +6,7 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import StrEnum
 from typing import Any, Literal, cast
 
 ReadingPriority = Literal["LOW", "MEDIUM", "HIGH"]
@@ -25,6 +26,11 @@ _EXPECTED_ANALYSIS_KEYS = {
 
 class ModelValidationError(ValueError):
     """Raised when data cannot be converted into a valid domain model."""
+
+
+class AnalysisOrigin(StrEnum):
+    NEW_THIS_RUN = "NEW_THIS_RUN"
+    REUSED = "REUSED"
 
 
 def normalize_whitespace(value: str) -> str:
@@ -218,6 +224,7 @@ class AnalysisResult:
 class DigestItem:
     article: Article
     analysis: AnalysisResult
+    analysis_origin: AnalysisOrigin
 
 
 @dataclass(frozen=True)
@@ -228,11 +235,17 @@ class DigestResult:
     retrieved_count: int
     stored_count: int
     analyzed_count: int
-    relevant_count: int
+    new_analysis_count: int
+    reused_analysis_count: int
+    above_threshold_count: int
     analysis_available: bool
     items: list[DigestItem]
     started_at: datetime
     completed_at: datetime | None
+
+    @property
+    def relevant_count(self) -> int:
+        return self.above_threshold_count
 
 
 def _required_string(data: Mapping[str, Any], key: str) -> str:
@@ -257,4 +270,28 @@ def sorted_digest_items(items: Sequence[DigestItem]) -> list[DigestItem]:
             item.article.title,
         ),
         reverse=True,
+    )
+
+
+def is_above_threshold(item: DigestItem, threshold: float) -> bool:
+    return item.analysis.relevance_score >= threshold
+
+
+def above_threshold_digest_items(result: DigestResult) -> list[DigestItem]:
+    return sorted_digest_items(
+        [
+            item
+            for item in result.items
+            if is_above_threshold(item, result.profile.relevance_threshold)
+        ]
+    )
+
+
+def below_threshold_digest_items(result: DigestResult) -> list[DigestItem]:
+    return sorted_digest_items(
+        [
+            item
+            for item in result.items
+            if not is_above_threshold(item, result.profile.relevance_threshold)
+        ]
     )
