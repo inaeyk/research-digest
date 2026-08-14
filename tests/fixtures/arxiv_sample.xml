@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>ArXiv Query: cat:hep-th OR cat:gr-qc</title>
+  <id>http://arxiv.org/api/query?search_query=cat:hep-th+OR+cat:gr-qc</id>
+  <updated>2026-08-14T12:00:00Z</updated>
+  <entry>
+    <id>http://arxiv.org/abs/2608.00001v2</id>
+    <updated>2026-08-14T10:45:00Z</updated>
+    <published>2026-08-14T10:15:00Z</published>
+    <title>
+      Warped compactifications
+      and massive spin-2 spectra
+    </title>
+    <summary>
+      We study higher-dimensional gravity solutions with warped compact
+      dimensions and compute the associated Kaluza-Klein spectrum of
+      massive spin-2 fluctuations.
+    </summary>
+    <author>
+      <name>Ada Lovelace</name>
+    </author>
+    <author>
+      <name>Emmy Noether</name>
+    </author>
+    <category term="hep-th" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="gr-qc" scheme="http://arxiv.org/schemas/atom"/>
+    <link href="http://arxiv.org/abs/2608.00001v2" rel="alternate" type="text/html"/>
+    <link title="pdf" href="http://arxiv.org/pdf/2608.00001v2" rel="related" type="application/pdf"/>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/2608.00002v1</id>
+    <updated>2026-08-14T09:15:00Z</updated>
+    <published>2026-08-14T09:00:00Z</published>
+    <title>Black strings near the Gregory-Laflamme threshold</title>
+    <summary>
+      Numerical relativity evolutions of black strings reveal localized
+      horizon structure close to the Gregory-Laflamme instability threshold.
+    </summary>
+    <author>
+      <name>Katherine Johnson</name>
+    </author>
+    <category term="gr-qc" scheme="http://arxiv.org/schemas/atom"/>
+    <link href="http://arxiv.org/abs/2608.00002v1" rel="alternate" type="text/html"/>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/2608.00003v1</id>
+    <updated>2026-08-10T10:00:00Z</updated>
+    <published>2026-08-10T09:30:00Z</published>
+    <title>Old paper outside the configured lookback interval</title>
+    <summary>
+      This entry is deliberately older than the test cutoff and should be
+      filtered out by the arXiv adapter.
+    </summary>
+    <author>
+      <name>Grace Hopper</name>
+    </author>
+    <category term="hep-th" scheme="http://arxiv.org/schemas/atom"/>
+    <link href="http://arxiv.org/abs/2608.00003v1" rel="alternate" type="text/html"/>
+  </entry>
+</feed>

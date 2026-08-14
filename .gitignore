@@ -1,0 +1,21 @@
+# Local databases and runtime state
+*.sqlite3
+*.db
+
+# Secrets and environment files
+.env
+.env.*
+
+# Python environments and caches
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Streamlit/local tooling state
+.streamlit/secrets.toml
+.streamlit/cache/
+.agents/
+.claude/
