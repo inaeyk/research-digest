@@ -13,6 +13,8 @@ class AnalyzerProviderTests(unittest.TestCase):
     def test_codex_provider_does_not_require_openai_api_key(self) -> None:
         config = AppConfig(
             db_path=Path("test.sqlite3"),
+            data_dir=Path("."),
+            config_dir=Path("."),
             analyzer_provider="codex",
             openai_api_key=None,
             openai_model="unused",
@@ -29,6 +31,8 @@ class AnalyzerProviderTests(unittest.TestCase):
     def test_openai_provider_without_api_key_is_unavailable_data(self) -> None:
         config = AppConfig(
             db_path=Path("test.sqlite3"),
+            data_dir=Path("."),
+            config_dir=Path("."),
             analyzer_provider="openai",
             openai_api_key=None,
             openai_model="gpt-test",

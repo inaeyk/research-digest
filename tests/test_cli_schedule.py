@@ -62,6 +62,8 @@ class FakeSchedulerBackend(SchedulerBackend):
 def config(db_path: Path) -> AppConfig:
     return AppConfig(
         db_path=db_path,
+        data_dir=db_path.parent,
+        config_dir=db_path.parent / "config",
         analyzer_provider="codex",
         openai_api_key=None,
         openai_model="gpt-test",

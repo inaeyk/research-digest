@@ -17,7 +17,7 @@ from research_digest.analysis.base import (
     LLMAnalyzer,
     article_analysis_key,
 )
-from research_digest.config import DEFAULT_CODEX_TIMEOUT_SECONDS, load_config
+from research_digest.config import DEFAULT_CODEX_TIMEOUT_SECONDS
 from research_digest.models import AnalysisResult, Article, InterestProfile
 
 _REDACTED_ENV_KEYS = ("OPENAI_API_KEY", "CODEX_API_KEY")
@@ -47,16 +47,11 @@ class CodexCLIAnalyzer(LLMAnalyzer):
         timeout_seconds: float | None = None,
         runner: CodexRunner | None = None,
     ) -> None:
-        config = load_config() if model is None or timeout_seconds is None else None
-        self.model = model
-        if self.model is None and config is not None:
-            self.model = config.codex_model
+        self.model = model or os.environ.get("RESEARCH_DIGEST_CODEX_MODEL") or None
         if timeout_seconds is not None:
             self.timeout_seconds = timeout_seconds
-        elif config is not None:
-            self.timeout_seconds = config.codex_timeout_seconds
         else:
-            self.timeout_seconds = DEFAULT_CODEX_TIMEOUT_SECONDS
+            self.timeout_seconds = _load_codex_timeout()
         self._runner = runner or _run_codex
         self.codex_path = codex_path
         if runner is None:
@@ -155,6 +150,19 @@ def _child_environment() -> dict[str, str]:
     for key in _REDACTED_ENV_KEYS:
         env.pop(key, None)
     return env
+
+
+def _load_codex_timeout() -> float:
+    value = os.environ.get("RESEARCH_DIGEST_CODEX_TIMEOUT_SECONDS")
+    if value is None or not value.strip():
+        return DEFAULT_CODEX_TIMEOUT_SECONDS
+    try:
+        timeout = float(value)
+    except ValueError as exc:
+        raise AnalyzerUnavailable("RESEARCH_DIGEST_CODEX_TIMEOUT_SECONDS must be numeric") from exc
+    if timeout <= 0:
+        raise AnalyzerUnavailable("RESEARCH_DIGEST_CODEX_TIMEOUT_SECONDS must be positive")
+    return timeout
 
 
 def _build_prompt(*, profile: InterestProfile, articles: Sequence[Article]) -> str:

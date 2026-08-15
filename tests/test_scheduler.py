@@ -38,6 +38,8 @@ class FakeRunner:
 def config(db_path: Path) -> AppConfig:
     return AppConfig(
         db_path=db_path,
+        data_dir=db_path.parent,
+        config_dir=db_path.parent / "config",
         analyzer_provider="codex",
         openai_api_key="sk-test-value-that-must-not-be-scheduled",
         openai_model="gpt-test",

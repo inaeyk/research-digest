@@ -1,11 +1,11 @@
 # Release 1 Campaign State
 
-- current_substage: M4-D candidate audit
+- current_substage: M7-A candidate audit
 - status: ACTIVE
-- current_git_head: 2c232fa163c67d8af87e3d039affd11187a5c814
-- current_tags_at_head: m4c-qualified
+- current_git_head: ee280f439b9df3d5478779e33dd55995dabcc9fc
+- current_tags_at_head: m4d-qualified
 - current_branch: master
-- local_remote_tracking: `master` tracks `origin/master`; local branch is 3 commits ahead after M4-C freeze
+- local_remote_tracking: `master` tracks `origin/master`; local branch is 4 commits ahead after M4-D freeze
 - online_remote_verification: attempted `git ls-remote --heads --tags origin`; blocked by DNS resolution failure for `github.com` even after network escalation
 - baseline_m1_qualified_commit: 36bd1cbe60f95d588e8ccdd41bfce914e9b1d7da
 - baseline_m1_qualified_tag: m1-qualified
@@ -26,15 +26,18 @@
 - m4c_qualified_commit: 2c232fa163c67d8af87e3d039affd11187a5c814
 - m4c_qualified_tag: m4c-qualified
 - m4c_qualified_tag_object: 256cdd6348dc76c05a92dc33d602ee691498ab5c
+- m4d_qualified_commit: ee280f439b9df3d5478779e33dd55995dabcc9fc
+- m4d_qualified_tag: m4d-qualified
+- m4d_qualified_tag_object: 0ae15c90d886fd9d03c3cf8d3c4f519fc57b5955
 - skipped_campaigns: M3 additional source types; M5 full-paper reading; M6 long-term research memory
 - active_campaign_scope: M4 automatic daily operation; M7 release engineering, upgradeability, and productization; first release candidate
-- qualification_status: M4D_AUDIT_PASS_READY_FREEZE
-- audit_repair_round: 0
-- last_deterministic_verification: M4-D candidate full gate: `pytest` 94 passed; `ruff check .` PASS; strict `mypy --no-incremental src tests` PASS; `compileall -q src tests` PASS; `git diff --check` PASS.
-- last_live_verification: M4-D isolated history smoke `pytest tests/test_history.py::HistoryTests::test_completed_digest_run_writes_history_snapshot tests/test_history.py::HistoryTests::test_failed_run_has_sanitized_history_without_snapshot -q` passed against temporary SQLite DB with deterministic fake source/analyzer.
+- qualification_status: M7A_REAUDIT_PASS_READY_FREEZE
+- audit_repair_round: 1
+- last_deterministic_verification: M7-A repair round 1 full gate: `pytest` 99 passed; `ruff check .` PASS; strict `mypy --no-incremental src tests` PASS; `compileall -q src tests` PASS; `git diff --check` PASS.
+- last_live_verification: M7-A isolated adoption smoke `pytest tests/test_config.py::ConfigTests::test_legacy_db_is_adopted_when_user_data_db_is_missing tests/test_config.py::ConfigTests::test_existing_user_data_db_is_not_overwritten_by_legacy_db tests/test_config.py::ConfigTests::test_explicit_db_path_is_respected_and_disables_adoption -q` passed against temporary SQLite DB copies.
 - migration_data_safety_status: no release1 migrations applied yet; repo-local `research_digest.sqlite3` remains ignored and must not be used for upgrade tests. During M4-A re-audit, a manual CLI smoke likely wrote one runtime run record to the ignored repo-local DB; a content-free `PRAGMA integrity_check` returned `ok`.
 - deferred_minor_optional_findings: none
-- next_permitted_action: perform freeze hygiene, commit, and tag `m4d-qualified`
+- next_permitted_action: perform freeze hygiene, commit, and tag `m7a-qualified`
 - human_stop_reason: none
 
 ## M4-A Frozen Specification
@@ -298,10 +301,72 @@ Live verification required before M4-D freeze:
 - deterministic verification: `pytest` 94 passed; `ruff check .` PASS; strict `mypy --no-incremental src tests` PASS; `compileall -q src tests` PASS; `git diff --check` PASS.
 - live history smoke: isolated successful and failed history-entry tests passed against temporary SQLite DB.
 - fresh Auditor: PASS with no BLOCKER/IMPORTANT findings. Auditor verified durable `app_runs` identity, immutable run snapshots, failed-run handling without fabricated snapshots, unavailable-snapshot display for older rows, History navigation, no M6-style memory/search/timelines, and full deterministic gates.
+- freeze: committed `ee280f439b9df3d5478779e33dd55995dabcc9fc` (`Qualify M4-D digest history`) and created local annotated tag `m4d-qualified` with tag object `0ae15c90d886fd9d03c3cf8d3c4f519fc57b5955`.
+
+## M7-A Frozen Specification
+
+Goal: separate replaceable application code from persistent user configuration and SQLite data.
+
+Invariant:
+
+- Code is replaceable.
+- User data survives upgrades independently.
+- Future code upgrades must not depend on preserving the source checkout.
+
+User directories:
+
+- Use platform-appropriate user directories for config and data.
+- A small dependency such as `platformdirs` is allowed if it improves cross-platform correctness.
+- Expose the active DB/data location through existing configuration/status surfaces where available.
+- Tests must use isolated temporary directories and environment overrides.
+
+Legacy DB adoption:
+
+- Existing repo-local `research_digest.sqlite3` must not be lost.
+- On first startup with no user-data DB and a legacy repo-local DB present, safely adopt it by copying to the user data directory.
+- Never overwrite one existing DB with another silently.
+- If both legacy and user-data DBs exist, prefer the explicit/user-data DB and leave the legacy DB untouched.
+- If `RESEARCH_DIGEST_DB` is explicitly set, respect it and do not auto-adopt.
+
+Runtime behavior:
+
+- Default DB path should move from repo-local `research_digest.sqlite3` to user data directory.
+- Config directory should be available for future versioned configuration in M7-D.
+- Git repo runtime DB remains ignored.
+- M4 scheduler must resolve the active DB path deliberately after this change.
+
+Tests required before M7-A freeze:
+
+- default DB path resolves to isolated user data dir under test override
+- config dir resolves separately from data dir
+- legacy repo-local DB is copied/adopted when no user-data DB exists
+- existing user-data DB is never overwritten by legacy adoption
+- explicit `RESEARCH_DIGEST_DB` disables adoption and is respected
+- scheduler/build config uses the active DB path
+- upgrade smoke with a copy of an M2-era DB
+- existing M1/M2/M4 deterministic tests remain green
+
+Live verification required before M7-A freeze:
+
+- copy the ignored repo-local DB to a temporary legacy checkout path and verify adoption into a temporary user-data directory without modifying the original
+- verify active data location output/path can be inspected without exposing DB contents
+
+## M7-A Candidate Log
+
+- implementation: default DB path now resolves to a platform user data directory using standard-library OS conventions, with a separate config directory resolver.
+- compatibility: explicit `RESEARCH_DIGEST_DB` remains authoritative and disables legacy adoption.
+- adoption: repo-local or explicitly supplied legacy DB is copied into user data when no user-data DB exists; existing user-data DB is never overwritten.
+- provider hygiene: `CodexCLIAnalyzer` no longer calls full app config/DB-path setup just to read Codex model/timeout.
+- scheduler: schedule requests use the active config DB path, so scheduled runs target the resolved user-data DB unless explicitly overridden.
+- deterministic verification: `pytest` 97 passed; `ruff check .` PASS; strict `mypy --no-incremental src tests` PASS; `compileall -q src tests` PASS; `git diff --check` PASS.
+- live adoption smoke: isolated legacy adoption, no-overwrite, and explicit-override tests passed against temporary DB copies.
+- initial fresh Auditor: FAIL with one IMPORTANT finding. Legacy DB adoption copied directly to the final target path, so an interrupted copy could leave a partial DB accepted on the next startup. Auditor also noted MINOR stale M7-A freeze criteria wording and OpenAI provider DB-path side effect.
+- repair round 1: legacy adoption now copies to a temporary file, validates SQLite integrity, and atomically replaces the target. Invalid partial active DBs are repaired from a valid legacy DB or fail closed. `OpenAIAnalyzer` no longer calls full app config/DB-path setup when explicit/env API settings are enough.
+- fresh re-Auditor after repair round 1: PASS with no BLOCKER/IMPORTANT findings. Re-auditor verified failure-safe adoption, partial DB repair/fail-closed behavior, explicit DB override, provider no-adoption behavior, scheduler active DB path, ignored runtime state, full deterministic gates, and independent temporary probes.
 
 Freeze criteria:
 
-- fresh independent read-only M4-D audit PASS
+- fresh independent read-only M7-A audit PASS
 - `pytest`, `ruff check .`, `mypy --no-incremental src tests`, `compileall -q src tests`, and `git diff --check` PASS
 - staged inventory excludes `research_digest.sqlite3`, `.venv`, `.env`/secrets, caches, and local agent/runtime state
-- commit and annotated local tag `m4d-qualified`
+- commit and annotated local tag `m7a-qualified`

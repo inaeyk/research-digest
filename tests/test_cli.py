@@ -47,6 +47,8 @@ class CLITests(unittest.TestCase):
         self.db = Database(self.db_path)
         self.config = AppConfig(
             db_path=self.db_path,
+            data_dir=self.db_path.parent,
+            config_dir=self.db_path.parent / "config",
             analyzer_provider="codex",
             openai_api_key=None,
             openai_model="unused",

@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Mapping, Sequence
 from typing import Any
 
 from research_digest.analysis.base import AnalyzerUnavailable, LLMAnalyzer, article_analysis_key
-from research_digest.config import DEFAULT_OPENAI_MODEL, load_config
+from research_digest.config import DEFAULT_OPENAI_MODEL
 from research_digest.models import AnalysisResult, Article, InterestProfile, ModelValidationError
 
 
@@ -15,9 +16,8 @@ class OpenAIAnalyzer(LLMAnalyzer):
     """Analyze articles against interest profiles using OpenAI's Responses API."""
 
     def __init__(self, *, api_key: str | None = None, model: str | None = None) -> None:
-        config = load_config()
-        self.api_key = api_key or config.openai_api_key
-        self.model = model or config.openai_model or DEFAULT_OPENAI_MODEL
+        self.api_key = api_key or os.environ.get("OPENAI_API_KEY") or None
+        self.model = model or os.environ.get("OPENAI_MODEL") or DEFAULT_OPENAI_MODEL
         if not self.api_key:
             raise AnalyzerUnavailable("OPENAI_API_KEY is not set")
 

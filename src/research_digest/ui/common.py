@@ -36,6 +36,8 @@ def get_analyzer() -> tuple[LLMAnalyzer | None, str | None]:
         connection = build_configured_analyzer(
             AppConfig(
                 db_path=active_config.db_path,
+                data_dir=active_config.data_dir,
+                config_dir=active_config.config_dir,
                 analyzer_provider=provider,
                 openai_api_key=active_config.openai_api_key if api_key_present else None,
                 openai_model=openai_model,

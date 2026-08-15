@@ -174,6 +174,95 @@ Auditor verification:
 - `git diff --check`: PASS.
 - independent temp-DB probe for legacy status normalization and snapshot absence/presence: PASS.
 
+M4-D freeze:
+
+- qualified commit: `ee280f439b9df3d5478779e33dd55995dabcc9fc`.
+- qualified tag: `m4d-qualified`.
+- qualified tag object: `0ae15c90d886fd9d03c3cf8d3c4f519fc57b5955`.
+- post-freeze Git state: local `master` is 4 commits ahead of `origin/master`; online remote inspection remains blocked by DNS/network limits in this session.
+
+## M7-A Specification Freeze
+
+M7-A is frozen as the release-critical separation of replaceable code from persistent user configuration and data.
+
+Default SQLite storage must move to a platform user data directory, while explicit `RESEARCH_DIGEST_DB` remains supported. Existing repo-local M2 databases must be safely adopted by copy when no user-data DB exists and must never be silently overwritten.
+
+The detailed frozen specification is maintained in `docs/campaigns/release1/CAMPAIGN_STATE.md`.
+
+## M7-A Candidate
+
+Implementation summary:
+
+- Default SQLite DB path now resolves to a platform user data directory using standard-library OS conventions.
+- Config directory resolves separately for later versioned configuration work.
+- Explicit `RESEARCH_DIGEST_DB` remains authoritative and disables legacy DB adoption.
+- Legacy repo-local DB adoption copies into user data only when the target user-data DB is missing.
+- Existing user-data DB is never overwritten by legacy adoption.
+- Codex analyzer construction no longer initializes app DB/data directories.
+
+Deterministic verification:
+
+- `pytest`: 97 passed.
+- `ruff check .`: PASS.
+- strict `mypy --no-incremental src tests`: PASS.
+- `compileall -q src tests`: PASS.
+- `git diff --check`: PASS.
+
+Focused coverage added:
+
+- isolated user data/config directory resolution.
+- explicit DB override is respected and disables adoption.
+- legacy DB copy/adoption when user-data DB is missing.
+- existing user-data DB is not overwritten by legacy DB.
+- scheduler request construction uses active DB path.
+
+Live verification:
+
+- Isolated adoption smoke using temporary DB copies passed:
+  `pytest tests/test_config.py::ConfigTests::test_legacy_db_is_adopted_when_user_data_db_is_missing tests/test_config.py::ConfigTests::test_existing_user_data_db_is_not_overwritten_by_legacy_db tests/test_config.py::ConfigTests::test_explicit_db_path_is_respected_and_disables_adoption -q`.
+
+Audit status:
+
+- Fresh independent M7-A Auditor returned FAIL with one IMPORTANT finding.
+
+Initial audit findings:
+
+- Legacy DB adoption was not failure-safe because copy went directly to the final DB path; an interrupted copy could leave a partial DB accepted on the next startup.
+- MINOR: M7-A freeze criteria still referenced M4-D/`m4d-qualified`.
+- MINOR: `OpenAIAnalyzer(api_key=..., model=...)` still called full app config and could trigger DB adoption as a constructor side effect.
+
+Repair round 1:
+
+- Legacy adoption now copies to a temporary file, validates SQLite integrity, then atomically replaces the target.
+- Invalid partial active DBs are repaired from a valid legacy DB or fail closed if no valid legacy DB exists.
+- `OpenAIAnalyzer` reads only explicit/env OpenAI API settings and no longer initializes app DB/data paths during construction.
+
+Repair verification:
+
+- focused M7-A config/scheduler/CLI/provider tests: 27 passed.
+- targeted `ruff check`: PASS.
+- strict `mypy --no-incremental src tests`: PASS.
+- full `pytest`: 99 passed.
+- `ruff check .`: PASS.
+- strict `mypy --no-incremental src tests`: PASS.
+- `compileall -q src tests`: PASS.
+- `git diff --check`: PASS.
+
+Audit status:
+
+- Fresh independent M7-A re-auditor returned PASS with no BLOCKER/IMPORTANT findings.
+- Re-auditor verified failure-safe adoption, partial DB repair/fail-closed behavior, explicit DB override, provider no-adoption behavior, scheduler active DB path, ignored runtime state, full deterministic gates, and independent temporary probes.
+
+Re-auditor verification:
+
+- focused pytest: 26 passed, 6 subtests passed.
+- full `pytest`: 99 passed, 9 subtests passed.
+- `ruff check .`: PASS.
+- strict `mypy --no-incremental src tests`: PASS.
+- `compileall -q src tests`: PASS.
+- `git diff --check m4d-qualified --`: PASS.
+- independent temp probes: interrupted adoption repair PASS; provider no-adoption PASS; scheduler active DB path PASS; M2-era style DB adoption PASS.
+
 Data-safety note:
 
 - During re-audit, the auditor reported one accidental manual CLI smoke without `RESEARCH_DIGEST_DB`; it likely wrote one runtime run record to ignored repo-local `research_digest.sqlite3`.
