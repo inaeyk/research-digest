@@ -308,6 +308,46 @@ Audit:
 - fresh independent read-only M7-B Auditor: PASS with no BLOCKER/IMPORTANT findings.
 - auditor MINOR about stale freeze-criteria wording in `CAMPAIGN_STATE.md` was repaired before freeze.
 
+M7-B freeze:
+
+- qualified commit: `73b549a75d372ad754f2a90f5c6aae788c7434fa`.
+- qualified tag: `m7b-qualified`.
+- qualified tag object: `ad09bde4eb4a6103e147e729c4bb0024d6bd19a6`.
+- post-freeze Git state: local `master` is 6 commits ahead of `origin/master`; online remote inspection remains blocked by DNS/network limits in this session.
+
+## M7-C Specification Freeze
+
+M7-C is frozen as additive stable extension boundaries, not implementations of postponed feature campaigns.
+
+The implementation must preserve M1/M2/M4/M7-A/M7-B behavior while formalizing small typed boundaries for source adapters, analyzer factories, preselection, synthesis, future content retrieval, future delivery, and future memory/history services.
+
+M3, M5, and M6 remain post-release campaigns; this substage may only make them addable without rewriting the application.
+
+## M7-C Candidate
+
+Implementation summary:
+
+- Added source definitions, a default source registry, and `SourceRunRequest` to carry source name, adapter, and source-specific config together.
+- Generalized service/pipeline source execution around `SourceRunRequest[Any]`; arXiv remains the default configured release source.
+- Added analyzer registry/factory support while preserving codex/openai behavior.
+- Added a typed cross-paper synthesizer boundary and service injection point while preserving deterministic synthesis.
+- Added import-only content reader, delivery, and memory protocols for future additive M5/M6 work.
+- Added architectural regression tests proving default/additive source registry behavior, analyzer registry behavior, non-arXiv config flow through service/pipeline, alternate synthesis injection, and future protocol importability.
+
+Deterministic verification:
+
+- `pytest`: 108 passed.
+- `ruff check .`: PASS.
+- strict `mypy --strict src tests`: PASS.
+- `compileall -q src tests`: PASS.
+- `git diff --check`: PASS.
+
+Audit:
+
+- initial fresh independent M7-C Auditor: FAIL with one IMPORTANT source-boundary finding.
+- repair round 1 generalized source execution through `SourceRunRequest[Any]` and added a non-arXiv source-config smoke.
+- fresh re-Auditor after repair round 1: PASS with no BLOCKER/IMPORTANT/MINOR findings.
+
 Data-safety note:
 
 - During re-audit, the auditor reported one accidental manual CLI smoke without `RESEARCH_DIGEST_DB`; it likely wrote one runtime run record to ignored repo-local `research_digest.sqlite3`.

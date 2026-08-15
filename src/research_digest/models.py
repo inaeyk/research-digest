@@ -287,7 +287,7 @@ class ArticleFeedback:
 class DigestResult:
     run_id: int
     profile: InterestProfile
-    source_config: ArxivSourceConfig
+    source_config: Any
     retrieved_count: int
     stored_count: int
     preselected_count: int

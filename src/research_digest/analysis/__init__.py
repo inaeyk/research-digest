@@ -4,12 +4,24 @@ from research_digest.analysis.base import AnalyzerError, AnalyzerUnavailable, LL
 from research_digest.analysis.codex_cli import CodexCLIAnalyzer
 from research_digest.analysis.fake import FakeAnalyzer
 from research_digest.analysis.openai import OpenAIAnalyzer
+from research_digest.analysis.providers import (
+    AnalyzerConnection,
+    AnalyzerFactory,
+    AnalyzerRegistry,
+    build_configured_analyzer,
+    build_default_analyzer_registry,
+)
 
 __all__ = [
+    "AnalyzerConnection",
     "AnalyzerError",
+    "AnalyzerFactory",
+    "AnalyzerRegistry",
     "AnalyzerUnavailable",
     "CodexCLIAnalyzer",
     "FakeAnalyzer",
     "LLMAnalyzer",
     "OpenAIAnalyzer",
+    "build_configured_analyzer",
+    "build_default_analyzer_registry",
 ]

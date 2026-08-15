@@ -26,8 +26,8 @@ from research_digest.service import (
     HeadlessProfileRun,
     run_digest_for_enabled_profiles,
 )
-from research_digest.sources.arxiv import ArxivSource
 from research_digest.sources.base import SourceAdapter
+from research_digest.sources.registry import ARXIV_SOURCE_DEFINITION, SourceRunRequest
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -142,7 +142,17 @@ def _run_digest_command(
     try:
         active_config = config or load_config()
         active_db = db or Database(active_config.db_path)
-        active_source = source or ArxivSource()
+        active_source = source or ARXIV_SOURCE_DEFINITION.build_adapter()
+        active_source_config = ARXIV_SOURCE_DEFINITION.load_config(active_db)
+        active_source_request = (
+            None
+            if active_source_config is None
+            else SourceRunRequest(
+                source_name=ARXIV_SOURCE_DEFINITION.name,
+                adapter=active_source,
+                config=active_source_config,
+            )
+        )
         active_analyzer = analyzer
         active_analyzer_message = analyzer_message
         if active_analyzer is None and active_analyzer_message is None:
@@ -153,6 +163,7 @@ def _run_digest_command(
             db=active_db,
             source=active_source,
             analyzer=active_analyzer,
+            source_request=active_source_request,
         )
     except Exception as exc:
         message = sanitize_error(exc)

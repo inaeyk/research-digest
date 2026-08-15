@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 from uuid import uuid4
 
 from research_digest.analysis.base import LLMAnalyzer
@@ -15,7 +16,12 @@ from research_digest.models import DigestResult, profile_semantic_fingerprint
 from research_digest.pipeline import DigestPipelineError, run_digest
 from research_digest.preselection import AbstractPreselector
 from research_digest.sources.base import SourceAdapter
-from research_digest.synthesis import CrossPaperSynthesis, build_cross_paper_synthesis
+from research_digest.sources.registry import SourceRunRequest
+from research_digest.synthesis import (
+    CrossPaperSynthesis,
+    CrossPaperSynthesizer,
+    DeterministicCrossPaperSynthesizer,
+)
 
 DEFAULT_RUN_LOCK_STALE_SECONDS = 60.0 * 60.0 * 6.0
 
@@ -85,8 +91,10 @@ def run_digest_for_profile(
     source: SourceAdapter,
     analyzer: LLMAnalyzer | None,
     profile_id: int,
+    source_request: SourceRunRequest[Any] | None = None,
     now: datetime | None = None,
     preselector: AbstractPreselector | None = None,
+    synthesis_builder: CrossPaperSynthesizer | None = None,
     acquire_lock: bool = True,
     stale_lock_seconds: float = DEFAULT_RUN_LOCK_STALE_SECONDS,
 ) -> ProfileDigestRun:
@@ -101,8 +109,10 @@ def run_digest_for_profile(
                 source=source,
                 analyzer=analyzer,
                 profile_id=profile_id,
+                source_request=source_request,
                 now=now,
                 preselector=preselector,
+                synthesis_builder=synthesis_builder,
                 acquire_lock=False,
                 stale_lock_seconds=stale_lock_seconds,
             )
@@ -113,11 +123,13 @@ def run_digest_for_profile(
         db=db,
         source=source,
         analyzer=analyzer,
+        source_request=source_request,
         profile_id=profile_id,
         now=now,
         preselector=preselector,
     )
-    synthesis = build_cross_paper_synthesis(
+    active_synthesis_builder = synthesis_builder or DeterministicCrossPaperSynthesizer()
+    synthesis = active_synthesis_builder.build(
         items=digest.items,
         threshold=digest.profile.relevance_threshold,
     )
@@ -134,8 +146,10 @@ def run_digest_for_enabled_profiles(
     db: Database,
     source: SourceAdapter,
     analyzer: LLMAnalyzer | None,
+    source_request: SourceRunRequest[Any] | None = None,
     now: datetime | None = None,
     preselector: AbstractPreselector | None = None,
+    synthesis_builder: CrossPaperSynthesizer | None = None,
     stale_lock_seconds: float = DEFAULT_RUN_LOCK_STALE_SECONDS,
 ) -> HeadlessDigestRun:
     """Run the digest workflow for every enabled profile."""
@@ -147,8 +161,10 @@ def run_digest_for_enabled_profiles(
             db=db,
             source=source,
             analyzer=analyzer,
+            source_request=source_request,
             now=now,
             preselector=preselector,
+            synthesis_builder=synthesis_builder,
             stale_lock_seconds=stale_lock_seconds,
         )
     finally:
@@ -160,8 +176,10 @@ def _run_digest_for_enabled_profiles_unlocked(
     db: Database,
     source: SourceAdapter,
     analyzer: LLMAnalyzer | None,
+    source_request: SourceRunRequest[Any] | None,
     now: datetime | None,
     preselector: AbstractPreselector | None,
+    synthesis_builder: CrossPaperSynthesizer | None,
     stale_lock_seconds: float,
 ) -> HeadlessDigestRun:
     profiles = db.list_interest_profiles(enabled_only=True)
@@ -178,8 +196,10 @@ def _run_digest_for_enabled_profiles_unlocked(
                 source=source,
                 analyzer=analyzer,
                 profile_id=profile.id,
+                source_request=source_request,
                 now=now,
                 preselector=preselector,
+                synthesis_builder=synthesis_builder,
                 acquire_lock=False,
                 stale_lock_seconds=stale_lock_seconds,
             )

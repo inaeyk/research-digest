@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Protocol
 
 from research_digest.models import DigestItem, normalize_whitespace
 
@@ -27,6 +28,26 @@ class CrossPaperSynthesis:
     @property
     def has_signal(self) -> bool:
         return bool(self.recurring_topics or self.high_priority_titles or self.category_counts)
+
+
+class CrossPaperSynthesizer(Protocol):
+    def build(
+        self,
+        *,
+        items: Sequence[DigestItem],
+        threshold: float,
+    ) -> CrossPaperSynthesis:
+        """Build a cross-paper synthesis for a completed digest run."""
+
+
+class DeterministicCrossPaperSynthesizer:
+    def build(
+        self,
+        *,
+        items: Sequence[DigestItem],
+        threshold: float,
+    ) -> CrossPaperSynthesis:
+        return build_cross_paper_synthesis(items=items, threshold=threshold)
 
 
 def build_cross_paper_synthesis(

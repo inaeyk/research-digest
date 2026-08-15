@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import datetime
+from typing import Any
 
 from research_digest.analysis.base import AnalyzerError, LLMAnalyzer, article_analysis_key
 from research_digest.db import (
@@ -28,6 +29,7 @@ from research_digest.models import (
 )
 from research_digest.preselection import AbstractPreselector, TermOverlapPreselector
 from research_digest.sources.base import SourceAdapter
+from research_digest.sources.registry import SourceRunRequest
 
 
 class DigestPipelineError(RuntimeError):
@@ -37,8 +39,9 @@ class DigestPipelineError(RuntimeError):
 def run_digest(
     *,
     db: Database,
-    source: SourceAdapter,
+    source: SourceAdapter | None,
     analyzer: LLMAnalyzer | None,
+    source_request: SourceRunRequest[Any] | None = None,
     profile_id: int | None = None,
     now: datetime | None = None,
     preselector: AbstractPreselector | None = None,
@@ -46,12 +49,24 @@ def run_digest(
     """Fetch, store, analyze, filter, rank, and return one digest run."""
 
     profile = _select_profile(db, profile_id)
-    source_config = db.get_arxiv_config()
-    if source_config is None:
-        raise DigestPipelineError("arXiv source configuration is missing")
+    active_source_request = source_request
+    if active_source_request is None:
+        arxiv_config = db.get_arxiv_config()
+        if arxiv_config is None:
+            raise DigestPipelineError("source configuration is missing")
+        if source is None:
+            raise DigestPipelineError("source adapter is missing")
+        active_source_request = SourceRunRequest(
+            source_name=SOURCE_ARXIV,
+            adapter=source,
+            config=arxiv_config,
+        )
 
     profile_fingerprint = profile_semantic_fingerprint(profile)
-    run_id = db.create_app_run(profile_id=profile.id, source_name=SOURCE_ARXIV)
+    run_id = db.create_app_run(
+        profile_id=profile.id,
+        source_name=active_source_request.source_name,
+    )
     db.mark_app_run_running(run_id)
     started_at = utc_now()
     retrieved_count = 0
@@ -67,7 +82,7 @@ def run_digest(
     error_message: str | None = None
 
     try:
-        fetched = source.fetch(source_config, now=now)
+        fetched = active_source_request.adapter.fetch(active_source_request.config, now=now)
         retrieved_count = len(fetched)
         saved_articles, stored_count = db.upsert_articles(fetched)
         saved_articles = _unique_articles(saved_articles)
@@ -159,7 +174,7 @@ def run_digest(
         return DigestResult(
             run_id=run_id,
             profile=profile,
-            source_config=source_config,
+            source_config=active_source_request.config,
             retrieved_count=retrieved_count,
             stored_count=stored_count,
             preselected_count=preselected_count,
