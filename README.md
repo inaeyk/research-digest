@@ -54,6 +54,27 @@ analysis counts. You can switch between relevant papers, all analyzed papers,
 and below-threshold papers, and each paper indicates whether its analysis was
 newly generated for the run or reused from SQLite.
 
+Run the digest without Streamlit:
+
+```bash
+research-digest run
+research-digest run --json
+```
+
+On WSL2, install a daily Windows Task Scheduler entry that invokes the
+headless command:
+
+```bash
+research-digest schedule install --time 07:30
+research-digest schedule status
+research-digest schedule remove
+```
+
+Schedule times are Windows local time and follow Windows daylight-saving
+rules. The scheduled command stores non-secret runtime settings such as the
+active SQLite path, but it does not embed API keys or Codex authentication
+material.
+
 ## Tests
 
 ```bash

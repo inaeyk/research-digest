@@ -119,3 +119,68 @@ Data-safety note:
 - During re-audit, the auditor reported one accidental manual CLI smoke without `RESEARCH_DIGEST_DB`; it likely wrote one runtime run record to ignored repo-local `research_digest.sqlite3`.
 - The repository worktree and staged inventory are unaffected.
 - A content-free SQLite `PRAGMA integrity_check` against the ignored repo-local DB returned `ok`.
+
+M4-A freeze:
+
+- qualified commit: `82b8a7e82c047c9dff96d075f7f8b9981fa9f312`.
+- qualified tag: `m4a-qualified`.
+- qualified tag object: `99a1d7388903f11ef678b528d0879c7d33c25044`.
+- post-freeze Git state: local `master` is 1 commit ahead of `origin/master`; online remote inspection remains blocked by DNS/network limits in this session.
+
+## M4-B Specification Freeze
+
+M4-B is frozen as Windows Task Scheduler support from WSL2 through a small scheduling backend and `research-digest schedule` CLI group.
+
+The scheduled task must invoke the M4-A headless target, not Streamlit:
+
+`wsl.exe -d <distro> --cd <working-dir> --exec env RESEARCH_DIGEST_DB=<absolute-db-path> research-digest run`
+
+Windows daily triggers are defined in Windows local time and follow Windows daylight-saving behavior. That behavior must be visible in install/status output and tests.
+
+PowerShell interop probe:
+
+- `powershell.exe` exists at `/mnt/c/windows/System32/WindowsPowerShell/v1.0/powershell.exe`.
+- Running `powershell.exe -NoProfile -Command '$PSVersionTable.PSVersion.ToString()'` fails in this session with `WSL ... UtilBindVsockAnyPort ... socket failed 1`, including after sandbox escalation.
+- This is recorded as an environment-blocked live Task Scheduler smoke unless later interop probes succeed.
+
+## M4-B Candidate
+
+Implementation summary:
+
+- Added `research_digest.scheduler` with a Windows Task Scheduler backend and a typed `SchedulerBackend` boundary.
+- Added schedule request/status/result models so future cron/systemd/launchd backends can be additive.
+- Added deterministic construction of the scheduled WSL action:
+  `wsl.exe -d <distro> --cd <working-dir> --exec env ... research-digest run`.
+- Tightened install-time executable handling so the backend resolves the Windows `wsl.exe` path and the installed `research-digest` command. If `research-digest` is not on PATH, schedule install fails clearly rather than creating a broken task.
+- Scheduled environment includes non-secret runtime settings such as `RESEARCH_DIGEST_DB`, provider choice, and non-secret model/timeout values; it excludes `OPENAI_API_KEY` and Codex auth material.
+- Added `research-digest schedule status`, `research-digest schedule install --time HH:MM`, and `research-digest schedule remove`.
+- Install uses `Register-ScheduledTask -Force`; remove treats a missing task as a successful not-installed result.
+- README now documents headless and WSL2 scheduling commands.
+
+Deterministic verification:
+
+- `pytest`: 85 passed.
+- `ruff check .`: PASS.
+- strict `mypy --no-incremental src tests`: PASS.
+- `compileall -q src tests`: PASS.
+- `git diff --check`: PASS.
+
+Focused coverage added:
+
+- time validation for Windows local `HH:MM` schedule input.
+- WSL distro, working directory, and DB path resolution.
+- installed command and Windows `wsl.exe` resolution, including clear failure if `research-digest` is unavailable.
+- scheduled command excludes API keys/secrets.
+- idempotent mocked install/update/remove/status PowerShell behavior.
+- CLI JSON and human schedule output.
+- sanitized schedule failure output.
+
+Live verification:
+
+- `python -m research_digest.cli schedule status --task-name 'Research Digest Codex Smoke' --json` returns a sanitized Windows interop failure: `UtilBindVsockAnyPort ... socket failed 1`.
+- Retrying the same CLI smoke after sandbox escalation returns the same failure.
+- No Task Scheduler task was installed, triggered, or removed in this session.
+
+Audit status:
+
+- Fresh independent M4-B Auditor requested.

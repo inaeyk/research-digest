@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TextIO
 
@@ -14,6 +14,13 @@ from research_digest.analysis.providers import build_configured_analyzer
 from research_digest.config import AppConfig, load_config
 from research_digest.db import Database
 from research_digest.errors import sanitize_error
+from research_digest.scheduler import (
+    DEFAULT_TASK_NAME,
+    ScheduleError,
+    SchedulerBackend,
+    build_schedule_request,
+    select_scheduler_backend,
+)
 from research_digest.service import (
     HeadlessDigestRun,
     HeadlessProfileRun,
@@ -37,6 +44,7 @@ def run_cli(
     source: SourceAdapter | None = None,
     analyzer: LLMAnalyzer | None = None,
     analyzer_message: str | None = None,
+    scheduler_backend: SchedulerBackend | None = None,
 ) -> int:
     try:
         args = _build_parser().parse_args(argv)
@@ -53,6 +61,14 @@ def run_cli(
             source=source,
             analyzer=analyzer,
             analyzer_message=analyzer_message,
+        )
+    if args.command == "schedule":
+        return _schedule_command(
+            args=args,
+            stdout=stdout,
+            stderr=stderr,
+            config=config,
+            scheduler_backend=scheduler_backend,
         )
 
     _build_parser().print_help(stderr)
@@ -71,7 +87,45 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print a machine-readable JSON result.",
     )
+    schedule_parser = subparsers.add_parser(
+        "schedule",
+        help="Manage the OS-backed daily headless run schedule.",
+    )
+    schedule_subparsers = schedule_parser.add_subparsers(dest="schedule_command", required=True)
+    for name in ("status", "remove"):
+        command_parser = schedule_subparsers.add_parser(name)
+        _add_schedule_common_args(command_parser)
+    install_parser = schedule_subparsers.add_parser("install")
+    _add_schedule_common_args(install_parser)
+    install_parser.add_argument(
+        "--time",
+        required=True,
+        help="Windows local time in HH:MM 24-hour format.",
+    )
+    install_parser.add_argument(
+        "--distro",
+        help="WSL distro name. Defaults to WSL_DISTRO_NAME.",
+    )
     return parser
+
+
+def _add_schedule_common_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--task-name",
+        default=DEFAULT_TASK_NAME,
+        help=f"Windows Task Scheduler task name. Defaults to {DEFAULT_TASK_NAME!r}.",
+    )
+    parser.add_argument(
+        "--backend",
+        default="auto",
+        choices=("auto", "windows"),
+        help="Scheduler backend. Defaults to auto.",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print a machine-readable JSON result.",
+    )
 
 
 def _run_digest_command(
@@ -140,6 +194,76 @@ def _write_failure(
         stdout.write("\n")
     else:
         stderr.write(f"Research Digest run failed: {message}\n")
+
+
+def _schedule_command(
+    *,
+    args: argparse.Namespace,
+    stdout: TextIO,
+    stderr: TextIO,
+    config: AppConfig | None,
+    scheduler_backend: SchedulerBackend | None,
+) -> int:
+    try:
+        backend = scheduler_backend or select_scheduler_backend(backend_name=args.backend)
+        if args.schedule_command == "install":
+            request = build_schedule_request(
+                task_name=args.task_name,
+                time_of_day=args.time,
+                config=config,
+                wsl_distro=args.distro,
+            )
+            result = backend.install(request)
+            payload = result.to_mapping()
+        elif args.schedule_command == "remove":
+            result = backend.remove(task_name=args.task_name)
+            payload = result.to_mapping()
+        elif args.schedule_command == "status":
+            status = backend.status(task_name=args.task_name)
+            payload = status.to_mapping()
+        else:
+            raise ScheduleError(f"unsupported schedule command: {args.schedule_command}")
+    except Exception as exc:
+        message = sanitize_error(exc)
+        if args.json:
+            json.dump({"status": "failed", "error_message": message}, stdout)
+            stdout.write("\n")
+        else:
+            stderr.write(f"Research Digest schedule failed: {message}\n")
+        return 1
+
+    if args.json:
+        json.dump({"status": "completed", **payload}, stdout)
+        stdout.write("\n")
+    else:
+        _write_schedule_human(stdout, args.schedule_command, payload)
+    return 0
+
+
+def _write_schedule_human(
+    stdout: TextIO,
+    command: str,
+    payload: Mapping[str, object],
+) -> None:
+    stdout.write(f"Schedule {command} completed\n")
+    stdout.write(f"Backend: {payload.get('backend')}\n")
+    stdout.write(f"Task: {payload.get('task_name')}\n")
+    stdout.write(f"Installed: {payload.get('installed')}\n")
+    stdout.write(f"Timezone: {payload.get('timezone')}\n")
+    if payload.get("state") is not None:
+        stdout.write(f"State: {payload.get('state')}\n")
+    if payload.get("last_task_result") is not None:
+        stdout.write(f"Last result: {payload.get('last_task_result')}\n")
+    if payload.get("last_run_time") is not None:
+        stdout.write(f"Last run: {payload.get('last_run_time')}\n")
+    if payload.get("next_run_time") is not None:
+        stdout.write(f"Next run: {payload.get('next_run_time')}\n")
+    if payload.get("execute") is not None:
+        stdout.write(f"Execute: {payload.get('execute')}\n")
+    if payload.get("arguments") is not None:
+        stdout.write(f"Arguments: {payload.get('arguments')}\n")
+    if payload.get("message") is not None:
+        stdout.write(f"{payload.get('message')}\n")
 
 
 def _write_human_result(
