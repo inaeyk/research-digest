@@ -27,6 +27,7 @@ from research_digest.models import (
 from research_digest.pipeline import DigestPipelineError, run_digest
 from research_digest.sources.arxiv import ArxivSource
 from research_digest.sources.base import SourceError
+from research_digest.synthesis import CrossPaperSynthesis, build_cross_paper_synthesis
 from research_digest.ui.common import get_analyzer, get_database
 
 DigestInputSignature: TypeAlias = tuple[str, str]
@@ -218,6 +219,9 @@ def _render_items(result: DigestResult, db: Database) -> None:
             threshold=threshold,
         )
     )
+    _render_cross_paper_synthesis(
+        build_cross_paper_synthesis(items=result.items, threshold=threshold)
+    )
 
     counts = digest_view_counts(result)
     selected = st.segmented_control(
@@ -286,6 +290,37 @@ def _format_optional_ratio(value: float | None) -> str:
     if value is None:
         return "-"
     return f"{value:.2f}"
+
+
+def _render_cross_paper_synthesis(synthesis: CrossPaperSynthesis) -> None:
+    import streamlit as st
+
+    if synthesis.relevant_count == 0:
+        return
+    with st.container(border=True):
+        st.markdown("**Cross-paper synthesis**")
+        metric_col, priority_col = st.columns(2)
+        metric_col.metric("Relevant papers", synthesis.relevant_count)
+        priority_col.metric("High priority", len(synthesis.high_priority_titles))
+        if synthesis.recurring_topics:
+            st.markdown("**Recurring topics**")
+            for topic in synthesis.recurring_topics:
+                st.write(
+                    f"{topic.topic} appears in {topic.paper_count} papers: "
+                    + "; ".join(topic.paper_titles)
+                )
+        elif synthesis.high_priority_titles:
+            st.markdown("**High-priority papers**")
+            for title in synthesis.high_priority_titles:
+                st.write(title)
+        if synthesis.category_counts:
+            st.caption(
+                "Categories: "
+                + ", ".join(
+                    f"{category} ({count})"
+                    for category, count in synthesis.category_counts[:5]
+                )
+            )
 
 
 def _empty_view_message(view: DigestView) -> str:

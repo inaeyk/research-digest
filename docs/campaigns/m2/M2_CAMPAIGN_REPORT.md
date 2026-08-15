@@ -67,4 +67,20 @@
 - local deterministic verification after repair: `pytest` passed 61 tests; `ruff check .` passed; `mypy --no-incremental src tests` passed; `compileall -q src tests` passed; `git diff --check` passed.
 - closure auditor: `01a0045f-bf9d-7533-a564-000e526bb57b`.
 - closure auditor result: PASS with no blocking findings.
+- qualified commit: `f6cbe703ae41657120105237fab221f56c2dc9e4`.
+- local annotated tag: `m2c-qualified` points to `f6cbe703ae41657120105237fab221f56c2dc9e4`; tag object `bdcba8f788ad09f6e40d233b6a50d9a7a94335fb`.
+
+## M2-D Daily Cross-Paper Synthesis
+
+- implementation: added deterministic cross-paper synthesis over analyzed digest items.
+- behavior: synthesis uses above-threshold papers only, counts category coverage, highlights high-priority papers, and surfaces recurring matched topics across multiple relevant papers.
+- UI: Today page renders a cross-paper synthesis panel above the per-paper result list when relevant papers exist.
+- tests added: relevant-only synthesis, recurring topic counts, high-priority title extraction, and empty-signal behavior.
+- local deterministic verification: `pytest` passed 63 tests; `ruff check .` passed; `mypy --no-incremental src tests` passed; `compileall -q src tests` passed; `git diff --check` passed.
+- first auditor: `01a00463-9a7c-76d0-a5cf-2dfa621e8d87`.
+- first auditor result: NOT QUALIFIED; duplicate matched topics within one relevant paper could be counted as a recurring cross-paper topic.
+- repair: normalized matched topics are deduplicated per paper before recurring-topic counts are computed.
+- local deterministic verification after repair: `pytest` passed 64 tests; `ruff check .` passed; `mypy --no-incremental src tests` passed; `compileall -q src tests` passed; `git diff --check` passed.
+- closure auditor: `01a00466-0aa7-76a3-b043-928006752fab`.
+- closure auditor result: PASS for synthesis code repair; metadata-only campaign-state findings corrected before freeze.
 - status: qualified; commit/tag freeze pending.
