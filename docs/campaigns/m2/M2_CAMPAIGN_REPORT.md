@@ -83,4 +83,13 @@
 - local deterministic verification after repair: `pytest` passed 64 tests; `ruff check .` passed; `mypy --no-incremental src tests` passed; `compileall -q src tests` passed; `git diff --check` passed.
 - closure auditor: `01a00466-0aa7-76a3-b043-928006752fab`.
 - closure auditor result: PASS for synthesis code repair; metadata-only campaign-state findings corrected before freeze.
-- status: qualified; commit/tag freeze pending.
+- qualified commit: `1626793ef693fec068a1fa571a40d07c9ffb5233`.
+- local annotated tag: `m2d-qualified` points to `1626793ef693fec068a1fa571a40d07c9ffb5233`; tag object `9af78da08af41a82b46b3318f77d600dfb0c5ff6`.
+
+## M2 Final End Gate
+
+- qualified commits: M2-A `81d4d5e011c46650c6094db628668e82a030547e`; M2-B `9aea33b0a1dc8a2b34ad7622e55bb8fb047852bb`; M2-C `f6cbe703ae41657120105237fab221f56c2dc9e4`; M2-D `1626793ef693fec068a1fa571a40d07c9ffb5233`.
+- local annotated tags: `m2a-qualified`, `m2b-qualified`, `m2c-qualified`, `m2d-qualified`.
+- final deterministic verification: `pytest` passed 64 tests; `ruff check .` passed; `mypy --no-incremental src tests` passed; `compileall -q src tests` passed; `git diff --check` passed.
+- final hygiene: staged/committed inventories excluded `research_digest.sqlite3`, `.venv`, `.env`/secrets, caches, and local agent/runtime state.
+- status: STOP for human review.
