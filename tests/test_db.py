@@ -8,7 +8,13 @@ import unittest
 from datetime import UTC, datetime
 from pathlib import Path
 
-from research_digest.db import Database
+from research_digest.db import (
+    APP_RUN_ANALYSIS_UNAVAILABLE,
+    APP_RUN_COMPLETED,
+    APP_RUN_FAILED,
+    APP_RUN_RUNNING,
+    Database,
+)
 from research_digest.models import (
     AnalysisResult,
     Article,
@@ -351,18 +357,41 @@ class DatabaseTests(unittest.TestCase):
                     id, profile_id, source_name, started_at, completed_at, status,
                     retrieved_count, stored_count, analyzed_count, relevant_count, error_message
                 )
-                VALUES (
-                    1, NULL, 'arxiv', '2026-08-14T12:00:00Z',
-                    '2026-08-14T12:01:00Z', 'success', 4, 4, 3, 2, NULL
-                );
+                VALUES
+                    (
+                        1, NULL, 'arxiv', '2026-08-14T12:00:00Z',
+                        '2026-08-14T12:01:00Z', 'success', 4, 4, 3, 2, NULL
+                    ),
+                    (
+                        2, NULL, 'arxiv', '2026-08-14T12:02:00Z',
+                        NULL, 'running', 0, 0, 0, 0, NULL
+                    ),
+                    (
+                        3, NULL, 'arxiv', '2026-08-14T12:03:00Z',
+                        '2026-08-14T12:04:00Z', 'failed', 0, 0, 0, 0, 'failed'
+                    ),
+                    (
+                        4, NULL, 'arxiv', '2026-08-14T12:05:00Z',
+                        '2026-08-14T12:06:00Z', 'analysis_unavailable',
+                        0, 0, 0, 0, NULL
+                    );
                 """
             )
 
         migrated_db = Database(legacy_path)
         runs = migrated_db.get_app_runs()
 
-        self.assertEqual(runs[0]["preselected_count"], 0)
-        self.assertEqual(runs[0]["skipped_analysis_count"], 0)
+        self.assertEqual(runs[-1]["preselected_count"], 0)
+        self.assertEqual(runs[-1]["skipped_analysis_count"], 0)
+        self.assertEqual(
+            {row["id"]: row["status"] for row in runs},
+            {
+                1: APP_RUN_COMPLETED,
+                2: APP_RUN_RUNNING,
+                3: APP_RUN_FAILED,
+                4: APP_RUN_ANALYSIS_UNAVAILABLE,
+            },
+        )
 
 
 if __name__ == "__main__":

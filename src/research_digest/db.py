@@ -6,6 +6,8 @@ import json
 import sqlite3
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
@@ -24,6 +26,27 @@ from research_digest.models import (
 )
 
 SOURCE_ARXIV = "arxiv"
+APP_RUN_STARTING = "STARTING"
+APP_RUN_RUNNING = "RUNNING"
+APP_RUN_COMPLETED = "COMPLETED"
+APP_RUN_FAILED = "FAILED"
+APP_RUN_ANALYSIS_UNAVAILABLE = "ANALYSIS_UNAVAILABLE"
+DIGEST_RUN_LOCK = "digest"
+
+
+class RunLockError(RuntimeError):
+    """Raised when a digest run lock cannot be acquired."""
+
+
+class RunAlreadyActiveError(RunLockError):
+    """Raised when another digest run is already active."""
+
+
+@dataclass(frozen=True)
+class RunLock:
+    name: str
+    owner: str
+    acquired_at: datetime
 
 
 class Database:
@@ -125,6 +148,13 @@ class Database:
                     relevant_count INTEGER NOT NULL DEFAULT 0,
                     error_message TEXT,
                     FOREIGN KEY(profile_id) REFERENCES interest_profiles(id) ON DELETE SET NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS run_locks (
+                    name TEXT PRIMARY KEY,
+                    owner TEXT NOT NULL,
+                    acquired_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
                 );
                 """
             )
@@ -392,9 +422,16 @@ class Database:
                 INSERT INTO app_runs (profile_id, source_name, started_at, status)
                 VALUES (?, ?, ?, ?)
                 """,
-                (profile_id, source_name, datetime_to_db(utc_now()), "running"),
+                (profile_id, source_name, datetime_to_db(utc_now()), APP_RUN_STARTING),
             )
             return _lastrowid(cursor)
+
+    def mark_app_run_running(self, run_id: int) -> None:
+        with self._connection() as conn:
+            conn.execute(
+                "UPDATE app_runs SET status = ? WHERE id = ?",
+                (APP_RUN_RUNNING, run_id),
+            )
 
     def finish_app_run(
         self,
@@ -435,7 +472,82 @@ class Database:
     def get_app_runs(self) -> list[sqlite3.Row]:
         with self._connection() as conn:
             return list(
-                conn.execute("SELECT * FROM app_runs ORDER BY id DESC").fetchall()
+                conn.execute(
+                    """
+                    SELECT
+                        id,
+                        profile_id,
+                        source_name,
+                        started_at,
+                        completed_at,
+                        CASE status
+                            WHEN 'running' THEN ?
+                            WHEN 'success' THEN ?
+                            WHEN 'failed' THEN ?
+                            WHEN 'analysis_unavailable' THEN ?
+                            ELSE status
+                        END AS status,
+                        retrieved_count,
+                        stored_count,
+                        preselected_count,
+                        skipped_analysis_count,
+                        analyzed_count,
+                        relevant_count,
+                        error_message
+                    FROM app_runs
+                    ORDER BY id DESC
+                    """,
+                    (
+                        APP_RUN_RUNNING,
+                        APP_RUN_COMPLETED,
+                        APP_RUN_FAILED,
+                        APP_RUN_ANALYSIS_UNAVAILABLE,
+                    ),
+                ).fetchall()
+            )
+
+    def acquire_run_lock(
+        self,
+        *,
+        owner: str,
+        stale_after_seconds: float,
+        now: datetime | None = None,
+    ) -> RunLock:
+        acquired_at = utc_now() if now is None else now
+        stale_cutoff = acquired_at - timedelta(seconds=stale_after_seconds)
+        acquired_at_text = datetime_to_db(acquired_at)
+        with self._immediate_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM run_locks WHERE name = ?",
+                (DIGEST_RUN_LOCK,),
+            ).fetchone()
+            if row is not None:
+                locked_at = datetime_from_db(str(row["acquired_at"]))
+                if locked_at > stale_cutoff:
+                    raise RunAlreadyActiveError("another digest run is already active")
+                _mark_unfinished_runs_failed(conn, completed_at=acquired_at_text)
+                conn.execute("DELETE FROM run_locks WHERE name = ?", (DIGEST_RUN_LOCK,))
+            else:
+                _mark_unfinished_runs_failed(
+                    conn,
+                    completed_at=acquired_at_text,
+                    started_before=datetime_to_db(stale_cutoff),
+                )
+
+            conn.execute(
+                """
+                INSERT INTO run_locks (name, owner, acquired_at, updated_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (DIGEST_RUN_LOCK, owner, acquired_at_text, acquired_at_text),
+            )
+        return RunLock(name=DIGEST_RUN_LOCK, owner=owner, acquired_at=acquired_at)
+
+    def release_run_lock(self, *, owner: str) -> None:
+        with self._connection() as conn:
+            conn.execute(
+                "DELETE FROM run_locks WHERE name = ? AND owner = ?",
+                (DIGEST_RUN_LOCK, owner),
             )
 
     @contextmanager
@@ -452,6 +564,21 @@ class Database:
         finally:
             conn.close()
 
+    @contextmanager
+    def _immediate_connection(self) -> Iterator[sqlite3.Connection]:
+        conn = sqlite3.connect(self.path, isolation_level=None)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
 
 def _get_interest_profile(conn: sqlite3.Connection, profile_id: int) -> InterestProfile | None:
     row = conn.execute(
@@ -459,6 +586,34 @@ def _get_interest_profile(conn: sqlite3.Connection, profile_id: int) -> Interest
         (profile_id,),
     ).fetchone()
     return _profile_from_row(row) if row is not None else None
+
+
+def _mark_unfinished_runs_failed(
+    conn: sqlite3.Connection,
+    *,
+    completed_at: str,
+    started_before: str | None = None,
+) -> None:
+    params: list[object] = [
+        completed_at,
+        APP_RUN_FAILED,
+        "Previous digest run appears to have stopped before completion.",
+        APP_RUN_STARTING,
+        APP_RUN_RUNNING,
+        "running",
+    ]
+    started_clause = ""
+    if started_before is not None:
+        started_clause = " AND started_at <= ?"
+        params.append(started_before)
+    conn.execute(
+        f"""
+        UPDATE app_runs
+        SET completed_at = ?, status = ?, error_message = ?
+        WHERE completed_at IS NULL AND status IN (?, ?, ?){started_clause}
+        """,
+        tuple(params),
+    )
 
 
 def _save_arxiv_config(conn: sqlite3.Connection, config: ArxivSourceConfig) -> None:

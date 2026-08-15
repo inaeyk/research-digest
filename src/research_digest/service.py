@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from uuid import uuid4
 
 from research_digest.analysis.base import LLMAnalyzer
 from research_digest.calibration import CalibrationSummary, build_calibration_summary
@@ -14,6 +15,8 @@ from research_digest.pipeline import DigestPipelineError, run_digest
 from research_digest.preselection import AbstractPreselector
 from research_digest.sources.base import SourceAdapter
 from research_digest.synthesis import CrossPaperSynthesis, build_cross_paper_synthesis
+
+DEFAULT_RUN_LOCK_STALE_SECONDS = 60.0 * 60.0 * 6.0
 
 
 @dataclass(frozen=True)
@@ -83,8 +86,27 @@ def run_digest_for_profile(
     profile_id: int,
     now: datetime | None = None,
     preselector: AbstractPreselector | None = None,
+    acquire_lock: bool = True,
+    stale_lock_seconds: float = DEFAULT_RUN_LOCK_STALE_SECONDS,
 ) -> ProfileDigestRun:
     """Run the qualified digest workflow for one enabled profile."""
+
+    if acquire_lock:
+        owner = _lock_owner()
+        db.acquire_run_lock(owner=owner, stale_after_seconds=stale_lock_seconds)
+        try:
+            return run_digest_for_profile(
+                db=db,
+                source=source,
+                analyzer=analyzer,
+                profile_id=profile_id,
+                now=now,
+                preselector=preselector,
+                acquire_lock=False,
+                stale_lock_seconds=stale_lock_seconds,
+            )
+        finally:
+            db.release_run_lock(owner=owner)
 
     digest = run_digest(
         db=db,
@@ -111,9 +133,34 @@ def run_digest_for_enabled_profiles(
     analyzer: LLMAnalyzer | None,
     now: datetime | None = None,
     preselector: AbstractPreselector | None = None,
+    stale_lock_seconds: float = DEFAULT_RUN_LOCK_STALE_SECONDS,
 ) -> HeadlessDigestRun:
     """Run the digest workflow for every enabled profile."""
 
+    owner = _lock_owner()
+    db.acquire_run_lock(owner=owner, stale_after_seconds=stale_lock_seconds)
+    try:
+        return _run_digest_for_enabled_profiles_unlocked(
+            db=db,
+            source=source,
+            analyzer=analyzer,
+            now=now,
+            preselector=preselector,
+            stale_lock_seconds=stale_lock_seconds,
+        )
+    finally:
+        db.release_run_lock(owner=owner)
+
+
+def _run_digest_for_enabled_profiles_unlocked(
+    *,
+    db: Database,
+    source: SourceAdapter,
+    analyzer: LLMAnalyzer | None,
+    now: datetime | None,
+    preselector: AbstractPreselector | None,
+    stale_lock_seconds: float,
+) -> HeadlessDigestRun:
     profiles = db.list_interest_profiles(enabled_only=True)
     if not profiles:
         raise DigestPipelineError("create and enable an interest profile before running a digest")
@@ -130,6 +177,8 @@ def run_digest_for_enabled_profiles(
                 profile_id=profile.id,
                 now=now,
                 preselector=preselector,
+                acquire_lock=False,
+                stale_lock_seconds=stale_lock_seconds,
             )
         except Exception as exc:
             runs.append(
@@ -143,6 +192,10 @@ def run_digest_for_enabled_profiles(
             runs.append(HeadlessProfileRun(profile_id=profile.id, success=True, digest=digest))
 
     return HeadlessDigestRun(profiles=tuple(runs))
+
+
+def _lock_owner() -> str:
+    return f"pid:{uuid4()}"
 
 
 def _build_calibration(db: Database, digest: DigestResult) -> CalibrationSummary:

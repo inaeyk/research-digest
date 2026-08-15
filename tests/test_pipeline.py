@@ -8,7 +8,7 @@ from pathlib import Path
 
 from research_digest.analysis.base import article_analysis_key
 from research_digest.analysis.fake import FakeAnalyzer
-from research_digest.db import Database
+from research_digest.db import APP_RUN_FAILED, Database
 from research_digest.models import (
     AnalysisOrigin,
     AnalysisResult,
@@ -551,7 +551,7 @@ class PipelineTests(unittest.TestCase):
             )
 
         runs = self.db.get_app_runs()
-        self.assertEqual(runs[0]["status"], "failed")
+        self.assertEqual(runs[0]["status"], APP_RUN_FAILED)
         self.assertIn("relevance_score", runs[0]["error_message"])
 
     def test_pipeline_persists_sanitized_error_message(self) -> None:

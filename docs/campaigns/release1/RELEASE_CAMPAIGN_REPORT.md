@@ -184,3 +184,96 @@ Live verification:
 Audit status:
 
 - Fresh independent M4-B Auditor requested.
+
+M4-B audit and freeze:
+
+- Fresh independent M4-B Auditor returned PASS with no BLOCKER/IMPORTANT findings.
+- Auditor verified scheduler boundary separation, Windows Task Scheduler backend behavior, stable scheduled `research-digest run` target, secret exclusion, status visibility, README timezone/DST documentation, deterministic tests, and environment-blocked live Task Scheduler smoke.
+- qualified commit: `9d7db2ce0983e8fa1a68534450b890ae110ebed8`.
+- qualified tag: `m4b-qualified`.
+- qualified tag object: `2c204f177d7ace500766365fc49d780ad08d8ceb`.
+- post-freeze Git state: local `master` is 2 commits ahead of `origin/master`; online remote inspection remains blocked by DNS/network limits in this session.
+
+## M4-C Specification Freeze
+
+M4-C is frozen as robust run lifecycle semantics using SQLite-local exclusion and stale recovery over the existing `app_runs` model.
+
+The implementation must prevent unsafe overlap for manual/scheduled headless runs, make failures terminal and sanitized, support retry after failure, recover stale/crashed runs after a finite timeout, and preserve M2 cache reuse on repeated unchanged runs.
+
+The detailed frozen specification is maintained in `docs/campaigns/release1/CAMPAIGN_STATE.md`.
+
+## M4-C Candidate
+
+Implementation summary:
+
+- Added a SQLite-local `run_locks` table and atomic lock acquisition through `BEGIN IMMEDIATE`.
+- New app runs use explicit lifecycle statuses: `STARTING`, `RUNNING`, `COMPLETED`, `FAILED`, and `ANALYSIS_UNAVAILABLE`.
+- Stale lock recovery marks stale unfinished `STARTING`/`RUNNING` rows failed with a sanitized local message; legacy lowercase `running` rows are recognized for compatibility.
+- `run_digest_for_profile` and `run_digest_for_enabled_profiles` acquire the shared digest lock; multi-profile headless runs hold one lock across the whole batch.
+- Existing M2 cache/reuse remains delegated to `run_digest`.
+- Failed runs release locks in `finally`, allowing retry after failure.
+
+Deterministic verification:
+
+- `pytest`: 89 passed.
+- `ruff check .`: PASS.
+- strict `mypy --no-incremental src tests`: PASS.
+- `compileall -q src tests`: PASS.
+- `git diff --check`: PASS.
+
+Focused coverage added:
+
+- simultaneous service run exclusion.
+- stale/crashed lock recovery and stale running-row terminal failure.
+- failed run records sanitized terminal failure.
+- retry after failure succeeds.
+- repeated unchanged run reuses M2 analysis cache.
+- batch run releases lock after per-profile failure.
+- SQLite `PRAGMA integrity_check` after failed/retry/repeated runs.
+
+Live verification:
+
+- Isolated overlap/stale lifecycle smoke using deterministic fake source/analyzer and temporary SQLite DB passed:
+  `pytest tests/test_run_lifecycle.py::RunLifecycleTests::test_simultaneous_service_runs_are_excluded tests/test_run_lifecycle.py::RunLifecycleTests::test_stale_lock_and_running_row_recover_to_failed -q`.
+
+Audit status:
+
+- Fresh independent M4-C Auditor returned FAIL with two IMPORTANT findings.
+
+Initial audit findings:
+
+- Stale lock recovery could leave an old run stuck as `RUNNING` if the run row started after the stale lock timestamp.
+- Legacy app run statuses were not normalized at the `get_app_runs` read boundary.
+
+Repair round 1:
+
+- Stale-lock replacement now marks all unfinished `STARTING`/`RUNNING`/legacy `running` rows failed, because the stale lock is the crashed-run authority.
+- Startup cleanup without an existing lock still marks only unfinished rows older than the stale cutoff.
+- `get_app_runs` now normalizes legacy `running`, `success`, `failed`, and `analysis_unavailable` statuses in SQL.
+- Regression tests cover both auditor probes.
+
+Repair verification:
+
+- focused `pytest tests/test_db.py::DatabaseTests::test_legacy_app_runs_gain_preselection_count_columns tests/test_run_lifecycle.py::RunLifecycleTests::test_stale_lock_and_running_row_recover_to_failed`: 2 passed.
+- `ruff check src/research_digest/db.py tests/test_db.py tests/test_run_lifecycle.py`: PASS.
+- strict `mypy --no-incremental src tests`: PASS.
+- full `pytest`: 89 passed.
+- `ruff check .`: PASS.
+- strict `mypy --no-incremental src tests`: PASS.
+- `compileall -q src tests`: PASS.
+- `git diff --check`: PASS.
+
+Audit status:
+
+- Fresh independent M4-C re-auditor returned PASS with no BLOCKER/IMPORTANT findings.
+- Re-auditor verified stale-lock replacement, legacy status normalization, service-level lock coverage, explicit lifecycle transitions, sanitized failure, overlap/stale/retry/cache/DB-integrity coverage, and full deterministic gates.
+
+Re-auditor verification:
+
+- Focused lifecycle/legacy tests: 5 passed.
+- Independent temp-DB stale-lock and legacy-normalization probes: PASS.
+- full `pytest -q -p no:cacheprovider`: 89 passed, 9 subtests passed.
+- `ruff check .`: PASS.
+- strict `mypy --no-incremental src tests`: PASS.
+- `compileall -q src tests`: PASS.
+- `git diff --check`: PASS.

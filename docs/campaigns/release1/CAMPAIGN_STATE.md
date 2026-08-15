@@ -1,11 +1,11 @@
 # Release 1 Campaign State
 
-- current_substage: M4-B candidate audit
+- current_substage: M4-C candidate audit
 - status: ACTIVE
-- current_git_head: 82b8a7e82c047c9dff96d075f7f8b9981fa9f312
-- current_tags_at_head: m4a-qualified
+- current_git_head: 9d7db2ce0983e8fa1a68534450b890ae110ebed8
+- current_tags_at_head: m4b-qualified
 - current_branch: master
-- local_remote_tracking: `master` tracks `origin/master`; local branch is 1 commit ahead after M4-A freeze
+- local_remote_tracking: `master` tracks `origin/master`; local branch is 2 commits ahead after M4-B freeze
 - online_remote_verification: attempted `git ls-remote --heads --tags origin`; blocked by DNS resolution failure for `github.com` even after network escalation
 - baseline_m1_qualified_commit: 36bd1cbe60f95d588e8ccdd41bfce914e9b1d7da
 - baseline_m1_qualified_tag: m1-qualified
@@ -20,15 +20,18 @@
 - m4a_qualified_commit: 82b8a7e82c047c9dff96d075f7f8b9981fa9f312
 - m4a_qualified_tag: m4a-qualified
 - m4a_qualified_tag_object: 99a1d7388903f11ef678b528d0879c7d33c25044
+- m4b_qualified_commit: 9d7db2ce0983e8fa1a68534450b890ae110ebed8
+- m4b_qualified_tag: m4b-qualified
+- m4b_qualified_tag_object: 2c204f177d7ace500766365fc49d780ad08d8ceb
 - skipped_campaigns: M3 additional source types; M5 full-paper reading; M6 long-term research memory
 - active_campaign_scope: M4 automatic daily operation; M7 release engineering, upgradeability, and productization; first release candidate
-- qualification_status: M4B_CANDIDATE_READY_AUDIT
-- audit_repair_round: 0
-- last_deterministic_verification: M4-B candidate self-repair full gate: `pytest` 85 passed; `ruff check .` PASS; strict `mypy --no-incremental src tests` PASS; `compileall -q src tests` PASS; `git diff --check` PASS.
-- last_live_verification: M4-B live scheduler status smoke attempted with `python -m research_digest.cli schedule status --task-name 'Research Digest Codex Smoke' --json`; returned sanitized Windows interop failure `UtilBindVsockAnyPort ... socket failed 1` both inside the default sandbox and after sandbox escalation. Earlier direct `powershell.exe` probe had the same failure. No Task Scheduler task was installed or removed.
+- qualification_status: M4C_REAUDIT_PASS_READY_FREEZE
+- audit_repair_round: 1
+- last_deterministic_verification: M4-C repair round 1 full gate: `pytest` 89 passed; `ruff check .` PASS; strict `mypy --no-incremental src tests` PASS; `compileall -q src tests` PASS; `git diff --check` PASS.
+- last_live_verification: M4-C isolated lifecycle smoke `pytest tests/test_run_lifecycle.py::RunLifecycleTests::test_simultaneous_service_runs_are_excluded tests/test_run_lifecycle.py::RunLifecycleTests::test_stale_lock_and_running_row_recover_to_failed -q` passed; verifies overlap exclusion and stale lock/run recovery against temporary SQLite DB with deterministic fake source/analyzer.
 - migration_data_safety_status: no release1 migrations applied yet; repo-local `research_digest.sqlite3` remains ignored and must not be used for upgrade tests. During M4-A re-audit, a manual CLI smoke likely wrote one runtime run record to the ignored repo-local DB; a content-free `PRAGMA integrity_check` returned `ok`.
 - deferred_minor_optional_findings: none
-- next_permitted_action: complete fresh M4-B audit; repair BLOCKER/IMPORTANT findings if any; otherwise freeze, commit, and tag `m4b-qualified`
+- next_permitted_action: perform freeze hygiene, commit, and tag `m4c-qualified`
 - human_stop_reason: none
 
 ## M4-A Frozen Specification
@@ -174,10 +177,75 @@ Live verification required before M4-B freeze:
 - self-review repair before audit completion: scheduler install now resolves the Windows `wsl.exe` executable and the installed `research-digest` command deliberately; if `research-digest` is not on PATH, install fails clearly instead of creating a broken schedule.
 - deterministic verification: `pytest` 85 passed; `ruff check .` PASS; strict `mypy --no-incremental src tests` PASS; `compileall -q src tests` PASS; `git diff --check` PASS.
 - live verification: Windows interop/Task Scheduler smoke is blocked in this session by `UtilBindVsockAnyPort ... socket failed 1`; CLI surfaces that as sanitized JSON failure. No scheduler task was created.
+- fresh Auditor: PASS with no BLOCKER/IMPORTANT findings. Auditor verified the scheduler boundary is separate from the digest engine, Windows Task Scheduler backend behavior, stable `research-digest run` target, secret exclusion, status visibility, README timezone/DST documentation, deterministic tests, and environment-blocked live Task Scheduler smoke.
+- freeze: committed `9d7db2ce0983e8fa1a68534450b890ae110ebed8` (`Qualify M4-B daily scheduling`) and created local annotated tag `m4b-qualified` with tag object `2c204f177d7ace500766365fc49d780ad08d8ceb`.
+
+## M4-C Frozen Specification
+
+Goal: automatic and manual execution cannot corrupt or duplicate work when runs fail, retry, repeat, or overlap.
+
+Run lifecycle:
+
+- Introduce explicit durable lifecycle states using the existing `app_runs` model: `STARTING`, `RUNNING`, `COMPLETED`, `FAILED`, plus `ANALYSIS_UNAVAILABLE` for the existing qualified analyzer-unavailable semantics.
+- Preserve readable compatibility for existing M1/M2 rows whose statuses are `running`, `success`, `failed`, or `analysis_unavailable`; normalize them at read boundaries rather than rewriting historical rows unless a migration is required.
+- Every new run must have a finite terminal status or be recoverable as stale/crashed.
+
+Exclusion and stale recovery:
+
+- Use SQLite-local locking; do not add Redis, queues, daemons, distributed locks, or external services.
+- Scheduled and manual `research-digest run` invocations must not overlap unsafely.
+- Use an atomic DB-backed run lock before workflow execution starts.
+- If a lock is fresh, a competing invocation exits deterministically with a sanitized error and does not create duplicate work.
+- If a lock is stale beyond a finite timeout, mark the stale run failed with a sanitized message and allow a new run.
+- Default stale timeout should be conservative and configurable for tests without requiring user decisions.
+
+Persistence and failure semantics:
+
+- Partial provider/source failure must finish the associated run as `FAILED` and keep prior qualified data intact.
+- Retry after failure must be supported by releasing/recovering the run lock.
+- Repeated unchanged runs must continue to reuse M2 analysis cache semantics.
+- Synthesis/calibration must only be computed from a completed per-profile digest result returned by the existing pipeline.
+- Errors shown by CLI/UI and stored in DB must remain sanitized.
+
+Scope constraints:
+
+- Do not build a generic workflow engine.
+- Do not change scheduler implementation except to rely on the M4-C-safe `research-digest run`.
+- Do not redesign M2 article/analysis data or source/analyzer abstractions.
+- M4-D will add user-facing History; M4-C only needs enough status data to make failed/running/stale runs durable and inspectable.
+
+Tests required before M4-C freeze:
+
+- simultaneous-run exclusion
+- stale/crashed lock recovery
+- failed run records terminal failure and sanitized error
+- retry after failure succeeds
+- repeated unchanged run preserves cache reuse
+- database integrity after failed/retry/repeated runs
+- existing M2/M4-A/M4-B deterministic tests remain green
+
+Live verification required before M4-C freeze:
+
+- run two headless invocations or service calls against an isolated DB to verify overlap exclusion deterministically
+- run a stale-lock recovery smoke against an isolated DB
+- if live Codex/network is unavailable, use deterministic fake analyzer/source for lifecycle smoke and record the Codex environment limit separately
+
+## M4-C Candidate Log
+
+- implementation: added SQLite-local `run_locks` table and DB lock acquire/release operations with stale recovery.
+- lifecycle: new app runs now start as `STARTING`, move to `RUNNING`, and finish as `COMPLETED`, `FAILED`, or `ANALYSIS_UNAVAILABLE`.
+- compatibility: stale recovery recognizes legacy lowercase `running` app rows while preserving existing historical data.
+- service boundary: `run_digest_for_profile` and `run_digest_for_enabled_profiles` acquire a shared digest lock; multi-profile headless runs hold one lock for the full batch.
+- failure/retry: service locks release in `finally`; failed profile runs remain terminal and sanitized, and later retries can proceed.
+- deterministic verification: `pytest` 89 passed; `ruff check .` PASS; strict `mypy --no-incremental src tests` PASS; `compileall -q src tests` PASS; `git diff --check` PASS.
+- live lifecycle smoke: isolated overlap exclusion and stale recovery tests passed against temporary SQLite DB.
+- initial fresh Auditor: FAIL with two IMPORTANT findings. Stale lock recovery could leave a later-started old run row stuck as `RUNNING`, and `get_app_runs` did not normalize legacy lowercase statuses at the read boundary.
+- repair round 1: stale-lock replacement now marks all unfinished `STARTING`/`RUNNING`/legacy `running` rows failed, because the lock itself is the stale/crashed authority. When no lock exists, startup cleanup still only marks unfinished rows older than the stale cutoff. `get_app_runs` now normalizes legacy `running`, `success`, `failed`, and `analysis_unavailable` statuses in its SELECT result. Regression tests cover both auditor probes.
+- fresh re-Auditor after repair round 1: PASS with no BLOCKER/IMPORTANT findings. Re-auditor verified stale-lock replacement, legacy status normalization, service-level lock coverage, explicit lifecycle transitions, sanitized failure, overlap/stale/retry/cache/DB-integrity coverage, and full deterministic gates.
 
 Freeze criteria:
 
-- fresh independent read-only M4-B audit PASS
+- fresh independent read-only M4-C audit PASS
 - `pytest`, `ruff check .`, `mypy --no-incremental src tests`, `compileall -q src tests`, and `git diff --check` PASS
 - staged inventory excludes `research_digest.sqlite3`, `.venv`, `.env`/secrets, caches, and local agent/runtime state
-- commit and annotated local tag `m4b-qualified`
+- commit and annotated local tag `m4c-qualified`

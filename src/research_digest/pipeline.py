@@ -6,7 +6,13 @@ from collections.abc import Mapping
 from datetime import datetime
 
 from research_digest.analysis.base import AnalyzerError, LLMAnalyzer, article_analysis_key
-from research_digest.db import SOURCE_ARXIV, Database
+from research_digest.db import (
+    APP_RUN_ANALYSIS_UNAVAILABLE,
+    APP_RUN_COMPLETED,
+    APP_RUN_FAILED,
+    SOURCE_ARXIV,
+    Database,
+)
 from research_digest.errors import sanitize_error
 from research_digest.models import (
     AnalysisOrigin,
@@ -46,6 +52,7 @@ def run_digest(
 
     profile_fingerprint = profile_semantic_fingerprint(profile)
     run_id = db.create_app_run(profile_id=profile.id, source_name=SOURCE_ARXIV)
+    db.mark_app_run_running(run_id)
     started_at = utc_now()
     retrieved_count = 0
     stored_count = 0
@@ -56,7 +63,7 @@ def run_digest(
     reused_analysis_count = 0
     above_threshold_count = 0
     all_items: list[DigestItem] = []
-    status = "success"
+    status = APP_RUN_COMPLETED
     error_message: str | None = None
 
     try:
@@ -137,7 +144,7 @@ def run_digest(
             is_above_threshold(item, profile.relevance_threshold) for item in all_items
         )
         if analyzer is None:
-            status = "analysis_unavailable"
+            status = APP_RUN_ANALYSIS_UNAVAILABLE
         completed_at = utc_now()
         db.finish_app_run(
             run_id,
@@ -170,7 +177,7 @@ def run_digest(
         error_message = sanitize_error(exc)
         db.finish_app_run(
             run_id,
-            status="failed",
+            status=APP_RUN_FAILED,
             retrieved_count=retrieved_count,
             stored_count=stored_count,
             preselected_count=preselected_count,
