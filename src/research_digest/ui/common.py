@@ -5,10 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import cast
 
-from research_digest.analysis.base import AnalyzerUnavailable, LLMAnalyzer
-from research_digest.analysis.codex_cli import CodexCLIAnalyzer
-from research_digest.analysis.openai import OpenAIAnalyzer
-from research_digest.config import ConfigError, load_config
+from research_digest.analysis.base import LLMAnalyzer
+from research_digest.analysis.providers import build_configured_analyzer
+from research_digest.config import AnalyzerProvider, AppConfig, ConfigError, load_config
 from research_digest.db import Database
 
 
@@ -27,28 +26,24 @@ def get_analyzer() -> tuple[LLMAnalyzer | None, str | None]:
 
     @st.cache_resource(show_spinner=False)  # type: ignore[untyped-decorator]
     def _connect_analyzer(
-        provider: str,
+        provider: AnalyzerProvider,
         api_key_present: bool,
         openai_model: str,
         codex_model: str | None,
         codex_timeout_seconds: float,
     ) -> tuple[LLMAnalyzer | None, str | None]:
-        try:
-            if provider == "codex":
-                return (
-                    CodexCLIAnalyzer(
-                        model=codex_model,
-                        timeout_seconds=codex_timeout_seconds,
-                    ),
-                    None,
-                )
-            if provider == "openai":
-                if not api_key_present:
-                    return None, "OPENAI_API_KEY is not set."
-                return OpenAIAnalyzer(model=openai_model), None
-            return None, f"Unsupported analyzer provider: {provider}"
-        except AnalyzerUnavailable as exc:
-            return None, str(exc)
+        active_config = load_config()
+        connection = build_configured_analyzer(
+            AppConfig(
+                db_path=active_config.db_path,
+                analyzer_provider=provider,
+                openai_api_key=active_config.openai_api_key if api_key_present else None,
+                openai_model=openai_model,
+                codex_model=codex_model,
+                codex_timeout_seconds=codex_timeout_seconds,
+            )
+        )
+        return connection.analyzer, connection.message
 
     try:
         config = load_config()

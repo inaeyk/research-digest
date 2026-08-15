@@ -24,7 +24,8 @@ from research_digest.models import (
     profile_semantic_signature,
     sorted_digest_items,
 )
-from research_digest.pipeline import DigestPipelineError, run_digest
+from research_digest.pipeline import DigestPipelineError
+from research_digest.service import run_digest_for_profile
 from research_digest.sources.arxiv import ArxivSource
 from research_digest.sources.base import SourceError
 from research_digest.synthesis import CrossPaperSynthesis, build_cross_paper_synthesis
@@ -86,12 +87,15 @@ def render() -> None:
     if st.button("Run Digest", type="primary"):
         with st.spinner("Fetching and analyzing recent papers..."):
             try:
-                result = run_digest(
+                if profile.id is None:
+                    raise DigestPipelineError("selected interest profile is missing an id")
+                service_result = run_digest_for_profile(
                     db=db,
                     source=ArxivSource(),
                     analyzer=analyzer,
                     profile_id=profile.id,
                 )
+                result = service_result.digest
             except (DigestPipelineError, SourceError, ModelValidationError) as exc:
                 st.error(sanitize_error(exc))
             except Exception as exc:
