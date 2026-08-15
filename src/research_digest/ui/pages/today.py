@@ -16,6 +16,7 @@ from research_digest.models import (
     above_threshold_digest_items,
     below_threshold_digest_items,
     is_above_threshold,
+    profile_semantic_signature,
     sorted_digest_items,
 )
 from research_digest.pipeline import DigestPipelineError, run_digest
@@ -113,16 +114,7 @@ def digest_input_signature(
 
 
 def profile_fingerprint(profile: InterestProfile) -> str:
-    return json.dumps(
-        {
-            "id": profile.id,
-            "name": profile.name,
-            "description": profile.description,
-            "relevance_threshold": profile.relevance_threshold,
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-    )
+    return profile_semantic_signature(profile)
 
 
 def source_config_fingerprint(source_config: ArxivSourceConfig) -> str:

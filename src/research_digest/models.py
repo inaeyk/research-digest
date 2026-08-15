@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -78,6 +80,29 @@ class InterestProfile:
             raise ModelValidationError("relevance_threshold must be between 0 and 1")
         object.__setattr__(self, "name", normalize_whitespace(self.name))
         object.__setattr__(self, "description", self.description.strip())
+
+
+def profile_semantic_payload(profile: InterestProfile) -> dict[str, float | int | str | None]:
+    """Return the prompt-visible profile fields that define analysis cache identity."""
+
+    return {
+        "id": profile.id,
+        "name": profile.name,
+        "description": profile.description,
+        "relevance_threshold": profile.relevance_threshold,
+    }
+
+
+def profile_semantic_signature(profile: InterestProfile) -> str:
+    return json.dumps(
+        profile_semantic_payload(profile),
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def profile_semantic_fingerprint(profile: InterestProfile) -> str:
+    return hashlib.sha256(profile_semantic_signature(profile).encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True)

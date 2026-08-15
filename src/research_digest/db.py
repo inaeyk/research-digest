@@ -82,6 +82,7 @@ class Database:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     article_id INTEGER NOT NULL,
                     profile_id INTEGER NOT NULL,
+                    profile_fingerprint TEXT NOT NULL,
                     relevance_score REAL NOT NULL,
                     relevance_reason TEXT NOT NULL,
                     matched_topics_json TEXT NOT NULL,
@@ -89,7 +90,7 @@ class Database:
                     why_it_matters TEXT NOT NULL,
                     reading_priority TEXT NOT NULL,
                     analyzed_at TEXT NOT NULL,
-                    UNIQUE(article_id, profile_id),
+                    UNIQUE(article_id, profile_id, profile_fingerprint),
                     FOREIGN KEY(article_id) REFERENCES articles(id) ON DELETE CASCADE,
                     FOREIGN KEY(profile_id) REFERENCES interest_profiles(id) ON DELETE CASCADE
                 );
@@ -116,6 +117,7 @@ class Database:
             ).fetchone()
             if row is None:
                 _save_arxiv_config(conn, ArxivSourceConfig())
+            _migrate_relevance_analysis_profile_fingerprints(conn)
             _sanitize_existing_app_run_errors(conn)
 
     def list_interest_profiles(self, *, enabled_only: bool = False) -> list[InterestProfile]:
@@ -244,14 +246,20 @@ class Database:
             raise RuntimeError("failed to count articles")
         return int(row["count"])
 
-    def get_analysis(self, article_id: int, profile_id: int) -> AnalysisResult | None:
+    def get_analysis(
+        self,
+        *,
+        article_id: int,
+        profile_id: int,
+        profile_fingerprint: str,
+    ) -> AnalysisResult | None:
         with self._connection() as conn:
             row = conn.execute(
                 """
                 SELECT * FROM relevance_analyses
-                WHERE article_id = ? AND profile_id = ?
+                WHERE article_id = ? AND profile_id = ? AND profile_fingerprint = ?
                 """,
-                (article_id, profile_id),
+                (article_id, profile_id, profile_fingerprint),
             ).fetchone()
         return _analysis_from_row(row) if row is not None else None
 
@@ -260,17 +268,18 @@ class Database:
         *,
         article_id: int,
         profile_id: int,
+        profile_fingerprint: str,
         analysis: AnalysisResult,
     ) -> None:
         with self._connection() as conn:
             conn.execute(
                 """
                 INSERT INTO relevance_analyses (
-                    article_id, profile_id, relevance_score, relevance_reason, matched_topics_json,
-                    summary, why_it_matters, reading_priority, analyzed_at
+                    article_id, profile_id, profile_fingerprint, relevance_score, relevance_reason,
+                    matched_topics_json, summary, why_it_matters, reading_priority, analyzed_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(article_id, profile_id) DO UPDATE SET
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(article_id, profile_id, profile_fingerprint) DO UPDATE SET
                     relevance_score = excluded.relevance_score,
                     relevance_reason = excluded.relevance_reason,
                     matched_topics_json = excluded.matched_topics_json,
@@ -282,6 +291,7 @@ class Database:
                 (
                     article_id,
                     profile_id,
+                    profile_fingerprint,
                     analysis.relevance_score,
                     analysis.relevance_reason,
                     json.dumps(analysis.matched_topics),
@@ -400,6 +410,92 @@ def _sanitize_existing_app_run_errors(conn: sqlite3.Connection) -> None:
                 "UPDATE app_runs SET error_message = ? WHERE id = ?",
                 (sanitized, int(row["id"])),
             )
+
+
+def _migrate_relevance_analysis_profile_fingerprints(conn: sqlite3.Connection) -> None:
+    if not _analysis_table_needs_profile_fingerprint_migration(conn):
+        return
+
+    rows = conn.execute(
+        """
+        SELECT
+            ra.id, ra.article_id, ra.profile_id, ra.relevance_score, ra.relevance_reason,
+            ra.matched_topics_json, ra.summary, ra.why_it_matters, ra.reading_priority,
+            ra.analyzed_at
+        FROM relevance_analyses AS ra
+        ORDER BY ra.id ASC
+        """
+    ).fetchall()
+    conn.execute("ALTER TABLE relevance_analyses RENAME TO relevance_analyses_old")
+    _create_relevance_analyses_table(conn)
+    for row in rows:
+        conn.execute(
+            """
+            INSERT INTO relevance_analyses (
+                id, article_id, profile_id, profile_fingerprint, relevance_score,
+                relevance_reason, matched_topics_json, summary, why_it_matters,
+                reading_priority, analyzed_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(row["id"]),
+                int(row["article_id"]),
+                int(row["profile_id"]),
+                f"legacy:{int(row['id'])}",
+                float(row["relevance_score"]),
+                str(row["relevance_reason"]),
+                str(row["matched_topics_json"]),
+                str(row["summary"]),
+                str(row["why_it_matters"]),
+                str(row["reading_priority"]),
+                str(row["analyzed_at"]),
+            ),
+        )
+    conn.execute("DROP TABLE relevance_analyses_old")
+
+
+def _analysis_table_needs_profile_fingerprint_migration(conn: sqlite3.Connection) -> bool:
+    columns = {
+        str(row["name"])
+        for row in conn.execute("PRAGMA table_info(relevance_analyses)").fetchall()
+    }
+    if "profile_fingerprint" not in columns:
+        return True
+
+    for index in conn.execute("PRAGMA index_list(relevance_analyses)").fetchall():
+        if not bool(index["unique"]):
+            continue
+        index_columns = [
+            str(row["name"])
+            for row in conn.execute(f"PRAGMA index_info({str(index['name'])!r})").fetchall()
+        ]
+        if index_columns == ["article_id", "profile_id"]:
+            return True
+    return False
+
+
+def _create_relevance_analyses_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE relevance_analyses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            article_id INTEGER NOT NULL,
+            profile_id INTEGER NOT NULL,
+            profile_fingerprint TEXT NOT NULL,
+            relevance_score REAL NOT NULL,
+            relevance_reason TEXT NOT NULL,
+            matched_topics_json TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            why_it_matters TEXT NOT NULL,
+            reading_priority TEXT NOT NULL,
+            analyzed_at TEXT NOT NULL,
+            UNIQUE(article_id, profile_id, profile_fingerprint),
+            FOREIGN KEY(article_id) REFERENCES articles(id) ON DELETE CASCADE,
+            FOREIGN KEY(profile_id) REFERENCES interest_profiles(id) ON DELETE CASCADE
+        )
+        """
+    )
 
 
 def _upsert_article(conn: sqlite3.Connection, article: Article) -> tuple[Article, bool]:

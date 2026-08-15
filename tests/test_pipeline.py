@@ -2,15 +2,19 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
+from research_digest.analysis.base import article_analysis_key
 from research_digest.analysis.fake import FakeAnalyzer
 from research_digest.db import Database
 from research_digest.models import (
     AnalysisOrigin,
+    AnalysisResult,
     Article,
     ArxivSourceConfig,
+    InterestProfile,
     ModelValidationError,
     above_threshold_digest_items,
     below_threshold_digest_items,
@@ -29,10 +33,15 @@ class StaticSource:
 
 
 class FailingAnalyzer:
-    def analyze(self, *, profile: object, article: object) -> object:
+    def analyze(self, *, profile: InterestProfile, article: Article) -> AnalysisResult:
         raise AssertionError("pipeline should call analyze_many")
 
-    def analyze_many(self, *, profile: object, articles: object) -> object:
+    def analyze_many(
+        self,
+        *,
+        profile: InterestProfile,
+        articles: Sequence[Article],
+    ) -> Mapping[str, AnalysisResult]:
         api_key = "sk-" + "secret123456789"
         raise RuntimeError(
             "provider failed at /home/"
@@ -41,6 +50,40 @@ class FailingAnalyzer:
             + " Bearer "
             + "token.secret.value"
         )
+
+
+class ProfileEchoAnalyzer:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, str, float]] = []
+
+    def analyze(self, *, profile: InterestProfile, article: Article) -> AnalysisResult:
+        self.calls.append(
+            (
+                article.source_article_id,
+                profile.name,
+                profile.description,
+                profile.relevance_threshold,
+            )
+        )
+        return AnalysisResult(
+            relevance_score=0.8,
+            relevance_reason=f"Analyzed for {profile.name}.",
+            matched_topics=["profile"],
+            summary=f"Summary for {profile.description}",
+            why_it_matters=f"Threshold {profile.relevance_threshold}.",
+            reading_priority="HIGH",
+        )
+
+    def analyze_many(
+        self,
+        *,
+        profile: InterestProfile,
+        articles: Sequence[Article],
+    ) -> Mapping[str, AnalysisResult]:
+        return {
+            article_analysis_key(article): self.analyze(profile=profile, article=article)
+            for article in articles
+        }
 
 
 def article(source_article_id: str, title: str, published_hour: int) -> Article:
@@ -245,6 +288,102 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(result.new_analysis_count + result.reused_analysis_count, 1)
         self.assertEqual(result.items[0].analysis_origin, AnalysisOrigin.REUSED)
         self.assertEqual(analyzer.calls, [])
+
+    def test_identical_profile_semantics_reuse_cached_analysis_after_profile_update(
+        self,
+    ) -> None:
+        analyzer = ProfileEchoAnalyzer()
+        result = run_digest(
+            db=self.db,
+            source=StaticSource(self.articles[:1]),
+            analyzer=analyzer,
+            profile_id=self.profile.id,
+        )
+        self.assertEqual(result.new_analysis_count, 1)
+        self.assertEqual(result.reused_analysis_count, 0)
+
+        self.db.update_interest_profile(
+            InterestProfile(
+                id=self.profile.id,
+                name=self.profile.name,
+                description=self.profile.description,
+                relevance_threshold=self.profile.relevance_threshold,
+                enabled=self.profile.enabled,
+            )
+        )
+        second = run_digest(
+            db=self.db,
+            source=StaticSource(self.articles[:1]),
+            analyzer=analyzer,
+            profile_id=self.profile.id,
+        )
+
+        self.assertEqual(second.new_analysis_count, 0)
+        self.assertEqual(second.reused_analysis_count, 1)
+        self.assertEqual(second.items[0].analysis_origin, AnalysisOrigin.REUSED)
+        self.assertEqual(len(analyzer.calls), 1)
+
+    def test_same_profile_id_semantic_edits_do_not_reuse_cached_analysis(self) -> None:
+        scenarios = [
+            ("Quantum gravity", self.profile.description, self.profile.relevance_threshold),
+            (self.profile.name, "Condensed matter dualities.", self.profile.relevance_threshold),
+            (self.profile.name, self.profile.description, 0.7),
+        ]
+        for index, (name, description, relevance_threshold) in enumerate(scenarios, start=1):
+            with self.subTest(
+                name=name,
+                description=description,
+                relevance_threshold=relevance_threshold,
+            ):
+                tmpdir = tempfile.TemporaryDirectory()
+                db: Database | None = None
+                try:
+                    db = Database(Path(tmpdir.name) / "test.sqlite3")
+                    profile = db.create_interest_profile(
+                        name=self.profile.name,
+                        description=self.profile.description,
+                        relevance_threshold=self.profile.relevance_threshold,
+                    )
+                    analyzer = ProfileEchoAnalyzer()
+                    source_article = article(
+                        f"2608.0100{index}",
+                        f"Profile semantic cache test {index}",
+                        7,
+                    )
+
+                    first = run_digest(
+                        db=db,
+                        source=StaticSource([source_article]),
+                        analyzer=analyzer,
+                        profile_id=profile.id,
+                    )
+                    self.assertEqual(first.new_analysis_count, 1)
+                    self.assertEqual(first.reused_analysis_count, 0)
+
+                    changed = db.update_interest_profile(
+                        InterestProfile(
+                            id=profile.id,
+                            name=name,
+                            description=description,
+                            relevance_threshold=relevance_threshold,
+                            enabled=profile.enabled,
+                        )
+                    )
+                    second = run_digest(
+                        db=db,
+                        source=StaticSource([source_article]),
+                        analyzer=analyzer,
+                        profile_id=changed.id,
+                    )
+
+                    self.assertEqual(second.new_analysis_count, 1)
+                    self.assertEqual(second.reused_analysis_count, 0)
+                    self.assertEqual(second.items[0].analysis_origin, AnalysisOrigin.NEW_THIS_RUN)
+                    self.assertEqual(len(analyzer.calls), 2)
+                finally:
+                    if db is not None:
+                        db.close()
+                    tmpdir.cleanup()
 
     def test_threshold_boundary_is_relevant(self) -> None:
         boundary = article("2608.00004", "Boundary score paper", 7)

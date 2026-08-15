@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import queue
+import sqlite3
 import tempfile
 import threading
 import unittest
@@ -8,7 +9,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from research_digest.db import Database
-from research_digest.models import AnalysisResult, Article, ArxivSourceConfig, InterestProfile
+from research_digest.models import (
+    AnalysisResult,
+    Article,
+    ArxivSourceConfig,
+    InterestProfile,
+    profile_semantic_fingerprint,
+)
 
 
 def sample_article(source_article_id: str = "2608.00001") -> Article:
@@ -131,10 +138,133 @@ class DatabaseTests(unittest.TestCase):
             why_it_matters="It matches the profile.",
             reading_priority="HIGH",
         )
-        self.db.upsert_analysis(article_id=article.id, profile_id=profile.id, analysis=analysis)
+        self.db.upsert_analysis(
+            article_id=article.id,
+            profile_id=profile.id,
+            profile_fingerprint=profile_semantic_fingerprint(profile),
+            analysis=analysis,
+        )
 
-        loaded = self.db.get_analysis(article.id, profile.id)
+        loaded = self.db.get_analysis(
+            article_id=article.id,
+            profile_id=profile.id,
+            profile_fingerprint=profile_semantic_fingerprint(profile),
+        )
         self.assertEqual(loaded, analysis)
+
+    def test_legacy_analysis_rows_are_retained_but_not_reused_as_current_profile(
+        self,
+    ) -> None:
+        legacy_path = Path(self.tmpdir.name) / "legacy.sqlite3"
+        with sqlite3.connect(legacy_path) as conn:
+            conn.executescript(
+                """
+                CREATE TABLE interest_profiles (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    relevance_threshold REAL NOT NULL,
+                    enabled INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE articles (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source TEXT NOT NULL,
+                    source_article_id TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    authors_json TEXT NOT NULL,
+                    abstract TEXT NOT NULL,
+                    categories_json TEXT NOT NULL,
+                    published_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    abstract_url TEXT NOT NULL,
+                    pdf_url TEXT,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(source, source_article_id)
+                );
+                CREATE TABLE relevance_analyses (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    article_id INTEGER NOT NULL,
+                    profile_id INTEGER NOT NULL,
+                    relevance_score REAL NOT NULL,
+                    relevance_reason TEXT NOT NULL,
+                    matched_topics_json TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    why_it_matters TEXT NOT NULL,
+                    reading_priority TEXT NOT NULL,
+                    analyzed_at TEXT NOT NULL,
+                    UNIQUE(article_id, profile_id),
+                    FOREIGN KEY(article_id) REFERENCES articles(id) ON DELETE CASCADE,
+                    FOREIGN KEY(profile_id) REFERENCES interest_profiles(id) ON DELETE CASCADE
+                );
+                INSERT INTO interest_profiles (
+                    id, name, description, relevance_threshold, enabled, created_at, updated_at
+                )
+                VALUES (
+                    1, 'Gravity', 'Higher-dimensional gravity.', 0.6, 1,
+                    '2026-08-14T00:00:00Z', '2026-08-14T00:00:00Z'
+                );
+                INSERT INTO articles (
+                    id, source, source_article_id, title, authors_json, abstract,
+                    categories_json, published_at, updated_at, abstract_url, pdf_url, created_at
+                )
+                VALUES (
+                    1, 'arxiv', '2608.00001', 'Warped compactifications',
+                    '["Ada Lovelace"]', 'A paper about higher-dimensional gravity.',
+                    '["hep-th"]', '2026-08-14T10:00:00Z', '2026-08-14T11:00:00Z',
+                    'http://arxiv.org/abs/2608.00001', NULL, '2026-08-14T12:00:00Z'
+                );
+                INSERT INTO relevance_analyses (
+                    id, article_id, profile_id, relevance_score, relevance_reason,
+                    matched_topics_json, summary, why_it_matters, reading_priority, analyzed_at
+                )
+                VALUES (
+                    1, 1, 1, 0.8, 'Direct match.', '["gravity"]', 'Summary.',
+                    'It matches the profile.', 'HIGH', '2026-08-14T12:05:00Z'
+                );
+                """
+            )
+
+        migrated_db = Database(legacy_path)
+        profile = migrated_db.get_interest_profile(1)
+        self.assertIsNotNone(profile)
+        assert profile is not None
+
+        loaded = migrated_db.get_analysis(
+            article_id=1,
+            profile_id=1,
+            profile_fingerprint=profile_semantic_fingerprint(profile),
+        )
+        self.assertIsNone(loaded)
+        with sqlite3.connect(legacy_path) as conn:
+            count = conn.execute("SELECT COUNT(*) FROM relevance_analyses").fetchone()
+        self.assertIsNotNone(count)
+        assert count is not None
+        self.assertEqual(count[0], 1)
+
+        current_analysis = AnalysisResult(
+            relevance_score=0.9,
+            relevance_reason="Fresh current-profile match.",
+            matched_topics=["gravity"],
+            summary="Fresh summary.",
+            why_it_matters="It matches the current profile.",
+            reading_priority="HIGH",
+        )
+        migrated_db.upsert_analysis(
+            article_id=1,
+            profile_id=1,
+            profile_fingerprint=profile_semantic_fingerprint(profile),
+            analysis=current_analysis,
+        )
+        self.assertEqual(
+            migrated_db.get_analysis(
+                article_id=1,
+                profile_id=1,
+                profile_fingerprint=profile_semantic_fingerprint(profile),
+            ),
+            current_analysis,
+        )
 
 
 if __name__ == "__main__":

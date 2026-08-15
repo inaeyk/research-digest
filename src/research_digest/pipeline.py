@@ -16,6 +16,7 @@ from research_digest.models import (
     DigestResult,
     InterestProfile,
     is_above_threshold,
+    profile_semantic_fingerprint,
     sorted_digest_items,
     utc_now,
 )
@@ -41,6 +42,7 @@ def run_digest(
     if source_config is None:
         raise DigestPipelineError("arXiv source configuration is missing")
 
+    profile_fingerprint = profile_semantic_fingerprint(profile)
     run_id = db.create_app_run(profile_id=profile.id, source_name=SOURCE_ARXIV)
     started_at = utc_now()
     retrieved_count = 0
@@ -66,7 +68,11 @@ def run_digest(
             if article.id is None or profile.id is None:
                 raise DigestPipelineError("saved articles and profiles must have ids")
             key = article_analysis_key(article)
-            analysis = db.get_analysis(article.id, profile.id)
+            analysis = db.get_analysis(
+                article_id=article.id,
+                profile_id=profile.id,
+                profile_fingerprint=profile_fingerprint,
+            )
             if analysis is None:
                 missing_articles.append(article)
             else:
@@ -81,7 +87,12 @@ def run_digest(
                     raise DigestPipelineError("saved articles and profiles must have ids")
                 key = article_analysis_key(article)
                 analysis = new_analyses[key]
-                db.upsert_analysis(article_id=article.id, profile_id=profile.id, analysis=analysis)
+                db.upsert_analysis(
+                    article_id=article.id,
+                    profile_id=profile.id,
+                    profile_fingerprint=profile_fingerprint,
+                    analysis=analysis,
+                )
                 analyses_by_key[key] = analysis
                 origins_by_key[key] = AnalysisOrigin.NEW_THIS_RUN
 
