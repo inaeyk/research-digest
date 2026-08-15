@@ -1,11 +1,11 @@
 # Release 1 Campaign State
 
-- current_substage: M7-D specification freeze
+- current_substage: M7-E specification freeze
 - status: ACTIVE
-- current_git_head: 246b1fee3a983e5da88e54c8f67850d0a6d3fa4f
-- current_tags_at_head: m7c-qualified
+- current_git_head: 2c1f9feb5ca95accf28527b0956727bb275642d0
+- current_tags_at_head: m7d-qualified
 - current_branch: master
-- local_remote_tracking: `master` tracks `origin/master`; local branch is 7 commits ahead after M7-C freeze
+- local_remote_tracking: `master` tracks `origin/master`; local branch is 8 commits ahead after M7-D freeze
 - online_remote_verification: attempted `git ls-remote --heads --tags origin`; blocked by DNS resolution failure for `github.com` even after network escalation
 - baseline_m1_qualified_commit: 36bd1cbe60f95d588e8ccdd41bfce914e9b1d7da
 - baseline_m1_qualified_tag: m1-qualified
@@ -38,15 +38,18 @@
 - m7c_qualified_commit: 246b1fee3a983e5da88e54c8f67850d0a6d3fa4f
 - m7c_qualified_tag: m7c-qualified
 - m7c_qualified_tag_object: 1c8f5c66d3b0b217057f39af53a3e210288db0fd
+- m7d_qualified_commit: 2c1f9feb5ca95accf28527b0956727bb275642d0
+- m7d_qualified_tag: m7d-qualified
+- m7d_qualified_tag_object: e02247e1796fab983d220916f6db73a8c7056ffd
 - skipped_campaigns: M3 additional source types; M5 full-paper reading; M6 long-term research memory
 - active_campaign_scope: M4 automatic daily operation; M7 release engineering, upgradeability, and productization; first release candidate
-- qualification_status: M7D_REAUDIT_PASS_READY_FREEZE
+- qualification_status: M7E_AUDIT_PASS_READY_FREEZE
 - audit_repair_round: 1
-- last_deterministic_verification: M7-D repair round 1 full gate: `pytest` 116 passed; `ruff check .` PASS; strict `mypy --strict src tests` PASS; `compileall -q src tests` PASS; `git diff --check` PASS.
-- last_live_verification: M7-D isolated config smoke passed: default versioned config initialized, env override applied without file mutation, old config upgraded with backup, future version rejected, and persisted secret-key config rejected.
+- last_deterministic_verification: M7-E candidate full gate: `pytest` 120 passed; `ruff check .` PASS; strict `mypy --strict src tests` PASS; `compileall -q src tests` PASS; `git diff --check` PASS.
+- last_live_verification: M7-E isolated CLI smoke passed: `python -m research_digest.cli --version`; `status --json` with temp data/config paths; mocked `serve --port 18501` selected `http://localhost:18502` when first port was unavailable.
 - migration_data_safety_status: M7-B candidate adds explicit schema version metadata, ordered migrations, backup before schema-changing upgrades of existing DBs, rollback on failed migration, and visible migration backup path. Repo-local `research_digest.sqlite3` remains ignored and was not used for upgrade testing.
 - deferred_minor_optional_findings: none
-- next_permitted_action: inspect Git hygiene, stage only qualified M7-D files, commit, and tag `m7d-qualified`
+- next_permitted_action: inspect Git hygiene, stage only qualified M7-E files, commit, and tag `m7e-qualified`
 - human_stop_reason: none
 
 ## M4-A Frozen Specification
@@ -571,3 +574,74 @@ Audit:
 - initial fresh independent M7-D Auditor: FAIL with one IMPORTANT finding. `OPENAI_MODEL` and `RESEARCH_DIGEST_CODEX_MODEL` env overrides bypassed non-empty semantic validation.
 - repair round 1: environment model overrides now use shared non-empty trimmed validation; added regression tests for empty `OPENAI_MODEL` and blank `RESEARCH_DIGEST_CODEX_MODEL`.
 - fresh re-Auditor after repair round 1: PASS with no BLOCKER/IMPORTANT/MINOR findings. Re-auditor verified env model override validation, version load/init/upgrade/future-version rejection, backup path visibility, secret-key rejection, regression coverage, and full deterministic gates.
+- freeze: committed `2c1f9feb5ca95accf28527b0956727bb275642d0` (`Qualify M7-D versioned configuration`) and created local annotated tag `m7d-qualified` with tag object `e02247e1796fab983d220916f6db73a8c7056ffd`.
+
+## M7-E Frozen Specification
+
+Goal: provide a stable user-facing installed command surface for release operation.
+
+Command surface:
+
+- `research-digest --version`
+- `research-digest serve`
+- `research-digest run`
+- `research-digest status`
+- `research-digest schedule ...`
+- `research-digest doctor`
+- `research-digest backup`
+
+Requirements:
+
+- `serve` launches the Streamlit UI through the supported app entry point, not a development-only incantation.
+- `serve` resolves ordinary port conflicts by selecting an available local port and printing the actual usable URL.
+- `serve` must not duplicate business logic from the UI or service layer.
+- `run` remains the M4 headless execution path.
+- `status` reports current data path, provider, schema version, config version, last run, and schedule status if available.
+- `status` must not expose secrets.
+- `doctor` and `backup` command slots may be stable placeholders in M7-E; M7-F and M7-G will implement their release behavior.
+- Schedule subcommands remain available from M4-B.
+
+Tests required before M7-E freeze:
+
+- `--version` reports package version.
+- `serve` builds the correct Streamlit invocation and selected URL using mocked subprocess/port probes.
+- `serve` skips an occupied port and uses the next available port.
+- `run` behavior remains covered by existing CLI tests.
+- `status` reports data path, provider, schema/config versions, last run summary, and schedule status without secrets.
+- `doctor`/`backup` slots exist and return clear bounded messages until M7-F/M7-G.
+- full deterministic suite remains green.
+
+Live verification required before M7-E freeze:
+
+- isolated CLI smoke for `--version`, `status --json`, and mocked `serve` URL selection.
+
+Freeze criteria:
+
+- fresh independent read-only M7-E audit PASS
+- `pytest`, `ruff check .`, `mypy --strict src tests`, `compileall -q src tests`, and `git diff --check` PASS
+- staged inventory excludes `research_digest.sqlite3`, `.venv`, `.env`/secrets, caches, and local agent/runtime state
+- commit and annotated local tag `m7e-qualified`
+
+Candidate implementation:
+
+- Added `research-digest --version`.
+- Added `research-digest serve`, launching `python -m streamlit run <installed ui/app.py> --server.headless=true` through the supported Streamlit entry point.
+- Added serve port probing with fallback to the next available local port and printed usable URL.
+- Added `research-digest status` with text/JSON output for data path, config path, analyzer provider, schema version, config version, last run, and scheduler status.
+- Preserved `research-digest run` and `research-digest schedule ...`.
+- Added stable `research-digest doctor` and `research-digest backup` command slots with bounded deferred messages for M7-F/M7-G.
+- Added CLI tests for version, serve invocation/port fallback, status JSON, and deferred command slots.
+
+Verification:
+
+- focused CLI tests: `pytest tests/test_cli.py tests/test_cli_schedule.py` passed, 11 tests.
+- full test suite: `pytest` passed, 120 tests.
+- `ruff check .`: PASS.
+- strict `mypy --strict src tests`: PASS.
+- `python -m compileall -q src tests`: PASS.
+- `git diff --check`: PASS.
+- isolated CLI smoke: PASS for `--version`, temp-path `status --json`, and mocked `serve` URL selection.
+
+Audit:
+
+- fresh independent read-only M7-E Auditor: PASS with no BLOCKER/IMPORTANT/MINOR findings. Auditor verified version output, Streamlit serve entry point and port fallback, preserved run path, status output, schedule preservation, deferred doctor/backup slots, CLI test coverage, and deterministic gates.

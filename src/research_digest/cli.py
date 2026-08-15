@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import socket
+import subprocess
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import TextIO
+from typing import Any, TextIO, cast
 
+from research_digest import __version__
 from research_digest.analysis.base import LLMAnalyzer
 from research_digest.analysis.providers import build_configured_analyzer
 from research_digest.config import AppConfig, load_config
@@ -29,6 +32,11 @@ from research_digest.service import (
 from research_digest.sources.base import SourceAdapter
 from research_digest.sources.registry import ARXIV_SOURCE_DEFINITION, SourceRunRequest
 
+DEFAULT_SERVE_PORT = 8501
+SERVE_PORT_SCAN_LIMIT = 50
+STREAMLIT_APP_PATH = Path(__file__).resolve().parent / "ui" / "app.py"
+ProcessLauncher = Callable[[Sequence[str]], object]
+
 
 def main(argv: Sequence[str] | None = None) -> int:
     return run_cli(argv=argv, stdout=sys.stdout, stderr=sys.stderr)
@@ -45,12 +53,16 @@ def run_cli(
     analyzer: LLMAnalyzer | None = None,
     analyzer_message: str | None = None,
     scheduler_backend: SchedulerBackend | None = None,
+    process_launcher: ProcessLauncher | None = None,
 ) -> int:
     try:
         args = _build_parser().parse_args(argv)
     except SystemExit as exc:
         return int(exc.code) if isinstance(exc.code, int) else 2
 
+    if args.version:
+        stdout.write(f"research-digest {__version__}\n")
+        return 0
     if args.command == "run":
         return _run_digest_command(
             json_output=args.json,
@@ -70,6 +82,36 @@ def run_cli(
             config=config,
             scheduler_backend=scheduler_backend,
         )
+    if args.command == "serve":
+        return _serve_command(
+            args=args,
+            stdout=stdout,
+            stderr=stderr,
+            process_launcher=process_launcher,
+        )
+    if args.command == "status":
+        return _status_command(
+            args=args,
+            stdout=stdout,
+            stderr=stderr,
+            config=config,
+            db=db,
+            scheduler_backend=scheduler_backend,
+        )
+    if args.command == "doctor":
+        return _deferred_command(
+            stdout=stdout,
+            json_output=args.json,
+            command="doctor",
+            milestone="M7-F",
+        )
+    if args.command == "backup":
+        return _deferred_command(
+            stdout=stdout,
+            json_output=args.json,
+            command="backup",
+            milestone="M7-G",
+        )
 
     _build_parser().print_help(stderr)
     return 2
@@ -79,6 +121,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="research-digest",
         description="Run Research Digest without opening Streamlit.",
+    )
+    parser.add_argument(
+        "--version",
+        action="store_true",
+        help="Print the installed Research Digest version.",
     )
     subparsers = parser.add_subparsers(dest="command")
     run_parser = subparsers.add_parser("run", help="Run the digest workflow headlessly.")
@@ -106,6 +153,34 @@ def _build_parser() -> argparse.ArgumentParser:
         "--distro",
         help="WSL distro name. Defaults to WSL_DISTRO_NAME.",
     )
+    serve_parser = subparsers.add_parser("serve", help="Launch the Streamlit UI.")
+    serve_parser.add_argument(
+        "--port",
+        type=int,
+        default=DEFAULT_SERVE_PORT,
+        help=f"Preferred local port. Defaults to {DEFAULT_SERVE_PORT}.",
+    )
+    serve_parser.add_argument(
+        "--host",
+        default="localhost",
+        help="Host name to print in the usable URL. Defaults to localhost.",
+    )
+    status_parser = subparsers.add_parser("status", help="Show local application status.")
+    status_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print a machine-readable JSON result.",
+    )
+    for name, milestone in (("doctor", "M7-F"), ("backup", "M7-G")):
+        deferred_parser = subparsers.add_parser(
+            name,
+            help=f"Reserved command; release behavior is implemented in {milestone}.",
+        )
+        deferred_parser.add_argument(
+            "--json",
+            action="store_true",
+            help="Print a machine-readable JSON result.",
+        )
     return parser
 
 
@@ -205,6 +280,188 @@ def _write_failure(
         stdout.write("\n")
     else:
         stderr.write(f"Research Digest run failed: {message}\n")
+
+
+def _serve_command(
+    *,
+    args: argparse.Namespace,
+    stdout: TextIO,
+    stderr: TextIO,
+    process_launcher: ProcessLauncher | None,
+) -> int:
+    try:
+        port = _select_available_port(int(args.port))
+        command = [
+            sys.executable,
+            "-m",
+            "streamlit",
+            "run",
+            str(STREAMLIT_APP_PATH),
+            f"--server.port={port}",
+            "--server.headless=true",
+        ]
+        launcher = process_launcher or _launch_process
+        launcher(command)
+        url = f"http://{args.host}:{port}"
+        stdout.write(f"Research Digest UI: {url}\n")
+        stdout.write("Command: " + subprocess.list2cmdline(command) + "\n")
+        return 0
+    except Exception as exc:
+        stderr.write(f"Research Digest serve failed: {sanitize_error(exc)}\n")
+        return 1
+
+
+def _status_command(
+    *,
+    args: argparse.Namespace,
+    stdout: TextIO,
+    stderr: TextIO,
+    config: AppConfig | None,
+    db: Database | None,
+    scheduler_backend: SchedulerBackend | None,
+) -> int:
+    try:
+        active_config = config or load_config()
+        active_db = db or Database(active_config.db_path)
+        payload = _status_payload(active_config, active_db, scheduler_backend=scheduler_backend)
+    except Exception as exc:
+        message = sanitize_error(exc)
+        if args.json:
+            json.dump({"status": "failed", "error_message": message}, stdout)
+            stdout.write("\n")
+        else:
+            stderr.write(f"Research Digest status failed: {message}\n")
+        return 1
+
+    if args.json:
+        json.dump({"status": "completed", **payload}, stdout)
+        stdout.write("\n")
+    else:
+        _write_status_human(stdout, payload)
+    return 0
+
+
+def _status_payload(
+    config: AppConfig,
+    db: Database,
+    *,
+    scheduler_backend: SchedulerBackend | None,
+) -> dict[str, object]:
+    app_runs = db.get_app_runs()
+    last_run = _last_run_to_mapping(app_runs[0]) if app_runs else None
+    schedule = _schedule_status_payload(scheduler_backend)
+    return {
+        "data_path": str(config.db_path),
+        "config_path": str(config.config_path) if config.config_path else None,
+        "analyzer_provider": config.analyzer_provider,
+        "schema_version": db.get_schema_version(),
+        "config_version": config.config_version,
+        "last_run": last_run,
+        "schedule": schedule,
+    }
+
+
+def _last_run_to_mapping(row: object) -> dict[str, object]:
+    values = cast(Mapping[str, Any], row)
+    return {
+        "id": values["id"],
+        "profile_id": values["profile_id"],
+        "source_name": values["source_name"],
+        "started_at": values["started_at"],
+        "completed_at": values["completed_at"],
+        "status": values["status"],
+        "retrieved_count": values["retrieved_count"],
+        "stored_count": values["stored_count"],
+        "preselected_count": values["preselected_count"],
+        "skipped_analysis_count": values["skipped_analysis_count"],
+        "analyzed_count": values["analyzed_count"],
+        "relevant_count": values["relevant_count"],
+        "error_message": sanitize_error(str(values["error_message"]))
+        if values["error_message"] is not None
+        else None,
+    }
+
+
+def _schedule_status_payload(scheduler_backend: SchedulerBackend | None) -> dict[str, object]:
+    try:
+        backend = scheduler_backend or select_scheduler_backend()
+        return backend.status(task_name=DEFAULT_TASK_NAME).to_mapping()
+    except Exception as exc:
+        return {
+            "backend": None,
+            "task_name": DEFAULT_TASK_NAME,
+            "installed": False,
+            "message": sanitize_error(exc),
+        }
+
+
+def _write_status_human(stdout: TextIO, payload: Mapping[str, object]) -> None:
+    stdout.write("Research Digest status\n")
+    stdout.write(f"Data: {payload['data_path']}\n")
+    stdout.write(f"Config: {payload['config_path']}\n")
+    stdout.write(f"Analyzer: {payload['analyzer_provider']}\n")
+    stdout.write(f"Schema version: {payload['schema_version']}\n")
+    stdout.write(f"Config version: {payload['config_version']}\n")
+    last_run = payload.get("last_run")
+    if isinstance(last_run, Mapping):
+        stdout.write(
+            "Last run: "
+            f"#{last_run['id']} {last_run['status']} "
+            f"retrieved {last_run['retrieved_count']}, "
+            f"analyzed {last_run['analyzed_count']}, "
+            f"relevant {last_run['relevant_count']}\n"
+        )
+    else:
+        stdout.write("Last run: none\n")
+    schedule = payload.get("schedule")
+    if isinstance(schedule, Mapping):
+        stdout.write(
+            "Schedule: "
+            f"installed={schedule.get('installed')} "
+            f"backend={schedule.get('backend')} "
+            f"message={schedule.get('message')}\n"
+        )
+
+
+def _deferred_command(
+    *,
+    stdout: TextIO,
+    json_output: bool,
+    command: str,
+    milestone: str,
+) -> int:
+    message = (
+        f"`research-digest {command}` is reserved; "
+        f"release behavior is implemented in {milestone}."
+    )
+    if json_output:
+        json.dump({"status": "deferred", "command": command, "message": message}, stdout)
+        stdout.write("\n")
+    else:
+        stdout.write(message + "\n")
+    return 1
+
+
+def _select_available_port(preferred_port: int) -> int:
+    if preferred_port <= 0:
+        raise ValueError("port must be positive")
+    for port in range(preferred_port, preferred_port + SERVE_PORT_SCAN_LIMIT):
+        if _is_port_available(port):
+            return port
+    raise RuntimeError(
+        f"no available local port from {preferred_port} to "
+        f"{preferred_port + SERVE_PORT_SCAN_LIMIT - 1}"
+    )
+
+
+def _is_port_available(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        return sock.connect_ex(("127.0.0.1", port)) != 0
+
+
+def _launch_process(command: Sequence[str]) -> object:
+    return subprocess.Popen(command)
 
 
 def _schedule_command(

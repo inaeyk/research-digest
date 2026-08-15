@@ -392,6 +392,47 @@ Audit:
 - repair round 1 validates `OPENAI_MODEL` and `RESEARCH_DIGEST_CODEX_MODEL` env overrides with non-empty trimmed semantics.
 - fresh re-Auditor after repair round 1: PASS with no BLOCKER/IMPORTANT/MINOR findings.
 
+M7-D freeze:
+
+- qualified commit: `2c1f9feb5ca95accf28527b0956727bb275642d0`.
+- qualified tag: `m7d-qualified`.
+- qualified tag object: `e02247e1796fab983d220916f6db73a8c7056ffd`.
+- post-freeze Git state: local `master` is 8 commits ahead of `origin/master`; online remote inspection remains blocked by DNS/network limits in this session.
+
+## M7-E Specification Freeze
+
+M7-E is frozen as the stable installed CLI surface for release operation.
+
+The implementation must add `serve`, `status`, and `--version`, preserve `run` and schedule behavior, expose stable `doctor`/`backup` command slots for M7-F/M7-G, avoid business-logic duplication, and keep output free of secrets.
+
+## M7-E Candidate
+
+Implementation summary:
+
+- Added `research-digest --version`.
+- Added `research-digest serve` using `python -m streamlit run` against the installed UI entry point, with local port fallback and printed URL.
+- Added `research-digest status` with text/JSON output for data path, config path, provider, schema/config versions, last run, and scheduler status.
+- Preserved `run` and `schedule` behavior.
+- Added stable deferred `doctor` and `backup` command slots for M7-F/M7-G.
+
+Deterministic verification:
+
+- `pytest`: 120 passed.
+- `ruff check .`: PASS.
+- strict `mypy --strict src tests`: PASS.
+- `compileall -q src tests`: PASS.
+- `git diff --check`: PASS.
+
+Live/CLI verification:
+
+- `python -m research_digest.cli --version`: PASS.
+- isolated temp-path `status --json`: PASS.
+- mocked `serve --port 18501` fallback selected `http://localhost:18502`: PASS.
+
+Audit:
+
+- fresh independent read-only M7-E Auditor: PASS with no BLOCKER/IMPORTANT/MINOR findings.
+
 Data-safety note:
 
 - During re-audit, the auditor reported one accidental manual CLI smoke without `RESEARCH_DIGEST_DB`; it likely wrote one runtime run record to ignored repo-local `research_digest.sqlite3`.

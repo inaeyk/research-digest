@@ -4,14 +4,17 @@ import io
 import json
 import tempfile
 import unittest
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
+from unittest import mock
 
 from research_digest.analysis.fake import FakeAnalyzer
 from research_digest.cli import run_cli
 from research_digest.config import AppConfig
-from research_digest.db import Database
+from research_digest.db import APP_RUN_COMPLETED, Database
 from research_digest.models import Article, ArxivSourceConfig
+from research_digest.scheduler import ScheduleOperationResult, ScheduleStatus
 
 
 class StaticSource:
@@ -22,6 +25,24 @@ class StaticSource:
         if not config.enabled:
             return []
         return list(self.articles[: config.max_results])
+
+
+class StaticSchedulerBackend:
+    def install(self, request: object) -> ScheduleOperationResult:
+        raise AssertionError("not used")
+
+    def remove(self, *, task_name: str) -> ScheduleOperationResult:
+        raise AssertionError("not used")
+
+    def status(self, *, task_name: str) -> ScheduleStatus:
+        return ScheduleStatus(
+            backend="test",
+            task_name=task_name,
+            installed=True,
+            timezone="test local time",
+            state="Ready",
+            last_task_result=0,
+        )
 
 
 def article() -> Article:
@@ -139,6 +160,95 @@ class CLITests(unittest.TestCase):
         self.assertEqual(exit_code, 1)
         self.assertIn("interest profile", stderr.getvalue())
 
+    def test_version_outputs_package_version(self) -> None:
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        exit_code = run_cli(argv=["--version"], stdout=stdout, stderr=stderr)
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stderr.getvalue(), "")
+        self.assertRegex(stdout.getvalue(), r"research-digest \d+\.\d+\.\d+")
+
+    def test_serve_launches_streamlit_and_prints_selected_url(self) -> None:
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        launched: list[Sequence[str]] = []
+        preferred_port = 18501
+
+        with mock.patch("research_digest.cli._is_port_available", side_effect=[False, True]):
+            exit_code = run_cli(
+                argv=["serve", "--port", str(preferred_port)],
+                stdout=stdout,
+                stderr=stderr,
+                process_launcher=lambda command: launched.append(tuple(command)),
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stderr.getvalue(), "")
+        self.assertEqual(len(launched), 1)
+        command = list(launched[0])
+        self.assertIn("-m", command)
+        self.assertIn("streamlit", command)
+        self.assertIn("run", command)
+        self.assertIn(f"--server.port={preferred_port + 1}", command)
+        self.assertIn(f"http://localhost:{preferred_port + 1}", stdout.getvalue())
+
+    def test_status_json_reports_versions_last_run_and_schedule(self) -> None:
+        run_id = self.db.create_app_run(profile_id=None, source_name="arxiv")
+        self.db.finish_app_run(
+            run_id,
+            status=APP_RUN_COMPLETED,
+            retrieved_count=3,
+            stored_count=2,
+            preselected_count=2,
+            skipped_analysis_count=1,
+            analyzed_count=2,
+            relevant_count=1,
+        )
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        exit_code = run_cli(
+            argv=["status", "--json"],
+            stdout=stdout,
+            stderr=stderr,
+            config=self.config,
+            db=self.db,
+            scheduler_backend=StaticSchedulerBackend(),
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stderr.getvalue(), "")
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(payload["status"], "completed")
+        self.assertEqual(payload["data_path"], str(self.db_path))
+        self.assertEqual(payload["analyzer_provider"], "codex")
+        self.assertEqual(payload["schema_version"], self.db.get_schema_version())
+        self.assertEqual(payload["config_version"], self.config.config_version)
+        self.assertEqual(payload["last_run"]["status"], APP_RUN_COMPLETED)
+        self.assertEqual(payload["last_run"]["relevant_count"], 1)
+        self.assertTrue(payload["schedule"]["installed"])
+        output = stdout.getvalue()
+        self.assertNotIn("OPENAI_API_KEY", output)
+        self.assertNotIn("sk-", output)
+
+    def test_doctor_and_backup_slots_are_stable_but_deferred(self) -> None:
+        for command in ("doctor", "backup"):
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+
+            exit_code = run_cli(
+                argv=[command, "--json"],
+                stdout=stdout,
+                stderr=stderr,
+            )
+
+            self.assertEqual(exit_code, 1)
+            self.assertEqual(stderr.getvalue(), "")
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(payload["status"], "deferred")
+            self.assertEqual(payload["command"], command)
 
 if __name__ == "__main__":
     unittest.main()
