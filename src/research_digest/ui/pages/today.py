@@ -176,9 +176,10 @@ def _render_empty_metrics() -> None:
     col1.metric("Retrieved", "-")
     col2.metric("Analyzed", "-")
     col3.metric("Above threshold", "-")
-    col4, col5 = st.columns(2)
+    col4, col5, col6 = st.columns(3)
     col4.metric("New analyses", "-")
     col5.metric("Reused analyses", "-")
+    col6.metric("Skipped new analysis", "-")
 
 
 def _render_metrics(result: DigestResult) -> None:
@@ -188,9 +189,10 @@ def _render_metrics(result: DigestResult) -> None:
     col1.metric("Retrieved", result.retrieved_count)
     col2.metric("Analyzed", result.analyzed_count)
     col3.metric("Above threshold", result.above_threshold_count)
-    col4, col5 = st.columns(2)
+    col4, col5, col6 = st.columns(3)
     col4.metric("New analyses", result.new_analysis_count)
     col5.metric("Reused analyses", result.reused_analysis_count)
+    col6.metric("Skipped new analysis", result.skipped_analysis_count)
 
 
 def _render_items(result: DigestResult) -> None:

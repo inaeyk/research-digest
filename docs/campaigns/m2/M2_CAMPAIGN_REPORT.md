@@ -31,3 +31,25 @@
 - current HEAD/tag: HEAD remains 839a3ef0f0cc31a8371c24680de254cbd5f84377 and local `m2a-qualified` still points there.
 - uncommitted qualified files: `src/research_digest/models.py`, `src/research_digest/db.py`, `src/research_digest/pipeline.py`, `src/research_digest/ui/pages/today.py`, `tests/test_db.py`, `tests/test_pipeline.py`, and `docs/campaigns/m2/`.
 - recommended next action: rerun with writable `.git`, then stage these files, commit repaired M2-A, and move local `m2a-qualified` to the new commit before starting M2-B.
+
+### Freeze Completed
+
+- replacement custodian verified the working tree matched the qualified repair record before staging.
+- resumed deterministic verification: `pytest` 51 passed; `ruff check .` passed; `mypy --no-incremental src tests` passed; `compileall -q src tests` passed; `git diff --check` passed.
+- staged inventory: only the six recorded source/test files plus `docs/campaigns/m2/CAMPAIGN_STATE.md` and `docs/campaigns/m2/M2_CAMPAIGN_REPORT.md`.
+- excluded inventory: `research_digest.sqlite3`, `.venv`, `.env`, caches, and local agent/runtime state remained ignored and unstaged.
+- qualified commit: `81d4d5e011c46650c6094db628668e82a030547e`.
+- local annotated tag: `m2a-qualified` points to `81d4d5e011c46650c6094db628668e82a030547e`; tag object `e4f09071a4c7f04f5ad9d3238942b2ffbf42a5f0`.
+
+## M2-B Two-Stage Abstract Preselection
+
+- implementation: added deterministic `TermOverlapPreselector` behind an `AbstractPreselector` protocol.
+- behavior: cache hits are preserved before preselection; only cache-miss articles are preselected for full LLM analysis.
+- stages: title/category term overlap first, then abstract term overlap; profiles that produce no useful terms fail open by selecting all cache misses.
+- observability: `DigestResult`, app-run history, and Today metrics now report selected and skipped new-analysis counts.
+- migration: legacy `app_runs` tables gain `preselected_count` and `skipped_analysis_count` with `NOT NULL DEFAULT 0`.
+- tests added: skipped cache-miss behavior, reused-analysis preservation, preselector stage/fallback behavior, and legacy app-run count migration.
+- local deterministic verification: `pytest` passed 57 tests; `ruff check .` passed; `mypy --no-incremental src tests` passed; `compileall -q src tests` passed; `git diff --check` passed.
+- fresh independent auditor: `01a00453-cf34-7463-b64b-e8ed9766a0c2`.
+- auditor result: PASS with no blocking findings.
+- status: qualified; commit/tag freeze pending.

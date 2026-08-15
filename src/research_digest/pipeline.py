@@ -20,6 +20,7 @@ from research_digest.models import (
     sorted_digest_items,
     utc_now,
 )
+from research_digest.preselection import AbstractPreselector, TermOverlapPreselector
 from research_digest.sources.base import SourceAdapter
 
 
@@ -34,6 +35,7 @@ def run_digest(
     analyzer: LLMAnalyzer | None,
     profile_id: int | None = None,
     now: datetime | None = None,
+    preselector: AbstractPreselector | None = None,
 ) -> DigestResult:
     """Fetch, store, analyze, filter, rank, and return one digest run."""
 
@@ -47,6 +49,8 @@ def run_digest(
     started_at = utc_now()
     retrieved_count = 0
     stored_count = 0
+    preselected_count = 0
+    skipped_analysis_count = 0
     analyzed_count = 0
     new_analysis_count = 0
     reused_analysis_count = 0
@@ -79,10 +83,23 @@ def run_digest(
                 analyses_by_key[key] = analysis
                 origins_by_key[key] = AnalysisOrigin.REUSED
 
+        analysis_candidates = missing_articles
         if missing_articles and analyzer is not None:
-            new_analyses = analyzer.analyze_many(profile=profile, articles=missing_articles)
-            _validate_analyzer_results(missing_articles, new_analyses)
-            for article in missing_articles:
+            active_preselector = preselector or TermOverlapPreselector()
+            preselection = active_preselector.preselect(profile=profile, articles=missing_articles)
+            selected_ids = preselection.selected_ids
+            analysis_candidates = [
+                article
+                for article in missing_articles
+                if article_analysis_key(article) in selected_ids
+            ]
+            preselected_count = preselection.selected_count
+            skipped_analysis_count = preselection.skipped_count
+
+        if analysis_candidates and analyzer is not None:
+            new_analyses = analyzer.analyze_many(profile=profile, articles=analysis_candidates)
+            _validate_analyzer_results(analysis_candidates, new_analyses)
+            for article in analysis_candidates:
                 if article.id is None or profile.id is None:
                     raise DigestPipelineError("saved articles and profiles must have ids")
                 key = article_analysis_key(article)
@@ -127,6 +144,8 @@ def run_digest(
             status=status,
             retrieved_count=retrieved_count,
             stored_count=stored_count,
+            preselected_count=preselected_count,
+            skipped_analysis_count=skipped_analysis_count,
             analyzed_count=analyzed_count,
             relevant_count=above_threshold_count,
         )
@@ -136,6 +155,8 @@ def run_digest(
             source_config=source_config,
             retrieved_count=retrieved_count,
             stored_count=stored_count,
+            preselected_count=preselected_count,
+            skipped_analysis_count=skipped_analysis_count,
             analyzed_count=analyzed_count,
             new_analysis_count=new_analysis_count,
             reused_analysis_count=reused_analysis_count,
@@ -152,6 +173,8 @@ def run_digest(
             status="failed",
             retrieved_count=retrieved_count,
             stored_count=stored_count,
+            preselected_count=preselected_count,
+            skipped_analysis_count=skipped_analysis_count,
             analyzed_count=analyzed_count,
             relevant_count=above_threshold_count,
             error_message=error_message,

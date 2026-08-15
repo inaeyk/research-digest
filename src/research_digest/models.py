@@ -259,6 +259,8 @@ class DigestResult:
     source_config: ArxivSourceConfig
     retrieved_count: int
     stored_count: int
+    preselected_count: int
+    skipped_analysis_count: int
     analyzed_count: int
     new_analysis_count: int
     reused_analysis_count: int

@@ -266,6 +266,41 @@ class DatabaseTests(unittest.TestCase):
             current_analysis,
         )
 
+    def test_legacy_app_runs_gain_preselection_count_columns(self) -> None:
+        legacy_path = Path(self.tmpdir.name) / "legacy_runs.sqlite3"
+        with sqlite3.connect(legacy_path) as conn:
+            conn.executescript(
+                """
+                CREATE TABLE app_runs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    profile_id INTEGER,
+                    source_name TEXT NOT NULL,
+                    started_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    status TEXT NOT NULL,
+                    retrieved_count INTEGER NOT NULL DEFAULT 0,
+                    stored_count INTEGER NOT NULL DEFAULT 0,
+                    analyzed_count INTEGER NOT NULL DEFAULT 0,
+                    relevant_count INTEGER NOT NULL DEFAULT 0,
+                    error_message TEXT
+                );
+                INSERT INTO app_runs (
+                    id, profile_id, source_name, started_at, completed_at, status,
+                    retrieved_count, stored_count, analyzed_count, relevant_count, error_message
+                )
+                VALUES (
+                    1, NULL, 'arxiv', '2026-08-14T12:00:00Z',
+                    '2026-08-14T12:01:00Z', 'success', 4, 4, 3, 2, NULL
+                );
+                """
+            )
+
+        migrated_db = Database(legacy_path)
+        runs = migrated_db.get_app_runs()
+
+        self.assertEqual(runs[0]["preselected_count"], 0)
+        self.assertEqual(runs[0]["skipped_analysis_count"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

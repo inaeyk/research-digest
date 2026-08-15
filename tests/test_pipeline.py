@@ -18,8 +18,10 @@ from research_digest.models import (
     ModelValidationError,
     above_threshold_digest_items,
     below_threshold_digest_items,
+    profile_semantic_fingerprint,
 )
 from research_digest.pipeline import run_digest
+from research_digest.preselection import TermOverlapPreselector
 
 
 class StaticSource:
@@ -163,6 +165,8 @@ class PipelineTests(unittest.TestCase):
 
         self.assertEqual(result.retrieved_count, 3)
         self.assertEqual(result.stored_count, 3)
+        self.assertEqual(result.preselected_count, 3)
+        self.assertEqual(result.skipped_analysis_count, 0)
         self.assertEqual(result.analyzed_count, 3)
         self.assertEqual(result.new_analysis_count, 3)
         self.assertEqual(result.reused_analysis_count, 0)
@@ -199,6 +203,8 @@ class PipelineTests(unittest.TestCase):
             now=datetime(2026, 8, 14, 12, 0, tzinfo=UTC),
         )
         self.assertEqual(second.stored_count, 0)
+        self.assertEqual(second.preselected_count, 0)
+        self.assertEqual(second.skipped_analysis_count, 0)
         self.assertEqual(second.analyzed_count, 3)
         self.assertEqual(second.new_analysis_count, 0)
         self.assertEqual(second.reused_analysis_count, 3)
@@ -233,6 +239,8 @@ class PipelineTests(unittest.TestCase):
         )
 
         self.assertEqual(result.retrieved_count, 3)
+        self.assertEqual(result.preselected_count, 2)
+        self.assertEqual(result.skipped_analysis_count, 0)
         self.assertEqual(result.analyzed_count, 3)
         self.assertEqual(result.new_analysis_count, 2)
         self.assertEqual(result.reused_analysis_count, 1)
@@ -257,6 +265,8 @@ class PipelineTests(unittest.TestCase):
 
         self.assertFalse(result.analysis_available)
         self.assertEqual(result.retrieved_count, 1)
+        self.assertEqual(result.preselected_count, 0)
+        self.assertEqual(result.skipped_analysis_count, 0)
         self.assertEqual(result.analyzed_count, 0)
         self.assertEqual(result.new_analysis_count, 0)
         self.assertEqual(result.reused_analysis_count, 0)
@@ -283,6 +293,8 @@ class PipelineTests(unittest.TestCase):
 
         self.assertFalse(result.analysis_available)
         self.assertEqual(result.analyzed_count, 1)
+        self.assertEqual(result.preselected_count, 0)
+        self.assertEqual(result.skipped_analysis_count, 0)
         self.assertEqual(result.new_analysis_count, 0)
         self.assertEqual(result.reused_analysis_count, 1)
         self.assertEqual(result.new_analysis_count + result.reused_analysis_count, 1)
@@ -358,6 +370,7 @@ class PipelineTests(unittest.TestCase):
                         profile_id=profile.id,
                     )
                     self.assertEqual(first.new_analysis_count, 1)
+                    self.assertEqual(first.skipped_analysis_count, 0)
                     self.assertEqual(first.reused_analysis_count, 0)
 
                     changed = db.update_interest_profile(
@@ -377,6 +390,7 @@ class PipelineTests(unittest.TestCase):
                     )
 
                     self.assertEqual(second.new_analysis_count, 1)
+                    self.assertEqual(second.skipped_analysis_count, 0)
                     self.assertEqual(second.reused_analysis_count, 0)
                     self.assertEqual(second.items[0].analysis_origin, AnalysisOrigin.NEW_THIS_RUN)
                     self.assertEqual(len(analyzer.calls), 2)
@@ -413,6 +427,106 @@ class PipelineTests(unittest.TestCase):
             ["2608.00004"],
         )
         self.assertEqual(below_threshold_digest_items(result), [])
+
+    def test_preselection_skips_cache_misses_without_profile_term_overlap(self) -> None:
+        analyzer = FakeAnalyzer(self.analysis_payloads)
+        relevant = article("2608.00001", "Warped spin-2 compactifications", 10)
+        irrelevant = Article(
+            id=None,
+            source="arxiv",
+            source_article_id="2608.00999",
+            title="Detector calibration constants",
+            authors=["Grace Hopper"],
+            abstract="A procedure for measuring pixel gains in an accelerator detector.",
+            categories=["physics.ins-det"],
+            published_at=datetime(2026, 8, 14, 7, 0, tzinfo=UTC),
+            updated_at=datetime(2026, 8, 14, 7, 10, tzinfo=UTC),
+            abstract_url="http://arxiv.org/abs/2608.00999",
+            pdf_url=None,
+        )
+
+        result = run_digest(
+            db=self.db,
+            source=StaticSource([relevant, irrelevant]),
+            analyzer=analyzer,
+            profile_id=self.profile.id,
+            preselector=TermOverlapPreselector(),
+        )
+
+        self.assertEqual(result.retrieved_count, 2)
+        self.assertEqual(result.preselected_count, 1)
+        self.assertEqual(result.skipped_analysis_count, 1)
+        self.assertEqual(result.analyzed_count, 1)
+        self.assertEqual(result.new_analysis_count, 1)
+        self.assertEqual(analyzer.calls, ["2608.00001"])
+        self.assertEqual(
+            [item.article.source_article_id for item in result.items],
+            ["2608.00001"],
+        )
+
+    def test_preselection_preserves_reused_analysis_for_later_obvious_non_candidate(
+        self,
+    ) -> None:
+        analyzer = FakeAnalyzer(
+            {
+                "2608.00998": {
+                    "relevance_score": 0.1,
+                    "relevance_reason": "Previously analyzed.",
+                    "matched_topics": [],
+                    "summary": "Old summary.",
+                    "why_it_matters": "It was analyzed before preselection.",
+                    "reading_priority": "LOW",
+                }
+            }
+        )
+        old_article = Article(
+            id=None,
+            source="arxiv",
+            source_article_id="2608.00998",
+            title="Detector calibration constants",
+            authors=["Grace Hopper"],
+            abstract="A procedure for measuring pixel gains in an accelerator detector.",
+            categories=["physics.ins-det"],
+            published_at=datetime(2026, 8, 14, 7, 0, tzinfo=UTC),
+            updated_at=datetime(2026, 8, 14, 7, 10, tzinfo=UTC),
+            abstract_url="http://arxiv.org/abs/2608.00998",
+            pdf_url=None,
+        )
+        first = run_digest(
+            db=self.db,
+            source=StaticSource([old_article]),
+            analyzer=analyzer,
+            profile_id=self.profile.id,
+            preselector=None,
+        )
+        self.assertEqual(first.skipped_analysis_count, 1)
+        self.assertEqual(first.analyzed_count, 0)
+
+        saved, _ = self.db.upsert_article(old_article)
+        assert saved.id is not None
+        assert self.profile.id is not None
+        self.db.upsert_analysis(
+            article_id=saved.id,
+            profile_id=self.profile.id,
+            profile_fingerprint=profile_semantic_fingerprint(self.profile),
+            analysis=analyzer.analyze(profile=self.profile, article=saved),
+        )
+        analyzer.calls.clear()
+
+        second = run_digest(
+            db=self.db,
+            source=StaticSource([old_article]),
+            analyzer=analyzer,
+            profile_id=self.profile.id,
+            preselector=TermOverlapPreselector(),
+        )
+
+        self.assertEqual(second.preselected_count, 0)
+        self.assertEqual(second.skipped_analysis_count, 0)
+        self.assertEqual(second.analyzed_count, 1)
+        self.assertEqual(second.reused_analysis_count, 1)
+        self.assertEqual(second.items[0].analysis_origin, AnalysisOrigin.REUSED)
+        self.assertEqual(analyzer.calls, [])
 
     def test_malformed_analysis_rejected_and_run_marked_failed(self) -> None:
         analyzer = FakeAnalyzer(

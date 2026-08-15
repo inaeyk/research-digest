@@ -104,6 +104,8 @@ class Database:
                     status TEXT NOT NULL,
                     retrieved_count INTEGER NOT NULL DEFAULT 0,
                     stored_count INTEGER NOT NULL DEFAULT 0,
+                    preselected_count INTEGER NOT NULL DEFAULT 0,
+                    skipped_analysis_count INTEGER NOT NULL DEFAULT 0,
                     analyzed_count INTEGER NOT NULL DEFAULT 0,
                     relevant_count INTEGER NOT NULL DEFAULT 0,
                     error_message TEXT,
@@ -118,6 +120,7 @@ class Database:
             if row is None:
                 _save_arxiv_config(conn, ArxivSourceConfig())
             _migrate_relevance_analysis_profile_fingerprints(conn)
+            _migrate_app_run_preselection_counts(conn)
             _sanitize_existing_app_run_errors(conn)
 
     def list_interest_profiles(self, *, enabled_only: bool = False) -> list[InterestProfile]:
@@ -320,6 +323,8 @@ class Database:
         status: str,
         retrieved_count: int,
         stored_count: int,
+        preselected_count: int,
+        skipped_analysis_count: int,
         analyzed_count: int,
         relevant_count: int,
         error_message: str | None = None,
@@ -329,7 +334,8 @@ class Database:
                 """
                 UPDATE app_runs
                 SET completed_at = ?, status = ?, retrieved_count = ?, stored_count = ?,
-                    analyzed_count = ?, relevant_count = ?, error_message = ?
+                    preselected_count = ?, skipped_analysis_count = ?, analyzed_count = ?,
+                    relevant_count = ?, error_message = ?
                 WHERE id = ?
                 """,
                 (
@@ -337,6 +343,8 @@ class Database:
                     status,
                     retrieved_count,
                     stored_count,
+                    preselected_count,
+                    skipped_analysis_count,
                     analyzed_count,
                     relevant_count,
                     error_message,
@@ -410,6 +418,18 @@ def _sanitize_existing_app_run_errors(conn: sqlite3.Connection) -> None:
                 "UPDATE app_runs SET error_message = ? WHERE id = ?",
                 (sanitized, int(row["id"])),
             )
+
+
+def _migrate_app_run_preselection_counts(conn: sqlite3.Connection) -> None:
+    columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(app_runs)").fetchall()}
+    if "preselected_count" not in columns:
+        conn.execute(
+            "ALTER TABLE app_runs ADD COLUMN preselected_count INTEGER NOT NULL DEFAULT 0"
+        )
+    if "skipped_analysis_count" not in columns:
+        conn.execute(
+            "ALTER TABLE app_runs ADD COLUMN skipped_analysis_count INTEGER NOT NULL DEFAULT 0"
+        )
 
 
 def _migrate_relevance_analysis_profile_fingerprints(conn: sqlite3.Connection) -> None:

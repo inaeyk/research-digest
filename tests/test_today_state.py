@@ -92,6 +92,8 @@ def _digest_result() -> DigestResult:
         source_config=source_config,
         retrieved_count=3,
         stored_count=3,
+        preselected_count=2,
+        skipped_analysis_count=1,
         analyzed_count=3,
         new_analysis_count=2,
         reused_analysis_count=1,
