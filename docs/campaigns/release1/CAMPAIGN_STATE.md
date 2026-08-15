@@ -1,11 +1,11 @@
 # Release 1 Campaign State
 
-- current_substage: M7-E specification freeze
+- current_substage: M7-F ready to freeze
 - status: ACTIVE
-- current_git_head: 2c1f9feb5ca95accf28527b0956727bb275642d0
-- current_tags_at_head: m7d-qualified
+- current_git_head: 262bdd84be0c634c0b254e325c54304c0e840eb7
+- current_tags_at_head: m7e-qualified
 - current_branch: master
-- local_remote_tracking: `master` tracks `origin/master`; local branch is 8 commits ahead after M7-D freeze
+- local_remote_tracking: `master` tracks `origin/master`; local branch is 9 commits ahead after M7-E freeze
 - online_remote_verification: attempted `git ls-remote --heads --tags origin`; blocked by DNS resolution failure for `github.com` even after network escalation
 - baseline_m1_qualified_commit: 36bd1cbe60f95d588e8ccdd41bfce914e9b1d7da
 - baseline_m1_qualified_tag: m1-qualified
@@ -41,15 +41,18 @@
 - m7d_qualified_commit: 2c1f9feb5ca95accf28527b0956727bb275642d0
 - m7d_qualified_tag: m7d-qualified
 - m7d_qualified_tag_object: e02247e1796fab983d220916f6db73a8c7056ffd
+- m7e_qualified_commit: 262bdd84be0c634c0b254e325c54304c0e840eb7
+- m7e_qualified_tag: m7e-qualified
+- m7e_qualified_tag_object: 5e46f46ec355391f7ee479d565855025cfa1db94
 - skipped_campaigns: M3 additional source types; M5 full-paper reading; M6 long-term research memory
 - active_campaign_scope: M4 automatic daily operation; M7 release engineering, upgradeability, and productization; first release candidate
-- qualification_status: M7E_AUDIT_PASS_READY_FREEZE
+- qualification_status: M7F_AUDIT_PASS_READY_FREEZE
 - audit_repair_round: 1
-- last_deterministic_verification: M7-E candidate full gate: `pytest` 120 passed; `ruff check .` PASS; strict `mypy --strict src tests` PASS; `compileall -q src tests` PASS; `git diff --check` PASS.
-- last_live_verification: M7-E isolated CLI smoke passed: `python -m research_digest.cli --version`; `status --json` with temp data/config paths; mocked `serve --port 18501` selected `http://localhost:18502` when first port was unavailable.
+- last_deterministic_verification: M7-F repair round 1 full gate: `pytest` 131 passed; `ruff check .` PASS; strict `mypy --strict src tests` PASS; `compileall -q src tests` PASS; `git diff --check` PASS.
+- last_live_verification: M7-F read-only temp-path `doctor --json` smoke passed without creating data/config directories or SQLite DB; mocked network doctor smoke passed with a finite timeout path.
 - migration_data_safety_status: M7-B candidate adds explicit schema version metadata, ordered migrations, backup before schema-changing upgrades of existing DBs, rollback on failed migration, and visible migration backup path. Repo-local `research_digest.sqlite3` remains ignored and was not used for upgrade testing.
 - deferred_minor_optional_findings: none
-- next_permitted_action: inspect Git hygiene, stage only qualified M7-E files, commit, and tag `m7e-qualified`
+- next_permitted_action: inspect Git hygiene, stage only qualified M7-F files, commit, and tag `m7f-qualified`
 - human_stop_reason: none
 
 ## M4-A Frozen Specification
@@ -645,3 +648,75 @@ Verification:
 Audit:
 
 - fresh independent read-only M7-E Auditor: PASS with no BLOCKER/IMPORTANT/MINOR findings. Auditor verified version output, Streamlit serve entry point and port fallback, preserved run path, status output, schedule preservation, deferred doctor/backup slots, CLI test coverage, and deterministic gates.
+- freeze: committed `262bdd84be0c634c0b254e325c54304c0e840eb7` (`Qualify M7-E user CLI`) and created local annotated tag `m7e-qualified` with tag object `5e46f46ec355391f7ee479d565855025cfa1db94`.
+
+## M7-F Frozen Specification
+
+Goal: implement `research-digest doctor` as bounded, safe diagnostics.
+
+Checks:
+
+- supported Python/runtime
+- user data directory readable/writable
+- SQLite DB readable and integrity-valid
+- schema version supported
+- config version supported
+- analyzer provider configuration
+- Codex executable available when configured for Codex
+- Codex authentication usability only when safely testable without exposing secrets
+- arXiv/network reachability only when explicitly requested
+- scheduler configuration/status
+- last scheduled/headless run health
+
+Requirements:
+
+- no secret output
+- finite timeouts
+- distinguish WARNING from FAILURE
+- useful exit code: `0` for no failures, `1` when any failure exists
+- checks individually testable/mocked
+- offline/skip-network default; network reachability should require an explicit flag
+- do not auto-repair anything
+- preserve M7-E CLI shape
+
+Tests required before M7-F freeze:
+
+- doctor JSON/text output covers success, warning, and failure severities.
+- missing Codex executable under Codex provider reports FAILURE.
+- OpenAI provider without API key reports FAILURE without printing secrets.
+- SQLite/schema/config checks pass/fail deterministically with temp paths.
+- scheduler status errors are warnings/failures as appropriate and sanitized.
+- network check is skipped by default and bounded when requested through mocks.
+- full deterministic suite remains green.
+
+Live verification required before M7-F freeze:
+
+- isolated `doctor --json` smoke using temp data/config paths.
+- mocked network doctor smoke with finite timeout path.
+
+Freeze criteria:
+
+- fresh independent read-only M7-F audit PASS
+- `pytest`, `ruff check .`, `mypy --strict src tests`, `compileall -q src tests`, and `git diff --check` PASS
+- staged inventory excludes `research_digest.sqlite3`, `.venv`, `.env`/secrets, caches, and local agent/runtime state
+- commit and annotated local tag `m7f-qualified`
+
+Candidate implementation:
+
+- Added `research_digest.doctor` with typed `DoctorCheck`, `DoctorReport`, and PASS/WARNING/FAILURE severities.
+- Implemented checks for Python runtime, data/config directory writability, SQLite integrity, schema version, config version, analyzer provider setup, scheduler status, last run health, and optional arXiv network reachability.
+- Wired `research-digest doctor` to text/JSON output, `--network`, and `--network-timeout`.
+- Preserved no-auto-repair behavior.
+- Kept `research-digest backup` deferred for M7-G.
+- Added doctor tests for success/warning/failure, missing Codex, missing OpenAI key, failed last run, scheduler sanitization, network skip/request behavior, and backup deferral.
+
+Verification:
+
+- focused doctor/CLI tests: `pytest tests/test_doctor.py tests/test_cli.py` passed, 14 tests.
+- full test suite: `pytest` passed, 127 tests.
+- `ruff check .`: PASS.
+- strict `mypy --strict src tests`: PASS.
+- `python -m compileall -q src tests`: PASS.
+- `git diff --check`: PASS.
+- isolated doctor CLI smoke: PASS for temp-path `doctor --json`.
+- mocked network doctor smoke: PASS with finite timeout.

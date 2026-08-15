@@ -16,6 +16,7 @@ from research_digest.analysis.base import LLMAnalyzer
 from research_digest.analysis.providers import build_configured_analyzer
 from research_digest.config import AppConfig, load_config
 from research_digest.db import Database
+from research_digest.doctor import DoctorReport, run_doctor, run_doctor_from_environment
 from research_digest.errors import sanitize_error
 from research_digest.scheduler import (
     DEFAULT_TASK_NAME,
@@ -99,11 +100,13 @@ def run_cli(
             scheduler_backend=scheduler_backend,
         )
     if args.command == "doctor":
-        return _deferred_command(
+        return _doctor_command(
+            args=args,
             stdout=stdout,
-            json_output=args.json,
-            command="doctor",
-            milestone="M7-F",
+            stderr=stderr,
+            config=config,
+            db=db,
+            scheduler_backend=scheduler_backend,
         )
     if args.command == "backup":
         return _deferred_command(
@@ -171,16 +174,32 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print a machine-readable JSON result.",
     )
-    for name, milestone in (("doctor", "M7-F"), ("backup", "M7-G")):
-        deferred_parser = subparsers.add_parser(
-            name,
-            help=f"Reserved command; release behavior is implemented in {milestone}.",
-        )
-        deferred_parser.add_argument(
-            "--json",
-            action="store_true",
-            help="Print a machine-readable JSON result.",
-        )
+    doctor_parser = subparsers.add_parser("doctor", help="Run safe local diagnostics.")
+    doctor_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print a machine-readable JSON result.",
+    )
+    doctor_parser.add_argument(
+        "--network",
+        action="store_true",
+        help="Include bounded arXiv network reachability checks.",
+    )
+    doctor_parser.add_argument(
+        "--network-timeout",
+        type=_doctor_network_timeout,
+        default=5.0,
+        help="Network check timeout in seconds. Defaults to 5.",
+    )
+    backup_parser = subparsers.add_parser(
+        "backup",
+        help="Reserved command; release behavior is implemented in M7-G.",
+    )
+    backup_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print a machine-readable JSON result.",
+    )
     return parser
 
 
@@ -339,6 +358,66 @@ def _status_command(
     else:
         _write_status_human(stdout, payload)
     return 0
+
+
+def _doctor_command(
+    *,
+    args: argparse.Namespace,
+    stdout: TextIO,
+    stderr: TextIO,
+    config: AppConfig | None,
+    db: Database | None,
+    scheduler_backend: SchedulerBackend | None,
+) -> int:
+    try:
+        if config is None and db is None:
+            report = run_doctor_from_environment(
+                scheduler_backend=scheduler_backend,
+                include_network=bool(args.network),
+                network_timeout_seconds=float(args.network_timeout),
+            )
+        else:
+            active_config = config or load_config()
+            active_db = db or Database(active_config.db_path)
+            report = run_doctor(
+                config=active_config,
+                db=active_db,
+                scheduler_backend=scheduler_backend,
+                include_network=bool(args.network),
+                network_timeout_seconds=float(args.network_timeout),
+            )
+    except Exception as exc:
+        message = sanitize_error(exc)
+        if args.json:
+            json.dump({"status": "failed", "error_message": message}, stdout)
+            stdout.write("\n")
+        else:
+            stderr.write(f"Research Digest doctor failed: {message}\n")
+        return 1
+
+    if args.json:
+        json.dump(report.to_mapping(), stdout)
+        stdout.write("\n")
+    else:
+        _write_doctor_human(stdout, report)
+    return report.exit_code
+
+
+def _write_doctor_human(stdout: TextIO, report: DoctorReport) -> None:
+    stdout.write("Research Digest doctor\n")
+    stdout.write(f"Failures: {report.failure_count}; warnings: {report.warning_count}\n")
+    for check in report.checks:
+        stdout.write(f"{check.severity}: {check.name}: {check.message}\n")
+
+
+def _doctor_network_timeout(value: str) -> float:
+    try:
+        timeout = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a positive finite number") from exc
+    if timeout <= 0 or timeout != timeout or timeout == float("inf") or timeout > 60:
+        raise argparse.ArgumentTypeError("must be a positive finite number no greater than 60")
+    return timeout
 
 
 def _status_payload(

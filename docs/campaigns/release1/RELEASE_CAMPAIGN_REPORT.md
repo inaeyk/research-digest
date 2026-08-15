@@ -433,6 +433,55 @@ Audit:
 
 - fresh independent read-only M7-E Auditor: PASS with no BLOCKER/IMPORTANT/MINOR findings.
 
+M7-E freeze:
+
+- qualified commit: `262bdd84be0c634c0b254e325c54304c0e840eb7`.
+- qualified tag: `m7e-qualified`.
+- qualified tag object: `5e46f46ec355391f7ee479d565855025cfa1db94`.
+- post-freeze Git state: local `master` is 9 commits ahead of `origin/master`; online remote inspection remains blocked by DNS/network limits in this session.
+
+## M7-F Specification Freeze
+
+M7-F is frozen as bounded, safe diagnostics through `research-digest doctor`.
+
+The implementation must diagnose runtime, data/config paths, SQLite/schema/config versions, provider setup, Codex availability, scheduler status, last run health, and optional bounded network reachability without printing secrets or performing auto-repair.
+
+## M7-F Candidate
+
+Implementation summary:
+
+- Added `research_digest.doctor` with typed check/report models and PASS/WARNING/FAILURE severities.
+- Implemented safe diagnostics for runtime, data/config directories, SQLite integrity, schema/config versions, provider setup, scheduler status, last run health, and optional arXiv network reachability.
+- Repaired doctor after audit so the real CLI path inspects config/data/SQLite state read-only instead of creating default config, adopting/migrating DBs, or writing migration backups.
+- Repaired scheduler-originated doctor messages to sanitize status text as well as exceptions.
+- Repaired doctor network timeout handling so non-finite, non-positive, or excessive values fail without invoking the network checker.
+- Wired `research-digest doctor` text/JSON output plus `--network` and `--network-timeout`.
+- Preserved `backup` as the deferred M7-G command slot.
+
+Deterministic verification:
+
+- focused post-repair `pytest tests/test_doctor.py tests/test_cli.py`: 18 passed.
+- focused post-repair `ruff check src/research_digest/doctor.py src/research_digest/cli.py tests/test_doctor.py tests/test_cli.py`: PASS.
+- focused post-repair strict `mypy --strict src/research_digest/doctor.py src/research_digest/cli.py tests/test_doctor.py tests/test_cli.py`: PASS.
+- full post-repair `pytest`: 131 passed.
+- `ruff check .`: PASS.
+- strict `mypy --strict src tests`: PASS.
+- `compileall -q src tests`: PASS.
+- `git diff --check`: PASS.
+
+Live/doctor verification:
+
+- isolated temp-path `doctor --json`: PASS without creating the configured data/config directories or SQLite DB.
+- mocked network doctor smoke with finite timeout: PASS.
+
+Audit:
+
+- fresh independent M7-F Auditor returned FAIL with three IMPORTANT findings:
+  real `doctor` initialized/migrated app state; scheduler status messages were not sanitized; invalid network timeouts such as `inf` were forwarded to network checks.
+- repair round 1 addresses all three findings and adds regressions for read-only CLI doctor behavior, scheduler status redaction, direct invalid-timeout rejection, and CLI invalid-timeout usage errors.
+- fresh independent M7-F repair round 1 re-auditor returned PASS with no BLOCKER/IMPORTANT findings.
+- re-auditor verified focused and full deterministic tests, read-only temp CLI behavior, scheduler leak sanitization, and invalid timeout rejection before doctor execution.
+
 Data-safety note:
 
 - During re-audit, the auditor reported one accidental manual CLI smoke without `RESEARCH_DIGEST_DB`; it likely wrote one runtime run record to ignored repo-local `research_digest.sqlite3`.

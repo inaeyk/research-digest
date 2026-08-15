@@ -233,22 +233,21 @@ class CLITests(unittest.TestCase):
         self.assertNotIn("OPENAI_API_KEY", output)
         self.assertNotIn("sk-", output)
 
-    def test_doctor_and_backup_slots_are_stable_but_deferred(self) -> None:
-        for command in ("doctor", "backup"):
-            stdout = io.StringIO()
-            stderr = io.StringIO()
+    def test_backup_slot_is_stable_but_deferred(self) -> None:
+        stdout = io.StringIO()
+        stderr = io.StringIO()
 
-            exit_code = run_cli(
-                argv=[command, "--json"],
-                stdout=stdout,
-                stderr=stderr,
-            )
+        exit_code = run_cli(
+            argv=["backup", "--json"],
+            stdout=stdout,
+            stderr=stderr,
+        )
 
-            self.assertEqual(exit_code, 1)
-            self.assertEqual(stderr.getvalue(), "")
-            payload = json.loads(stdout.getvalue())
-            self.assertEqual(payload["status"], "deferred")
-            self.assertEqual(payload["command"], command)
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(stderr.getvalue(), "")
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(payload["status"], "deferred")
+        self.assertEqual(payload["command"], "backup")
 
 if __name__ == "__main__":
     unittest.main()
