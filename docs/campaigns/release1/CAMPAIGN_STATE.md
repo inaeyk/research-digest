@@ -1,11 +1,11 @@
 # Release 1 Campaign State
 
-- current_substage: M7-C specification freeze
+- current_substage: M7-D specification freeze
 - status: ACTIVE
-- current_git_head: 73b549a75d372ad754f2a90f5c6aae788c7434fa
-- current_tags_at_head: m7b-qualified
+- current_git_head: 246b1fee3a983e5da88e54c8f67850d0a6d3fa4f
+- current_tags_at_head: m7c-qualified
 - current_branch: master
-- local_remote_tracking: `master` tracks `origin/master`; local branch is 6 commits ahead after M7-B freeze
+- local_remote_tracking: `master` tracks `origin/master`; local branch is 7 commits ahead after M7-C freeze
 - online_remote_verification: attempted `git ls-remote --heads --tags origin`; blocked by DNS resolution failure for `github.com` even after network escalation
 - baseline_m1_qualified_commit: 36bd1cbe60f95d588e8ccdd41bfce914e9b1d7da
 - baseline_m1_qualified_tag: m1-qualified
@@ -35,15 +35,18 @@
 - m7b_qualified_commit: 73b549a75d372ad754f2a90f5c6aae788c7434fa
 - m7b_qualified_tag: m7b-qualified
 - m7b_qualified_tag_object: ad09bde4eb4a6103e147e729c4bb0024d6bd19a6
+- m7c_qualified_commit: 246b1fee3a983e5da88e54c8f67850d0a6d3fa4f
+- m7c_qualified_tag: m7c-qualified
+- m7c_qualified_tag_object: 1c8f5c66d3b0b217057f39af53a3e210288db0fd
 - skipped_campaigns: M3 additional source types; M5 full-paper reading; M6 long-term research memory
 - active_campaign_scope: M4 automatic daily operation; M7 release engineering, upgradeability, and productization; first release candidate
-- qualification_status: M7C_REAUDIT_PASS_READY_FREEZE
+- qualification_status: M7D_REAUDIT_PASS_READY_FREEZE
 - audit_repair_round: 1
-- last_deterministic_verification: M7-C repair round 1 full gate: `pytest` 108 passed; `ruff check .` PASS; strict `mypy --strict src tests` PASS; `compileall -q src tests` PASS; `git diff --check` PASS.
-- last_live_verification: M7-C temporary extension smoke passed through `tests/test_extension_boundaries.py::ExtensionBoundaryTests::test_service_accepts_alternate_synthesis_builder`; a non-arXiv `DummySourceConfig`, temporary source adapter, analyzer, and alternate synthesizer ran through the service/pipeline boundary.
+- last_deterministic_verification: M7-D repair round 1 full gate: `pytest` 116 passed; `ruff check .` PASS; strict `mypy --strict src tests` PASS; `compileall -q src tests` PASS; `git diff --check` PASS.
+- last_live_verification: M7-D isolated config smoke passed: default versioned config initialized, env override applied without file mutation, old config upgraded with backup, future version rejected, and persisted secret-key config rejected.
 - migration_data_safety_status: M7-B candidate adds explicit schema version metadata, ordered migrations, backup before schema-changing upgrades of existing DBs, rollback on failed migration, and visible migration backup path. Repo-local `research_digest.sqlite3` remains ignored and was not used for upgrade testing.
 - deferred_minor_optional_findings: none
-- next_permitted_action: inspect Git hygiene, stage only qualified M7-C files, commit, and tag `m7c-qualified`
+- next_permitted_action: inspect Git hygiene, stage only qualified M7-D files, commit, and tag `m7d-qualified`
 - human_stop_reason: none
 
 ## M4-A Frozen Specification
@@ -500,3 +503,71 @@ Audit:
 - initial fresh independent M7-C Auditor: FAIL with one IMPORTANT finding. The source execution path was still arXiv-shaped through service/pipeline/model typing, and the test did not prove a non-arXiv source config could flow through.
 - repair round 1: source execution now uses `SourceRunRequest[Any]`; `DigestResult.source_config` is source-generic; the extension smoke passes a `DummySourceConfig` through service/pipeline without casts to arXiv config.
 - fresh re-Auditor after repair round 1: PASS with no BLOCKER/IMPORTANT/MINOR findings. Re-auditor verified generic source adapter/config flow, non-arXiv extension smoke coverage, no M3/M5/M6 feature implementation, and full deterministic gates.
+- freeze: committed `246b1fee3a983e5da88e54c8f67850d0a6d3fa4f` (`Qualify M7-C extension boundaries`) and created local annotated tag `m7c-qualified` with tag object `1c8f5c66d3b0b217057f39af53a3e210288db0fd`.
+
+## M7-D Frozen Specification
+
+Goal: persisted configuration must have explicit version semantics while preserving explicit environment overrides.
+
+Configuration file:
+
+- Store a small JSON configuration file in the resolved user config directory.
+- Persist a durable `config_version`.
+- Version `1` captures the current release semantics for analyzer provider, OpenAI model, Codex model, and Codex timeout.
+- Missing config file should initialize defaults without requiring Streamlit.
+- Supported older config can be upgraded deterministically with a `.bak` copy.
+- Unknown future config versions must fail clearly rather than being silently interpreted.
+
+Overrides:
+
+- Existing environment variables remain explicit overrides:
+  `RESEARCH_DIGEST_ANALYZER`, `OPENAI_MODEL`, `RESEARCH_DIGEST_CODEX_MODEL`,
+  `RESEARCH_DIGEST_CODEX_TIMEOUT_SECONDS`, `OPENAI_API_KEY`, and path overrides.
+- Environment overrides must not rewrite the persisted config implicitly.
+- Semantic settings such as analyzer provider and provider model/timeout values must not be silently redefined.
+
+Scope:
+
+- Do not introduce an elaborate configuration framework.
+- Do not persist secrets or API keys.
+- Do not change M2/M4/M7 behavior except adding deterministic config-file defaults/upgrades.
+
+Tests required before M7-D freeze:
+
+- missing config file initializes versioned defaults.
+- current versioned config loads deterministically.
+- old supported config upgrades to current with backup.
+- unknown future config version fails clearly.
+- invalid semantic settings fail clearly.
+- environment overrides take precedence without mutating the config file.
+- config backup/export path is straightforward and contains no secrets.
+- full deterministic suite remains green.
+
+Live verification required before M7-D freeze:
+
+- isolated temporary config-directory smoke initializes defaults, applies an env override without file mutation, upgrades an old config copy with backup, and rejects a future version.
+
+Freeze criteria:
+
+- fresh independent read-only M7-D audit PASS
+- `pytest`, `ruff check .`, `mypy --strict src tests`, `compileall -q src tests`, and `git diff --check` PASS
+- staged inventory excludes `research_digest.sqlite3`, `.venv`, `.env`/secrets, caches, and local agent/runtime state
+- commit and annotated local tag `m7d-qualified`
+
+Candidate implementation:
+
+- Added a small versioned JSON config file at the resolved user config directory.
+- Added `CONFIG_VERSION = 1`, durable `config_version`, and config path/backup metadata in `AppConfig`.
+- Missing config initializes deterministic defaults without Streamlit.
+- Version 0 configs upgrade to version 1 with a `.bak-v0-to-v1` copy.
+- Unknown future config versions fail clearly.
+- Persisted config validates analyzer provider, provider models, Codex timeout, and supported keys.
+- Persisted config rejects secret/API-key keys.
+- Environment overrides remain explicit and are applied after persisted config load without mutating the file.
+- Environment model and timeout overrides are validated and trimmed rather than silently accepting empty/blank values.
+
+Audit:
+
+- initial fresh independent M7-D Auditor: FAIL with one IMPORTANT finding. `OPENAI_MODEL` and `RESEARCH_DIGEST_CODEX_MODEL` env overrides bypassed non-empty semantic validation.
+- repair round 1: environment model overrides now use shared non-empty trimmed validation; added regression tests for empty `OPENAI_MODEL` and blank `RESEARCH_DIGEST_CODEX_MODEL`.
+- fresh re-Auditor after repair round 1: PASS with no BLOCKER/IMPORTANT/MINOR findings. Re-auditor verified env model override validation, version load/init/upgrade/future-version rejection, backup path visibility, secret-key rejection, regression coverage, and full deterministic gates.

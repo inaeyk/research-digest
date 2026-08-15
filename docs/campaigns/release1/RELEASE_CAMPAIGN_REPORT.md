@@ -348,6 +348,50 @@ Audit:
 - repair round 1 generalized source execution through `SourceRunRequest[Any]` and added a non-arXiv source-config smoke.
 - fresh re-Auditor after repair round 1: PASS with no BLOCKER/IMPORTANT/MINOR findings.
 
+M7-C freeze:
+
+- qualified commit: `246b1fee3a983e5da88e54c8f67850d0a6d3fa4f`.
+- qualified tag: `m7c-qualified`.
+- qualified tag object: `1c8f5c66d3b0b217057f39af53a3e210288db0fd`.
+- post-freeze Git state: local `master` is 7 commits ahead of `origin/master`; online remote inspection remains blocked by DNS/network limits in this session.
+
+## M7-D Specification Freeze
+
+M7-D is frozen as versioned persisted configuration in the user config directory, with explicit environment overrides preserved.
+
+The implementation must create/load/upgrade a small JSON config file with a durable `config_version`, reject unknown future versions, avoid persisting secrets, and keep semantic settings such as analyzer provider/model/timeout stable unless explicitly changed.
+
+## M7-D Candidate
+
+Implementation summary:
+
+- Added a versioned JSON config file in the resolved user config directory.
+- Added `CONFIG_VERSION = 1`, config path, and last config backup path metadata to `AppConfig`.
+- Missing config initializes deterministic defaults without Streamlit.
+- Version 0 config upgrades to version 1 with a `.bak-v0-to-v1` backup.
+- Unknown future config versions fail clearly.
+- Persisted config validates supported keys and semantic provider/model/timeout values.
+- Persisted config rejects secret/API-key keys.
+- Environment overrides remain explicit, validated, and non-mutating.
+
+Deterministic verification:
+
+- `pytest`: 116 passed.
+- `ruff check .`: PASS.
+- strict `mypy --strict src tests`: PASS.
+- `compileall -q src tests`: PASS.
+- `git diff --check`: PASS.
+
+Live/config verification:
+
+- isolated config smoke initialized defaults, applied env override without file mutation, upgraded old config with backup, rejected a future config version, and rejected a persisted secret-key config.
+
+Audit:
+
+- initial fresh independent M7-D Auditor: FAIL with one IMPORTANT finding for unvalidated env model overrides.
+- repair round 1 validates `OPENAI_MODEL` and `RESEARCH_DIGEST_CODEX_MODEL` env overrides with non-empty trimmed semantics.
+- fresh re-Auditor after repair round 1: PASS with no BLOCKER/IMPORTANT/MINOR findings.
+
 Data-safety note:
 
 - During re-audit, the auditor reported one accidental manual CLI smoke without `RESEARCH_DIGEST_DB`; it likely wrote one runtime run record to ignored repo-local `research_digest.sqlite3`.
