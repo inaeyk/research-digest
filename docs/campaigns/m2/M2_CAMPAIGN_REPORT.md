@@ -52,4 +52,19 @@
 - local deterministic verification: `pytest` passed 57 tests; `ruff check .` passed; `mypy --no-incremental src tests` passed; `compileall -q src tests` passed; `git diff --check` passed.
 - fresh independent auditor: `01a00453-cf34-7463-b64b-e8ed9766a0c2`.
 - auditor result: PASS with no blocking findings.
+- qualified commit: `9aea33b0a1dc8a2b34ad7622e55bb8fb047852bb`.
+- local annotated tag: `m2b-qualified` points to `9aea33b0a1dc8a2b34ad7622e55bb8fb047852bb`; tag object `0a81deaf52d6d4ffa49659b59a7decbd87fd2905`.
+
+## M2-C Feedback And Calibration
+
+- implementation: added per-article feedback keyed by article id, profile id, and profile semantic fingerprint.
+- calibration: added deterministic calibration summaries comparing feedback labels against the active threshold.
+- UI: Today page shows a feedback segmented control per analyzed paper and a feedback calibration panel when feedback exists.
+- tests added: feedback persistence/profile-semantic isolation, calibration confusion counts, and first feedback selection visibility to rebuilt calibration.
+- first auditor: `01a0045b-aa55-7623-bb67-2c0bfee29472`.
+- first auditor result: NOT QUALIFIED; calibration rendered one rerun behind after first feedback selection and campaign state had stale M2-B freeze wording.
+- repair: changed feedback writes to request an immediate Streamlit rerun after successful persistence and corrected campaign state.
+- local deterministic verification after repair: `pytest` passed 61 tests; `ruff check .` passed; `mypy --no-incremental src tests` passed; `compileall -q src tests` passed; `git diff --check` passed.
+- closure auditor: `01a0045f-bf9d-7533-a564-000e526bb57b`.
+- closure auditor result: PASS with no blocking findings.
 - status: qualified; commit/tag freeze pending.

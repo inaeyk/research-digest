@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
 from datetime import UTC, datetime
+from pathlib import Path
 
+from research_digest.calibration import build_calibration_summary
+from research_digest.db import Database
 from research_digest.models import (
     AnalysisOrigin,
     AnalysisResult,
@@ -11,6 +15,7 @@ from research_digest.models import (
     DigestItem,
     DigestResult,
     InterestProfile,
+    profile_semantic_fingerprint,
 )
 from research_digest.ui.pages.today import (
     coerce_digest_view,
@@ -19,6 +24,8 @@ from research_digest.ui.pages.today import (
     digest_view_items,
     digest_view_label,
     is_current_digest_result,
+    load_feedback_by_article_id,
+    persist_feedback_selection,
     profile_fingerprint,
     source_config_fingerprint,
 )
@@ -254,6 +261,62 @@ class TodayStateTests(unittest.TestCase):
     def test_coerce_digest_view_defaults_to_relevant_for_unexpected_value(self) -> None:
         self.assertEqual(coerce_digest_view("all_analyzed"), "all_analyzed")
         self.assertEqual(coerce_digest_view(None), "relevant")
+
+    def test_first_feedback_selection_is_visible_to_rebuilt_calibration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = Database(Path(tmpdir) / "test.sqlite3")
+            profile = db.create_interest_profile(
+                name="Gravity",
+                description="Higher-dimensional gravity.",
+                relevance_threshold=0.6,
+            )
+            article, _ = db.upsert_article(_article("2608.03000", "High score", 10))
+            item = DigestItem(
+                article=article,
+                analysis=_analysis(0.9),
+                analysis_origin=AnalysisOrigin.NEW_THIS_RUN,
+            )
+            result = DigestResult(
+                run_id=99,
+                profile=profile,
+                source_config=ArxivSourceConfig(
+                    categories=["hep-th"],
+                    lookback_hours=24,
+                    max_results=10,
+                ),
+                retrieved_count=1,
+                stored_count=1,
+                preselected_count=1,
+                skipped_analysis_count=0,
+                analyzed_count=1,
+                new_analysis_count=1,
+                reused_analysis_count=0,
+                above_threshold_count=1,
+                analysis_available=True,
+                items=[item],
+                started_at=datetime(2026, 8, 14, 11, 40, tzinfo=UTC),
+                completed_at=datetime(2026, 8, 14, 11, 42, tzinfo=UTC),
+            )
+
+            changed = persist_feedback_selection(
+                item=item,
+                db=db,
+                profile=profile,
+                profile_fingerprint_value=profile_semantic_fingerprint(profile),
+                current_feedback=None,
+                selected="NOT_RELEVANT",
+            )
+            feedback_by_article_id = load_feedback_by_article_id(db, result)
+            summary = build_calibration_summary(
+                items=result.items,
+                feedback_by_article_id=feedback_by_article_id,
+                threshold=profile.relevance_threshold,
+            )
+
+            self.assertTrue(changed)
+            self.assertEqual(summary.feedback_count, 1)
+            self.assertEqual(summary.false_positive_count, 1)
+            self.assertEqual(summary.precision, 0.0)
 
 
 if __name__ == "__main__":

@@ -12,6 +12,7 @@ from research_digest.db import Database
 from research_digest.models import (
     AnalysisResult,
     Article,
+    ArticleFeedback,
     ArxivSourceConfig,
     InterestProfile,
     profile_semantic_fingerprint,
@@ -151,6 +152,68 @@ class DatabaseTests(unittest.TestCase):
             profile_fingerprint=profile_semantic_fingerprint(profile),
         )
         self.assertEqual(loaded, analysis)
+
+    def test_article_feedback_round_trip_and_profile_semantic_isolation(self) -> None:
+        profile = self.db.create_interest_profile(
+            name="Gravity",
+            description="Higher-dimensional gravity.",
+        )
+        article, _ = self.db.upsert_article(sample_article())
+        assert article.id is not None
+        assert profile.id is not None
+        fingerprint = profile_semantic_fingerprint(profile)
+
+        saved = self.db.upsert_article_feedback(
+            article_id=article.id,
+            profile_id=profile.id,
+            profile_fingerprint=fingerprint,
+            feedback_label="RELEVANT",
+        )
+
+        self.assertIsInstance(saved, ArticleFeedback)
+        self.assertEqual(saved.feedback_label, "RELEVANT")
+        self.assertEqual(
+            self.db.get_article_feedback(
+                article_id=article.id,
+                profile_id=profile.id,
+                profile_fingerprint=fingerprint,
+            ),
+            saved,
+        )
+        self.assertEqual(
+            self.db.list_article_feedback(
+                profile_id=profile.id,
+                profile_fingerprint=fingerprint,
+            ),
+            [saved],
+        )
+
+        updated = self.db.upsert_article_feedback(
+            article_id=article.id,
+            profile_id=profile.id,
+            profile_fingerprint=fingerprint,
+            feedback_label="NOT_RELEVANT",
+        )
+        self.assertEqual(updated.id, saved.id)
+        self.assertEqual(updated.created_at, saved.created_at)
+        self.assertEqual(updated.feedback_label, "NOT_RELEVANT")
+
+        changed_profile = self.db.update_interest_profile(
+            InterestProfile(
+                id=profile.id,
+                name=profile.name,
+                description="Condensed matter dualities.",
+                relevance_threshold=profile.relevance_threshold,
+                enabled=profile.enabled,
+            )
+        )
+        self.assertIsNone(
+            self.db.get_article_feedback(
+                article_id=article.id,
+                profile_id=changed_profile.id or 0,
+                profile_fingerprint=profile_semantic_fingerprint(changed_profile),
+            )
+        )
 
     def test_legacy_analysis_rows_are_retained_but_not_reused_as_current_profile(
         self,

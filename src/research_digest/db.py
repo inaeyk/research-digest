@@ -13,7 +13,9 @@ from research_digest.errors import sanitize_error_text
 from research_digest.models import (
     AnalysisResult,
     Article,
+    ArticleFeedback,
     ArxivSourceConfig,
+    FeedbackLabel,
     InterestProfile,
     ReadingPriority,
     datetime_from_db,
@@ -90,6 +92,19 @@ class Database:
                     why_it_matters TEXT NOT NULL,
                     reading_priority TEXT NOT NULL,
                     analyzed_at TEXT NOT NULL,
+                    UNIQUE(article_id, profile_id, profile_fingerprint),
+                    FOREIGN KEY(article_id) REFERENCES articles(id) ON DELETE CASCADE,
+                    FOREIGN KEY(profile_id) REFERENCES interest_profiles(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS article_feedback (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    article_id INTEGER NOT NULL,
+                    profile_id INTEGER NOT NULL,
+                    profile_fingerprint TEXT NOT NULL,
+                    feedback_label TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
                     UNIQUE(article_id, profile_id, profile_fingerprint),
                     FOREIGN KEY(article_id) REFERENCES articles(id) ON DELETE CASCADE,
                     FOREIGN KEY(profile_id) REFERENCES interest_profiles(id) ON DELETE CASCADE
@@ -304,6 +319,71 @@ class Database:
                     datetime_to_db(utc_now()),
                 ),
             )
+
+    def get_article_feedback(
+        self,
+        *,
+        article_id: int,
+        profile_id: int,
+        profile_fingerprint: str,
+    ) -> ArticleFeedback | None:
+        with self._connection() as conn:
+            return _get_article_feedback(
+                conn,
+                article_id=article_id,
+                profile_id=profile_id,
+                profile_fingerprint=profile_fingerprint,
+            )
+
+    def list_article_feedback(
+        self,
+        *,
+        profile_id: int,
+        profile_fingerprint: str,
+    ) -> list[ArticleFeedback]:
+        with self._connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM article_feedback
+                WHERE profile_id = ? AND profile_fingerprint = ?
+                ORDER BY updated_at DESC, id DESC
+                """,
+                (profile_id, profile_fingerprint),
+            ).fetchall()
+        return [_feedback_from_row(row) for row in rows]
+
+    def upsert_article_feedback(
+        self,
+        *,
+        article_id: int,
+        profile_id: int,
+        profile_fingerprint: str,
+        feedback_label: FeedbackLabel,
+    ) -> ArticleFeedback:
+        now = datetime_to_db(utc_now())
+        with self._connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO article_feedback (
+                    article_id, profile_id, profile_fingerprint, feedback_label,
+                    created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(article_id, profile_id, profile_fingerprint) DO UPDATE SET
+                    feedback_label = excluded.feedback_label,
+                    updated_at = excluded.updated_at
+                """,
+                (article_id, profile_id, profile_fingerprint, feedback_label, now, now),
+            )
+            feedback = _get_article_feedback(
+                conn,
+                article_id=article_id,
+                profile_id=profile_id,
+                profile_fingerprint=profile_fingerprint,
+            )
+        if feedback is None:
+            raise RuntimeError("failed to load saved article feedback")
+        return feedback
 
     def create_app_run(self, *, profile_id: int | None, source_name: str) -> int:
         with self._connection() as conn:
@@ -569,6 +649,23 @@ def _get_article_by_source_id(
     return _article_from_row(row) if row is not None else None
 
 
+def _get_article_feedback(
+    conn: sqlite3.Connection,
+    *,
+    article_id: int,
+    profile_id: int,
+    profile_fingerprint: str,
+) -> ArticleFeedback | None:
+    row = conn.execute(
+        """
+        SELECT * FROM article_feedback
+        WHERE article_id = ? AND profile_id = ? AND profile_fingerprint = ?
+        """,
+        (article_id, profile_id, profile_fingerprint),
+    ).fetchone()
+    return _feedback_from_row(row) if row is not None else None
+
+
 def _profile_from_row(row: sqlite3.Row) -> InterestProfile:
     return InterestProfile(
         id=int(row["id"]),
@@ -625,4 +722,16 @@ def _analysis_from_row(row: sqlite3.Row) -> AnalysisResult:
         summary=str(row["summary"]),
         why_it_matters=str(row["why_it_matters"]),
         reading_priority=cast(ReadingPriority, str(row["reading_priority"])),
+    )
+
+
+def _feedback_from_row(row: sqlite3.Row) -> ArticleFeedback:
+    return ArticleFeedback(
+        id=int(row["id"]),
+        article_id=int(row["article_id"]),
+        profile_id=int(row["profile_id"]),
+        profile_fingerprint=str(row["profile_fingerprint"]),
+        feedback_label=cast(FeedbackLabel, str(row["feedback_label"])),
+        created_at=datetime_from_db(str(row["created_at"])),
+        updated_at=datetime_from_db(str(row["updated_at"])),
     )

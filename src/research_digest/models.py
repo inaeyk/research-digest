@@ -12,6 +12,7 @@ from enum import StrEnum
 from typing import Any, Literal, cast
 
 ReadingPriority = Literal["LOW", "MEDIUM", "HIGH"]
+FeedbackLabel = Literal["RELEVANT", "NOT_RELEVANT"]
 MAX_ARXIV_LOOKBACK_HOURS = 24 * 30
 MAX_ARXIV_RESULTS = 500
 
@@ -250,6 +251,36 @@ class DigestItem:
     article: Article
     analysis: AnalysisResult
     analysis_origin: AnalysisOrigin
+
+
+@dataclass(frozen=True)
+class ArticleFeedback:
+    id: int | None
+    article_id: int
+    profile_id: int
+    profile_fingerprint: str
+    feedback_label: FeedbackLabel
+    created_at: datetime
+    updated_at: datetime
+
+    def __post_init__(self) -> None:
+        if self.id is not None and self.id <= 0:
+            raise ModelValidationError("article feedback id must be positive")
+        if self.article_id <= 0:
+            raise ModelValidationError("article feedback article_id must be positive")
+        if self.profile_id <= 0:
+            raise ModelValidationError("article feedback profile_id must be positive")
+        if not self.profile_fingerprint.strip():
+            raise ModelValidationError("article feedback profile_fingerprint is required")
+        if self.feedback_label not in {"RELEVANT", "NOT_RELEVANT"}:
+            raise ModelValidationError("feedback_label must be RELEVANT or NOT_RELEVANT")
+        object.__setattr__(
+            self,
+            "profile_fingerprint",
+            normalize_whitespace(self.profile_fingerprint),
+        )
+        object.__setattr__(self, "created_at", ensure_utc(self.created_at))
+        object.__setattr__(self, "updated_at", ensure_utc(self.updated_at))
 
 
 @dataclass(frozen=True)
