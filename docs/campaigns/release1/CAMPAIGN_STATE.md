@@ -1,11 +1,11 @@
 # Release 1 Campaign State
 
-- current_substage: M4-C candidate audit
+- current_substage: M4-D candidate audit
 - status: ACTIVE
-- current_git_head: 9d7db2ce0983e8fa1a68534450b890ae110ebed8
-- current_tags_at_head: m4b-qualified
+- current_git_head: 2c232fa163c67d8af87e3d039affd11187a5c814
+- current_tags_at_head: m4c-qualified
 - current_branch: master
-- local_remote_tracking: `master` tracks `origin/master`; local branch is 2 commits ahead after M4-B freeze
+- local_remote_tracking: `master` tracks `origin/master`; local branch is 3 commits ahead after M4-C freeze
 - online_remote_verification: attempted `git ls-remote --heads --tags origin`; blocked by DNS resolution failure for `github.com` even after network escalation
 - baseline_m1_qualified_commit: 36bd1cbe60f95d588e8ccdd41bfce914e9b1d7da
 - baseline_m1_qualified_tag: m1-qualified
@@ -23,15 +23,18 @@
 - m4b_qualified_commit: 9d7db2ce0983e8fa1a68534450b890ae110ebed8
 - m4b_qualified_tag: m4b-qualified
 - m4b_qualified_tag_object: 2c204f177d7ace500766365fc49d780ad08d8ceb
+- m4c_qualified_commit: 2c232fa163c67d8af87e3d039affd11187a5c814
+- m4c_qualified_tag: m4c-qualified
+- m4c_qualified_tag_object: 256cdd6348dc76c05a92dc33d602ee691498ab5c
 - skipped_campaigns: M3 additional source types; M5 full-paper reading; M6 long-term research memory
 - active_campaign_scope: M4 automatic daily operation; M7 release engineering, upgradeability, and productization; first release candidate
-- qualification_status: M4C_REAUDIT_PASS_READY_FREEZE
-- audit_repair_round: 1
-- last_deterministic_verification: M4-C repair round 1 full gate: `pytest` 89 passed; `ruff check .` PASS; strict `mypy --no-incremental src tests` PASS; `compileall -q src tests` PASS; `git diff --check` PASS.
-- last_live_verification: M4-C isolated lifecycle smoke `pytest tests/test_run_lifecycle.py::RunLifecycleTests::test_simultaneous_service_runs_are_excluded tests/test_run_lifecycle.py::RunLifecycleTests::test_stale_lock_and_running_row_recover_to_failed -q` passed; verifies overlap exclusion and stale lock/run recovery against temporary SQLite DB with deterministic fake source/analyzer.
+- qualification_status: M4D_AUDIT_PASS_READY_FREEZE
+- audit_repair_round: 0
+- last_deterministic_verification: M4-D candidate full gate: `pytest` 94 passed; `ruff check .` PASS; strict `mypy --no-incremental src tests` PASS; `compileall -q src tests` PASS; `git diff --check` PASS.
+- last_live_verification: M4-D isolated history smoke `pytest tests/test_history.py::HistoryTests::test_completed_digest_run_writes_history_snapshot tests/test_history.py::HistoryTests::test_failed_run_has_sanitized_history_without_snapshot -q` passed against temporary SQLite DB with deterministic fake source/analyzer.
 - migration_data_safety_status: no release1 migrations applied yet; repo-local `research_digest.sqlite3` remains ignored and must not be used for upgrade tests. During M4-A re-audit, a manual CLI smoke likely wrote one runtime run record to the ignored repo-local DB; a content-free `PRAGMA integrity_check` returned `ok`.
 - deferred_minor_optional_findings: none
-- next_permitted_action: perform freeze hygiene, commit, and tag `m4c-qualified`
+- next_permitted_action: perform freeze hygiene, commit, and tag `m4d-qualified`
 - human_stop_reason: none
 
 ## M4-A Frozen Specification
@@ -242,10 +245,63 @@ Live verification required before M4-C freeze:
 - initial fresh Auditor: FAIL with two IMPORTANT findings. Stale lock recovery could leave a later-started old run row stuck as `RUNNING`, and `get_app_runs` did not normalize legacy lowercase statuses at the read boundary.
 - repair round 1: stale-lock replacement now marks all unfinished `STARTING`/`RUNNING`/legacy `running` rows failed, because the lock itself is the stale/crashed authority. When no lock exists, startup cleanup still only marks unfinished rows older than the stale cutoff. `get_app_runs` now normalizes legacy `running`, `success`, `failed`, and `analysis_unavailable` statuses in its SELECT result. Regression tests cover both auditor probes.
 - fresh re-Auditor after repair round 1: PASS with no BLOCKER/IMPORTANT findings. Re-auditor verified stale-lock replacement, legacy status normalization, service-level lock coverage, explicit lifecycle transitions, sanitized failure, overlap/stale/retry/cache/DB-integrity coverage, and full deterministic gates.
+- freeze: committed `2c232fa163c67d8af87e3d039affd11187a5c814` (`Qualify M4-C robust run semantics`) and created local annotated tag `m4c-qualified` with tag object `256cdd6348dc76c05a92dc33d602ee691498ab5c`.
+
+## M4-D Frozen Specification
+
+Goal: automatic operation is inspectable through lightweight digest run history.
+
+History data boundary:
+
+- History must correspond to durable `app_runs` identities.
+- Show completed, failed, analysis-unavailable, running, and recovered-failed lifecycle states from the normalized run-status read boundary.
+- Historical results must use persisted rows and must not rerun source retrieval, analyzer calls, calibration, or synthesis because current settings changed.
+- Do not implement M6 memory: no semantic history search, topic timelines, long-term trend inference, embeddings, or vector store.
+
+Persistence:
+
+- Add the minimal durable storage needed to show a historical run's digest/synthesis where available.
+- Store only local user-owned digest summary/synthesis data already produced by a run; no secrets or auth material.
+- Prefer storing compact JSON snapshots keyed by `run_id`.
+- Failed runs should display sanitized failure details from `app_runs.error_message`.
+- Existing historical rows without snapshots must display counts/status and an explicit unavailable-snapshot state rather than mutating or recomputing.
+
+UI:
+
+- Add a Streamlit History view to release navigation.
+- Show recent runs in reverse chronological order with date/time, status, profile/source, retrieved/analyzed/relevant counts, and sanitized failure summary when present.
+- Selecting a historical run should show its persisted digest/synthesis snapshot where available.
+- Use reasonable pagination or a bounded limit.
+- Do not duplicate business logic in Streamlit; UI should call a non-UI history/query boundary.
+
+Tests required before M4-D freeze:
+
+- run history list maps normalized durable run statuses and counts
+- completed digest run writes an immutable snapshot linked to run id
+- failed run displays sanitized error and no fabricated snapshot
+- current profile/source setting changes do not mutate historical snapshots
+- pagination/limit behavior
+- Streamlit History navigation exists
+- existing M2/M4-A/M4-B/M4-C deterministic tests remain green
+
+Live verification required before M4-D freeze:
+
+- isolated headless run with fake source/analyzer creates a visible history entry and snapshot
+- isolated failed run creates a visible failed history entry with sanitized error
+
+## M4-D Candidate Log
+
+- implementation: added `run_snapshots` table keyed by `run_id`, compact JSON snapshot persistence, and non-UI `research_digest.history` list/detail helpers.
+- service boundary: successful per-profile digest runs persist snapshots after valid digest/synthesis creation; failed runs do not fabricate snapshots.
+- UI: added Streamlit History navigation/page backed by the history helper module, with bounded run limit, status/count/error display, and persisted snapshot detail.
+- immutability: tests verify current profile changes do not mutate prior snapshots.
+- deterministic verification: `pytest` 94 passed; `ruff check .` PASS; strict `mypy --no-incremental src tests` PASS; `compileall -q src tests` PASS; `git diff --check` PASS.
+- live history smoke: isolated successful and failed history-entry tests passed against temporary SQLite DB.
+- fresh Auditor: PASS with no BLOCKER/IMPORTANT findings. Auditor verified durable `app_runs` identity, immutable run snapshots, failed-run handling without fabricated snapshots, unavailable-snapshot display for older rows, History navigation, no M6-style memory/search/timelines, and full deterministic gates.
 
 Freeze criteria:
 
-- fresh independent read-only M4-C audit PASS
+- fresh independent read-only M4-D audit PASS
 - `pytest`, `ruff check .`, `mypy --no-incremental src tests`, `compileall -q src tests`, and `git diff --check` PASS
 - staged inventory excludes `research_digest.sqlite3`, `.venv`, `.env`/secrets, caches, and local agent/runtime state
-- commit and annotated local tag `m4c-qualified`
+- commit and annotated local tag `m4d-qualified`

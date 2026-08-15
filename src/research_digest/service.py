@@ -10,6 +10,7 @@ from research_digest.analysis.base import LLMAnalyzer
 from research_digest.calibration import CalibrationSummary, build_calibration_summary
 from research_digest.db import Database
 from research_digest.errors import sanitize_error
+from research_digest.history import persist_run_snapshot
 from research_digest.models import DigestResult, profile_semantic_fingerprint
 from research_digest.pipeline import DigestPipelineError, run_digest
 from research_digest.preselection import AbstractPreselector
@@ -116,13 +117,15 @@ def run_digest_for_profile(
         now=now,
         preselector=preselector,
     )
+    synthesis = build_cross_paper_synthesis(
+        items=digest.items,
+        threshold=digest.profile.relevance_threshold,
+    )
+    persist_run_snapshot(db=db, digest=digest, synthesis=synthesis)
     return ProfileDigestRun(
         digest=digest,
         calibration=_build_calibration(db, digest),
-        synthesis=build_cross_paper_synthesis(
-            items=digest.items,
-            threshold=digest.profile.relevance_threshold,
-        ),
+        synthesis=synthesis,
     )
 
 

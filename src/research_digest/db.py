@@ -156,6 +156,13 @@ class Database:
                     acquired_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS run_snapshots (
+                    run_id INTEGER PRIMARY KEY,
+                    snapshot_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(run_id) REFERENCES app_runs(id) ON DELETE CASCADE
+                );
                 """
             )
             row = conn.execute(
@@ -505,6 +512,25 @@ class Database:
                     ),
                 ).fetchall()
             )
+
+    def save_run_snapshot(self, *, run_id: int, snapshot_json: str) -> None:
+        with self._connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO run_snapshots (run_id, snapshot_json, created_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(run_id) DO NOTHING
+                """,
+                (run_id, snapshot_json, datetime_to_db(utc_now())),
+            )
+
+    def get_run_snapshot(self, *, run_id: int) -> sqlite3.Row | None:
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM run_snapshots WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+        return cast(sqlite3.Row | None, row)
 
     def acquire_run_lock(
         self,

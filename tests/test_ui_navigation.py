@@ -35,10 +35,13 @@ class NavigationTests(unittest.TestCase):
     def test_pages_have_stable_unique_url_paths(self) -> None:
         pages = app._build_pages(FakeStreamlit())
 
-        self.assertEqual([page.title for page in pages], ["Today", "Interests", "Sources"])
+        self.assertEqual(
+            [page.title for page in pages],
+            ["Today", "History", "Interests", "Sources"],
+        )
         self.assertEqual(
             [page.effective_url_path for page in pages],
-            ["", "interests", "sources"],
+            ["", "history", "interests", "sources"],
         )
         self.assertEqual(
             len({page.effective_url_path for page in pages}),

@@ -114,6 +114,66 @@ Final Worker verification before freeze:
 - `compileall -q src tests`: PASS.
 - `git diff --check`: PASS.
 
+M4-C freeze:
+
+- qualified commit: `2c232fa163c67d8af87e3d039affd11187a5c814`.
+- qualified tag: `m4c-qualified`.
+- qualified tag object: `256cdd6348dc76c05a92dc33d602ee691498ab5c`.
+- post-freeze Git state: local `master` is 3 commits ahead of `origin/master`; online remote inspection remains blocked by DNS/network limits in this session.
+
+## M4-D Specification Freeze
+
+M4-D is frozen as lightweight digest History backed by durable run identities and persisted run snapshots where available.
+
+The History view must show completed/failed digest runs and persisted digest/synthesis snapshots without recomputing historical results from current settings.
+
+The detailed frozen specification is maintained in `docs/campaigns/release1/CAMPAIGN_STATE.md`.
+
+## M4-D Candidate
+
+Implementation summary:
+
+- Added `run_snapshots` storage keyed by durable `app_runs.id`.
+- Added `research_digest.history` for immutable snapshot construction, snapshot persistence, bounded run listing, and detail loading.
+- Successful per-profile service runs persist snapshots only after a valid digest and synthesis are available.
+- Failed runs retain sanitized `app_runs.error_message` and do not create fabricated snapshots.
+- Added a History Streamlit page and navigation entry.
+
+Deterministic verification:
+
+- `pytest`: 94 passed.
+- `ruff check .`: PASS.
+- strict `mypy --no-incremental src tests`: PASS.
+- `compileall -q src tests`: PASS.
+- `git diff --check`: PASS.
+
+Focused coverage added:
+
+- completed digest run writes a snapshot linked to run id.
+- failed run appears in history with sanitized error and no snapshot.
+- current profile changes do not mutate historical snapshots.
+- bounded history limit.
+- History navigation exists.
+
+Live verification:
+
+- Isolated successful and failed history smoke using deterministic fake source/analyzer and temporary SQLite DB passed:
+  `pytest tests/test_history.py::HistoryTests::test_completed_digest_run_writes_history_snapshot tests/test_history.py::HistoryTests::test_failed_run_has_sanitized_history_without_snapshot -q`.
+
+Audit status:
+
+- Fresh independent M4-D Auditor returned PASS with no BLOCKER/IMPORTANT findings.
+- Auditor verified durable `app_runs` identity, immutable run snapshots, failed-run handling without fabricated snapshots, unavailable-snapshot display for older rows, History navigation, no M6-style memory/search/timelines, and full deterministic gates.
+
+Auditor verification:
+
+- full `pytest -q -p no:cacheprovider`: 94 passed, 9 subtests passed.
+- `ruff check .`: PASS.
+- strict `mypy --no-incremental src tests`: PASS.
+- `compileall -q src tests`: PASS.
+- `git diff --check`: PASS.
+- independent temp-DB probe for legacy status normalization and snapshot absence/presence: PASS.
+
 Data-safety note:
 
 - During re-audit, the auditor reported one accidental manual CLI smoke without `RESEARCH_DIGEST_DB`; it likely wrote one runtime run record to ignored repo-local `research_digest.sqlite3`.
