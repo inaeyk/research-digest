@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -26,6 +26,9 @@ from research_digest.models import (
 )
 
 SOURCE_ARXIV = "arxiv"
+SCHEMA_VERSION_KEY = "schema_version"
+LAST_MIGRATION_BACKUP_KEY = "last_migration_backup_path"
+CURRENT_SCHEMA_VERSION = 4
 APP_RUN_STARTING = "STARTING"
 APP_RUN_RUNNING = "RUNNING"
 APP_RUN_COMPLETED = "COMPLETED"
@@ -42,11 +45,26 @@ class RunAlreadyActiveError(RunLockError):
     """Raised when another digest run is already active."""
 
 
+class MigrationError(RuntimeError):
+    """Raised when a database schema migration cannot complete safely."""
+
+    def __init__(self, message: str, *, backup_path: Path | None = None) -> None:
+        super().__init__(message)
+        self.backup_path = backup_path
+
+
 @dataclass(frozen=True)
 class RunLock:
     name: str
     owner: str
     acquired_at: datetime
+
+
+@dataclass(frozen=True)
+class SchemaMigration:
+    version: int
+    name: str
+    apply: Callable[[sqlite3.Connection], None]
 
 
 class Database:
@@ -58,122 +76,63 @@ class Database:
     """
 
     def __init__(self, path: str | Path) -> None:
-        self.path = path
+        self.path = Path(path)
+        self.last_migration_backup_path: Path | None = None
         self.initialize()
 
     def close(self) -> None:
         """Retained for callers; operation-scoped connections close themselves."""
 
     def initialize(self) -> None:
-        with self._connection() as conn:
-            conn.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS interest_profiles (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name TEXT NOT NULL,
-                    description TEXT NOT NULL,
-                    relevance_threshold REAL NOT NULL,
-                    enabled INTEGER NOT NULL,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS source_configs (
-                    source_name TEXT PRIMARY KEY,
-                    enabled INTEGER NOT NULL,
-                    categories_json TEXT NOT NULL,
-                    lookback_hours INTEGER NOT NULL,
-                    max_results INTEGER NOT NULL,
-                    updated_at TEXT NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS articles (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    source TEXT NOT NULL,
-                    source_article_id TEXT NOT NULL,
-                    title TEXT NOT NULL,
-                    authors_json TEXT NOT NULL,
-                    abstract TEXT NOT NULL,
-                    categories_json TEXT NOT NULL,
-                    published_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    abstract_url TEXT NOT NULL,
-                    pdf_url TEXT,
-                    created_at TEXT NOT NULL,
-                    UNIQUE(source, source_article_id)
-                );
-
-                CREATE TABLE IF NOT EXISTS relevance_analyses (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    article_id INTEGER NOT NULL,
-                    profile_id INTEGER NOT NULL,
-                    profile_fingerprint TEXT NOT NULL,
-                    relevance_score REAL NOT NULL,
-                    relevance_reason TEXT NOT NULL,
-                    matched_topics_json TEXT NOT NULL,
-                    summary TEXT NOT NULL,
-                    why_it_matters TEXT NOT NULL,
-                    reading_priority TEXT NOT NULL,
-                    analyzed_at TEXT NOT NULL,
-                    UNIQUE(article_id, profile_id, profile_fingerprint),
-                    FOREIGN KEY(article_id) REFERENCES articles(id) ON DELETE CASCADE,
-                    FOREIGN KEY(profile_id) REFERENCES interest_profiles(id) ON DELETE CASCADE
-                );
-
-                CREATE TABLE IF NOT EXISTS article_feedback (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    article_id INTEGER NOT NULL,
-                    profile_id INTEGER NOT NULL,
-                    profile_fingerprint TEXT NOT NULL,
-                    feedback_label TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    UNIQUE(article_id, profile_id, profile_fingerprint),
-                    FOREIGN KEY(article_id) REFERENCES articles(id) ON DELETE CASCADE,
-                    FOREIGN KEY(profile_id) REFERENCES interest_profiles(id) ON DELETE CASCADE
-                );
-
-                CREATE TABLE IF NOT EXISTS app_runs (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    profile_id INTEGER,
-                    source_name TEXT NOT NULL,
-                    started_at TEXT NOT NULL,
-                    completed_at TEXT,
-                    status TEXT NOT NULL,
-                    retrieved_count INTEGER NOT NULL DEFAULT 0,
-                    stored_count INTEGER NOT NULL DEFAULT 0,
-                    preselected_count INTEGER NOT NULL DEFAULT 0,
-                    skipped_analysis_count INTEGER NOT NULL DEFAULT 0,
-                    analyzed_count INTEGER NOT NULL DEFAULT 0,
-                    relevant_count INTEGER NOT NULL DEFAULT 0,
-                    error_message TEXT,
-                    FOREIGN KEY(profile_id) REFERENCES interest_profiles(id) ON DELETE SET NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS run_locks (
-                    name TEXT PRIMARY KEY,
-                    owner TEXT NOT NULL,
-                    acquired_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS run_snapshots (
-                    run_id INTEGER PRIMARY KEY,
-                    snapshot_json TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    FOREIGN KEY(run_id) REFERENCES app_runs(id) ON DELETE CASCADE
-                );
-                """
+        self.last_migration_backup_path = None
+        old_version = self._read_schema_version_if_present()
+        if old_version > CURRENT_SCHEMA_VERSION:
+            raise MigrationError(
+                f"database schema version {old_version} is newer than supported "
+                f"version {CURRENT_SCHEMA_VERSION}"
             )
-            row = conn.execute(
-                "SELECT 1 FROM source_configs WHERE source_name = ?",
-                (SOURCE_ARXIV,),
-            ).fetchone()
-            if row is None:
-                _save_arxiv_config(conn, ArxivSourceConfig())
-            _migrate_relevance_analysis_profile_fingerprints(conn)
-            _migrate_app_run_preselection_counts(conn)
-            _sanitize_existing_app_run_errors(conn)
+        if old_version < CURRENT_SCHEMA_VERSION and self._has_existing_schema():
+            self.last_migration_backup_path = _backup_database(
+                self.path,
+                from_version=old_version,
+                to_version=CURRENT_SCHEMA_VERSION,
+            )
+        try:
+            with self._immediate_connection() as conn:
+                _apply_schema_migrations(
+                    conn,
+                    old_version=old_version,
+                    backup_path=self.last_migration_backup_path,
+                )
+        except Exception as exc:
+            if self.last_migration_backup_path is not None:
+                raise MigrationError(
+                    "database migration failed; the pre-migration backup is recoverable at "
+                    f"{self.last_migration_backup_path}",
+                    backup_path=self.last_migration_backup_path,
+                ) from exc
+            raise
+
+    def get_schema_version(self) -> int:
+        with self._connection() as conn:
+            return _get_schema_version(conn)
+
+    def get_last_migration_backup_path(self) -> Path | None:
+        with self._connection() as conn:
+            value = _get_metadata_value(conn, LAST_MIGRATION_BACKUP_KEY)
+        return Path(value) if value else None
+
+    def _read_schema_version_if_present(self) -> int:
+        if not self.path.exists() or self.path.stat().st_size == 0:
+            return 0
+        with self._connection() as conn:
+            return _get_schema_version(conn)
+
+    def _has_existing_schema(self) -> bool:
+        if not self.path.exists() or self.path.stat().st_size == 0:
+            return False
+        with self._connection() as conn:
+            return _connection_has_existing_schema(conn)
 
     def list_interest_profiles(self, *, enabled_only: bool = False) -> list[InterestProfile]:
         sql = "SELECT * FROM interest_profiles"
@@ -606,6 +565,280 @@ class Database:
             conn.close()
 
 
+def _apply_schema_migrations(
+    conn: sqlite3.Connection,
+    *,
+    old_version: int,
+    backup_path: Path | None,
+) -> None:
+    if old_version > CURRENT_SCHEMA_VERSION:
+        raise MigrationError(
+            f"database schema version {old_version} is newer than supported "
+            f"version {CURRENT_SCHEMA_VERSION}"
+        )
+
+    _create_schema_metadata_table(conn)
+    current_version = _get_schema_version(conn)
+    if current_version != old_version:
+        raise MigrationError(
+            "database schema version changed while initialization was in progress"
+        )
+
+    for migration in MIGRATIONS:
+        if migration.version <= old_version:
+            continue
+        migration.apply(conn)
+        _set_schema_version(conn, migration.version)
+
+    if backup_path is not None:
+        _set_metadata_value(conn, LAST_MIGRATION_BACKUP_KEY, str(backup_path))
+    _ensure_default_source_config(conn)
+
+
+def _create_schema_metadata_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS schema_metadata (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+
+
+def _get_schema_version(conn: sqlite3.Connection) -> int:
+    value = _get_metadata_value(conn, SCHEMA_VERSION_KEY)
+    if value is None:
+        return 0
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise MigrationError("database schema version metadata is invalid") from exc
+
+
+def _set_schema_version(conn: sqlite3.Connection, version: int) -> None:
+    _set_metadata_value(conn, SCHEMA_VERSION_KEY, str(version))
+
+
+def _get_metadata_value(conn: sqlite3.Connection, key: str) -> str | None:
+    if not _table_exists(conn, "schema_metadata"):
+        return None
+    row = conn.execute(
+        "SELECT value FROM schema_metadata WHERE key = ?",
+        (key,),
+    ).fetchone()
+    return str(row["value"]) if row is not None else None
+
+
+def _set_metadata_value(conn: sqlite3.Connection, key: str, value: str) -> None:
+    conn.execute(
+        """
+        INSERT INTO schema_metadata (key, value, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+            value = excluded.value,
+            updated_at = excluded.updated_at
+        """,
+        (key, value, datetime_to_db(utc_now())),
+    )
+
+
+def _backup_database(path: Path, *, from_version: int, to_version: int) -> Path:
+    timestamp = utc_now().strftime("%Y%m%dT%H%M%SZ")
+    backup_path = path.with_name(
+        f"{path.name}.backup-v{from_version}-to-v{to_version}-{timestamp}.sqlite3"
+    )
+    counter = 1
+    while backup_path.exists():
+        backup_path = path.with_name(
+            f"{path.name}.backup-v{from_version}-to-v{to_version}-{timestamp}-{counter}.sqlite3"
+        )
+        counter += 1
+
+    source = sqlite3.connect(path)
+    try:
+        destination = sqlite3.connect(backup_path)
+        try:
+            source.backup(destination)
+            destination.commit()
+        finally:
+            destination.close()
+    finally:
+        source.close()
+    return backup_path
+
+
+def _connection_has_existing_schema(conn: sqlite3.Connection) -> bool:
+    rows = conn.execute(
+        """
+        SELECT name FROM sqlite_master
+        WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+        """
+    ).fetchall()
+    return len(rows) > 0
+
+
+def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table_name,),
+    ).fetchone()
+    return row is not None
+
+
+def _ensure_default_source_config(conn: sqlite3.Connection) -> None:
+    row = conn.execute(
+        "SELECT 1 FROM source_configs WHERE source_name = ?",
+        (SOURCE_ARXIV,),
+    ).fetchone()
+    if row is None:
+        _save_arxiv_config(conn, ArxivSourceConfig())
+
+
+def _execute_schema_statements(conn: sqlite3.Connection, statements: Sequence[str]) -> None:
+    for statement in statements:
+        conn.execute(statement)
+
+
+def _migration_core_tables(conn: sqlite3.Connection) -> None:
+    _execute_schema_statements(
+        conn,
+        (
+            """
+            CREATE TABLE IF NOT EXISTS interest_profiles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            description TEXT NOT NULL,
+            relevance_threshold REAL NOT NULL,
+            enabled INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS source_configs (
+            source_name TEXT PRIMARY KEY,
+            enabled INTEGER NOT NULL,
+            categories_json TEXT NOT NULL,
+            lookback_hours INTEGER NOT NULL,
+            max_results INTEGER NOT NULL,
+            updated_at TEXT NOT NULL
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS articles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source TEXT NOT NULL,
+            source_article_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            authors_json TEXT NOT NULL,
+            abstract TEXT NOT NULL,
+            categories_json TEXT NOT NULL,
+            published_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            abstract_url TEXT NOT NULL,
+            pdf_url TEXT,
+            created_at TEXT NOT NULL,
+            UNIQUE(source, source_article_id)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS relevance_analyses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            article_id INTEGER NOT NULL,
+            profile_id INTEGER NOT NULL,
+            relevance_score REAL NOT NULL,
+            relevance_reason TEXT NOT NULL,
+            matched_topics_json TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            why_it_matters TEXT NOT NULL,
+            reading_priority TEXT NOT NULL,
+            analyzed_at TEXT NOT NULL,
+            UNIQUE(article_id, profile_id),
+            FOREIGN KEY(article_id) REFERENCES articles(id) ON DELETE CASCADE,
+            FOREIGN KEY(profile_id) REFERENCES interest_profiles(id) ON DELETE CASCADE
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS article_feedback (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            article_id INTEGER NOT NULL,
+            profile_id INTEGER NOT NULL,
+            profile_fingerprint TEXT NOT NULL,
+            feedback_label TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(article_id, profile_id, profile_fingerprint),
+            FOREIGN KEY(article_id) REFERENCES articles(id) ON DELETE CASCADE,
+            FOREIGN KEY(profile_id) REFERENCES interest_profiles(id) ON DELETE CASCADE
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS app_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            profile_id INTEGER,
+            source_name TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            completed_at TEXT,
+            status TEXT NOT NULL,
+            retrieved_count INTEGER NOT NULL DEFAULT 0,
+            stored_count INTEGER NOT NULL DEFAULT 0,
+            analyzed_count INTEGER NOT NULL DEFAULT 0,
+            relevant_count INTEGER NOT NULL DEFAULT 0,
+            error_message TEXT,
+            FOREIGN KEY(profile_id) REFERENCES interest_profiles(id) ON DELETE SET NULL
+            )
+            """,
+        ),
+    )
+
+
+def _migration_profile_fingerprints(conn: sqlite3.Connection) -> None:
+    _migrate_relevance_analysis_profile_fingerprints(conn)
+
+
+def _migration_preselection_counts(conn: sqlite3.Connection) -> None:
+    _migrate_app_run_preselection_counts(conn)
+
+
+def _migration_run_lifecycle_history(conn: sqlite3.Connection) -> None:
+    _execute_schema_statements(
+        conn,
+        (
+            """
+            CREATE TABLE IF NOT EXISTS run_locks (
+            name TEXT PRIMARY KEY,
+            owner TEXT NOT NULL,
+            acquired_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS run_snapshots (
+            run_id INTEGER PRIMARY KEY,
+            snapshot_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(run_id) REFERENCES app_runs(id) ON DELETE CASCADE
+            )
+            """,
+        ),
+    )
+    _sanitize_existing_app_run_errors(conn)
+
+
+MIGRATIONS: Sequence[SchemaMigration] = (
+    SchemaMigration(1, "core m1/m2 tables", _migration_core_tables),
+    SchemaMigration(2, "profile-fingerprinted relevance analyses", _migration_profile_fingerprints),
+    SchemaMigration(3, "preselection run counters", _migration_preselection_counts),
+    SchemaMigration(
+        4,
+        "run lifecycle locks and history snapshots",
+        _migration_run_lifecycle_history,
+    ),
+)
+
+
 def _get_interest_profile(conn: sqlite3.Connection, profile_id: int) -> InterestProfile | None:
     row = conn.execute(
         "SELECT * FROM interest_profiles WHERE id = ?",
@@ -682,6 +915,8 @@ def _sanitize_existing_app_run_errors(conn: sqlite3.Connection) -> None:
 
 
 def _migrate_app_run_preselection_counts(conn: sqlite3.Connection) -> None:
+    if not _table_exists(conn, "app_runs"):
+        return
     columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(app_runs)").fetchall()}
     if "preselected_count" not in columns:
         conn.execute(
@@ -694,6 +929,8 @@ def _migrate_app_run_preselection_counts(conn: sqlite3.Connection) -> None:
 
 
 def _migrate_relevance_analysis_profile_fingerprints(conn: sqlite3.Connection) -> None:
+    if not _table_exists(conn, "relevance_analyses"):
+        return
     if not _analysis_table_needs_profile_fingerprint_migration(conn):
         return
 

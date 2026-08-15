@@ -263,6 +263,51 @@ Re-auditor verification:
 - `git diff --check m4d-qualified --`: PASS.
 - independent temp probes: interrupted adoption repair PASS; provider no-adoption PASS; scheduler active DB path PASS; M2-era style DB adoption PASS.
 
+M7-A freeze:
+
+- qualified commit: `62d6ed4a3902a929d94d6612edc74af0a18cd7a1`.
+- qualified tag: `m7a-qualified`.
+- qualified tag object: `7a8e3da4ffa79570b5d6748f43a2a586a2268b5e`.
+- post-freeze Git state: local `master` is 5 commits ahead of `origin/master`; online remote inspection remains blocked by DNS/network limits in this session.
+
+## M7-B Specification Freeze
+
+M7-B is frozen as explicit versioned SQLite schema migrations with migration backups and failure-safe upgrade behavior.
+
+The implementation must persist schema version, apply ordered deterministic migrations, back up before schema-changing upgrades, fail without destroying the previous usable DB, and validate fresh/current/M2-era/failed-upgrade paths.
+
+The detailed frozen specification is maintained in `docs/campaigns/release1/CAMPAIGN_STATE.md`.
+
+## M7-B Candidate
+
+Implementation summary:
+
+- Added durable SQLite schema metadata with `CURRENT_SCHEMA_VERSION`.
+- Replaced startup schema setup with a small ordered `SchemaMigration` sequence.
+- Preserved legacy M2-era repairs for relevance-analysis profile fingerprints and app-run preselection counters as ordered migrations.
+- Added recoverable SQLite backup creation before schema-changing upgrades of existing unversioned/older databases.
+- Exposed schema version and last migration backup path through the database boundary.
+- Added migration failure handling that rolls back active DB mutations and raises `MigrationError` with the backup path.
+
+Deterministic verification:
+
+- `pytest`: 103 passed.
+- `ruff check .`: PASS.
+- strict `mypy --strict src tests`: PASS.
+- `compileall -q src tests`: PASS.
+- `git diff --check`: PASS.
+
+Live/data-safety verification:
+
+- isolated M2-era style SQLite upgrade smoke passed using a temporary database copy.
+- upgraded database and migration backup both passed SQLite `PRAGMA integrity_check = ok`.
+- repo-local `research_digest.sqlite3` was not used for upgrade testing.
+
+Audit:
+
+- fresh independent read-only M7-B Auditor: PASS with no BLOCKER/IMPORTANT findings.
+- auditor MINOR about stale freeze-criteria wording in `CAMPAIGN_STATE.md` was repaired before freeze.
+
 Data-safety note:
 
 - During re-audit, the auditor reported one accidental manual CLI smoke without `RESEARCH_DIGEST_DB`; it likely wrote one runtime run record to ignored repo-local `research_digest.sqlite3`.

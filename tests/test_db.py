@@ -7,13 +7,18 @@ import threading
 import unittest
 from datetime import UTC, datetime
 from pathlib import Path
+from unittest import mock
 
+from research_digest import db as db_module
 from research_digest.db import (
     APP_RUN_ANALYSIS_UNAVAILABLE,
     APP_RUN_COMPLETED,
     APP_RUN_FAILED,
     APP_RUN_RUNNING,
+    CURRENT_SCHEMA_VERSION,
     Database,
+    MigrationError,
+    SchemaMigration,
 )
 from research_digest.models import (
     AnalysisResult,
@@ -39,6 +44,14 @@ def sample_article(source_article_id: str = "2608.00001") -> Article:
         abstract_url=f"http://arxiv.org/abs/{source_article_id}",
         pdf_url=f"http://arxiv.org/pdf/{source_article_id}",
     )
+
+
+def assert_sqlite_integrity(test_case: unittest.TestCase, path: Path) -> None:
+    with sqlite3.connect(path) as conn:
+        row = conn.execute("PRAGMA integrity_check").fetchone()
+    test_case.assertIsNotNone(row)
+    assert row is not None
+    test_case.assertEqual(row[0], "ok")
 
 
 class DatabaseTests(unittest.TestCase):
@@ -71,6 +84,41 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(updated.categories, ["math-ph"])
         self.assertEqual(updated.lookback_hours, 12)
         self.assertEqual(updated.max_results, 10)
+
+    def test_fresh_database_records_current_schema_version(self) -> None:
+        self.assertEqual(self.db.get_schema_version(), CURRENT_SCHEMA_VERSION)
+        self.assertIsNone(self.db.last_migration_backup_path)
+
+    def test_current_database_reopen_is_idempotent_without_backup(self) -> None:
+        created = self.db.create_interest_profile(
+            name="Gravity",
+            description="Higher-dimensional gravity and black branes.",
+        )
+        reopened = Database(self.db.path)
+        self.addCleanup(reopened.close)
+
+        self.assertEqual(reopened.get_schema_version(), CURRENT_SCHEMA_VERSION)
+        self.assertIsNone(reopened.last_migration_backup_path)
+        self.assertIsNone(reopened.get_last_migration_backup_path())
+        self.assertEqual(reopened.list_interest_profiles(), [created])
+
+    def test_unknown_future_schema_version_fails_clearly(self) -> None:
+        future_path = Path(self.tmpdir.name) / "future.sqlite3"
+        with sqlite3.connect(future_path) as conn:
+            conn.executescript(
+                """
+                CREATE TABLE schema_metadata (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                INSERT INTO schema_metadata (key, value, updated_at)
+                VALUES ('schema_version', '999', '2026-08-14T00:00:00Z');
+                """
+            )
+
+        with self.assertRaisesRegex(MigrationError, "newer than supported"):
+            Database(future_path)
 
     def test_interest_crud(self) -> None:
         created = self.db.create_interest_profile(
@@ -296,6 +344,15 @@ class DatabaseTests(unittest.TestCase):
             )
 
         migrated_db = Database(legacy_path)
+        self.assertEqual(migrated_db.get_schema_version(), CURRENT_SCHEMA_VERSION)
+        self.assertIsNotNone(migrated_db.last_migration_backup_path)
+        assert migrated_db.last_migration_backup_path is not None
+        self.assertTrue(migrated_db.last_migration_backup_path.exists())
+        assert_sqlite_integrity(self, migrated_db.last_migration_backup_path)
+        self.assertEqual(
+            migrated_db.get_last_migration_backup_path(),
+            migrated_db.last_migration_backup_path,
+        )
         profile = migrated_db.get_interest_profile(1)
         self.assertIsNotNone(profile)
         assert profile is not None
@@ -379,6 +436,15 @@ class DatabaseTests(unittest.TestCase):
             )
 
         migrated_db = Database(legacy_path)
+        self.assertEqual(migrated_db.get_schema_version(), CURRENT_SCHEMA_VERSION)
+        self.assertIsNotNone(migrated_db.last_migration_backup_path)
+        assert migrated_db.last_migration_backup_path is not None
+        self.assertTrue(migrated_db.last_migration_backup_path.exists())
+        assert_sqlite_integrity(self, migrated_db.last_migration_backup_path)
+        self.assertEqual(
+            migrated_db.get_last_migration_backup_path(),
+            migrated_db.last_migration_backup_path,
+        )
         runs = migrated_db.get_app_runs()
 
         self.assertEqual(runs[-1]["preselected_count"], 0)
@@ -392,6 +458,63 @@ class DatabaseTests(unittest.TestCase):
                 4: APP_RUN_ANALYSIS_UNAVAILABLE,
             },
         )
+
+    def test_migration_failure_leaves_recoverable_backup_and_old_db(self) -> None:
+        legacy_path = Path(self.tmpdir.name) / "failing_migration.sqlite3"
+        with sqlite3.connect(legacy_path) as conn:
+            conn.executescript(
+                """
+                CREATE TABLE schema_metadata (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE interest_profiles (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    relevance_threshold REAL NOT NULL,
+                    enabled INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                INSERT INTO schema_metadata (key, value, updated_at)
+                VALUES ('schema_version', '1', '2026-08-14T00:00:00Z');
+                INSERT INTO interest_profiles (
+                    id, name, description, relevance_threshold, enabled, created_at, updated_at
+                )
+                VALUES (
+                    1, 'Gravity', 'Higher-dimensional gravity.', 0.6, 1,
+                    '2026-08-14T00:00:00Z', '2026-08-14T00:00:00Z'
+                );
+                """
+            )
+
+        def fail_migration(conn: sqlite3.Connection) -> None:
+            conn.execute("CREATE TABLE transient_migration_table (id INTEGER PRIMARY KEY)")
+            raise RuntimeError("forced migration failure")
+
+        with mock.patch.object(
+            db_module,
+            "MIGRATIONS",
+            (SchemaMigration(2, "forced failure", fail_migration),),
+        ), self.assertRaises(MigrationError) as caught:
+            Database(legacy_path)
+
+        self.assertIsNotNone(caught.exception.backup_path)
+        assert caught.exception.backup_path is not None
+        self.assertTrue(caught.exception.backup_path.exists())
+        assert_sqlite_integrity(self, caught.exception.backup_path)
+        with sqlite3.connect(legacy_path) as conn:
+            row = conn.execute("SELECT name FROM interest_profiles WHERE id = 1").fetchone()
+            transient = conn.execute(
+                """
+                SELECT 1 FROM sqlite_master
+                WHERE type = 'table' AND name = 'transient_migration_table'
+                """
+            ).fetchone()
+        self.assertEqual(row[0], "Gravity")
+        self.assertIsNone(transient)
 
 
 if __name__ == "__main__":

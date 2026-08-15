@@ -1,11 +1,11 @@
 # Release 1 Campaign State
 
-- current_substage: M7-A candidate audit
+- current_substage: M7-B candidate freeze
 - status: ACTIVE
-- current_git_head: ee280f439b9df3d5478779e33dd55995dabcc9fc
-- current_tags_at_head: m4d-qualified
+- current_git_head: 62d6ed4a3902a929d94d6612edc74af0a18cd7a1
+- current_tags_at_head: m7a-qualified
 - current_branch: master
-- local_remote_tracking: `master` tracks `origin/master`; local branch is 4 commits ahead after M4-D freeze
+- local_remote_tracking: `master` tracks `origin/master`; local branch is 5 commits ahead after M7-A freeze
 - online_remote_verification: attempted `git ls-remote --heads --tags origin`; blocked by DNS resolution failure for `github.com` even after network escalation
 - baseline_m1_qualified_commit: 36bd1cbe60f95d588e8ccdd41bfce914e9b1d7da
 - baseline_m1_qualified_tag: m1-qualified
@@ -29,15 +29,18 @@
 - m4d_qualified_commit: ee280f439b9df3d5478779e33dd55995dabcc9fc
 - m4d_qualified_tag: m4d-qualified
 - m4d_qualified_tag_object: 0ae15c90d886fd9d03c3cf8d3c4f519fc57b5955
+- m7a_qualified_commit: 62d6ed4a3902a929d94d6612edc74af0a18cd7a1
+- m7a_qualified_tag: m7a-qualified
+- m7a_qualified_tag_object: 7a8e3da4ffa79570b5d6748f43a2a586a2268b5e
 - skipped_campaigns: M3 additional source types; M5 full-paper reading; M6 long-term research memory
 - active_campaign_scope: M4 automatic daily operation; M7 release engineering, upgradeability, and productization; first release candidate
-- qualification_status: M7A_REAUDIT_PASS_READY_FREEZE
-- audit_repair_round: 1
-- last_deterministic_verification: M7-A repair round 1 full gate: `pytest` 99 passed; `ruff check .` PASS; strict `mypy --no-incremental src tests` PASS; `compileall -q src tests` PASS; `git diff --check` PASS.
-- last_live_verification: M7-A isolated adoption smoke `pytest tests/test_config.py::ConfigTests::test_legacy_db_is_adopted_when_user_data_db_is_missing tests/test_config.py::ConfigTests::test_existing_user_data_db_is_not_overwritten_by_legacy_db tests/test_config.py::ConfigTests::test_explicit_db_path_is_respected_and_disables_adoption -q` passed against temporary SQLite DB copies.
-- migration_data_safety_status: no release1 migrations applied yet; repo-local `research_digest.sqlite3` remains ignored and must not be used for upgrade tests. During M4-A re-audit, a manual CLI smoke likely wrote one runtime run record to the ignored repo-local DB; a content-free `PRAGMA integrity_check` returned `ok`.
+- qualification_status: M7B_AUDIT_PASS_READY_FREEZE
+- audit_repair_round: 0
+- last_deterministic_verification: M7-B candidate full gate: `pytest` 103 passed; `ruff check .` PASS; strict `mypy --strict src tests` PASS; `compileall -q src tests` PASS; `git diff --check` PASS.
+- last_live_verification: M7-B isolated M2-era style upgrade smoke passed using a temporary SQLite DB copy; upgraded DB and migration backup both returned SQLite `PRAGMA integrity_check = ok`.
+- migration_data_safety_status: M7-B candidate adds explicit schema version metadata, ordered migrations, backup before schema-changing upgrades of existing DBs, rollback on failed migration, and visible migration backup path. Repo-local `research_digest.sqlite3` remains ignored and was not used for upgrade testing.
 - deferred_minor_optional_findings: none
-- next_permitted_action: perform freeze hygiene, commit, and tag `m7a-qualified`
+- next_permitted_action: inspect Git hygiene, stage only qualified M7-B files, commit, and tag `m7b-qualified`
 - human_stop_reason: none
 
 ## M4-A Frozen Specification
@@ -363,10 +366,77 @@ Live verification required before M7-A freeze:
 - initial fresh Auditor: FAIL with one IMPORTANT finding. Legacy DB adoption copied directly to the final target path, so an interrupted copy could leave a partial DB accepted on the next startup. Auditor also noted MINOR stale M7-A freeze criteria wording and OpenAI provider DB-path side effect.
 - repair round 1: legacy adoption now copies to a temporary file, validates SQLite integrity, and atomically replaces the target. Invalid partial active DBs are repaired from a valid legacy DB or fail closed. `OpenAIAnalyzer` no longer calls full app config/DB-path setup when explicit/env API settings are enough.
 - fresh re-Auditor after repair round 1: PASS with no BLOCKER/IMPORTANT findings. Re-auditor verified failure-safe adoption, partial DB repair/fail-closed behavior, explicit DB override, provider no-adoption behavior, scheduler active DB path, ignored runtime state, full deterministic gates, and independent temporary probes.
+- freeze: committed `62d6ed4a3902a929d94d6612edc74af0a18cd7a1` (`Qualify M7-A separate user data`) and created local annotated tag `m7a-qualified` with tag object `7a8e3da4ffa79570b5d6748f43a2a586a2268b5e`.
+
+## M7-B Frozen Specification
+
+Goal: introduce explicit versioned SQLite schema migrations and recoverable backups before schema-changing upgrades.
+
+Versioning:
+
+- Persist schema version durably in SQLite.
+- Use deterministic ordered migrations with a small stable convention.
+- Current post-M7-A schema must become the baseline current version.
+- Fresh DB creation, M2-era DB upgrade, and already-current startup must all be deterministic and idempotent.
+
+Migration safety:
+
+- Before any schema-changing upgrade from an older version, create a recoverable SQLite backup.
+- Backup path must be visible to callers/tests without exposing DB contents.
+- Migrations should run transactionally where SQLite permits.
+- Failed migration must not destroy the previous usable DB.
+- Interrupted/error paths must fail closed or remain resumable.
+- Never test upgrade logic against the user's only live DB; use copies.
+
+Scope:
+
+- Do not introduce a heavyweight migration framework.
+- Preserve existing schema behavior unless a migration-safety defect requires a narrow repair.
+- M7-G will add user-facing backup/export; M7-B only needs migration safety backup plus stable migration foundation.
+
+Tests required before M7-B freeze:
+
+- fresh DB initializes at current schema version
+- current M2-era DB upgrades to current with expected tables/columns preserved
+- already-current DB startup is idempotent and creates no duplicate data
+- schema-changing migration creates a visible backup
+- migration failure leaves previous usable DB recoverable
+- interrupted/error path fails closed or resumes safely
+- backup restoration/recovery path validates with SQLite integrity check
+- existing M1/M2/M4/M7-A deterministic tests remain green
+
+Live verification required before M7-B freeze:
+
+- upgrade smoke using a copy of a qualified M2-era style DB
+- backup file opens and passes SQLite integrity check
 
 Freeze criteria:
 
-- fresh independent read-only M7-A audit PASS
+- fresh independent read-only M7-B audit PASS
 - `pytest`, `ruff check .`, `mypy --no-incremental src tests`, `compileall -q src tests`, and `git diff --check` PASS
 - staged inventory excludes `research_digest.sqlite3`, `.venv`, `.env`/secrets, caches, and local agent/runtime state
-- commit and annotated local tag `m7a-qualified`
+- commit and annotated local tag `m7b-qualified`
+
+Candidate implementation:
+
+- Added `CURRENT_SCHEMA_VERSION` and durable `schema_metadata` storage for the SQLite schema version.
+- Replaced startup ad hoc schema setup with a small ordered `SchemaMigration` convention.
+- Preserved legacy relevance-analysis and app-run column migrations inside the ordered sequence.
+- Added migration backup creation before schema-changing upgrades of existing unversioned/older DBs.
+- Exposed `Database.last_migration_backup_path`, `Database.get_schema_version()`, and `Database.get_last_migration_backup_path()`.
+- Failed migrations raise `MigrationError` with the recoverable backup path and roll back active DB mutations.
+
+Verification:
+
+- focused DB tests: `pytest tests/test_db.py` passed, 12 tests.
+- full test suite: `pytest` passed, 103 tests.
+- `ruff check .`: PASS.
+- strict `mypy --strict src tests`: PASS.
+- `python -m compileall -q src tests`: PASS.
+- `git diff --check`: PASS.
+- isolated M2-era style upgrade smoke: PASS; backup file opened and passed SQLite integrity check.
+
+Audit:
+
+- fresh independent read-only M7-B Auditor: PASS with no BLOCKER/IMPORTANT findings.
+- auditor MINOR about stale M7-B freeze-criteria wording was repaired before freeze.
