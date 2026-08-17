@@ -457,3 +457,11 @@ Audit state:
 - Deferred MINOR/OPTIONAL: context candidate eligibility can still spend prompt
   budget on a candidate whose only existing suggestion is collection-scoped and
   will later be skipped during assignment; no incorrect mutation occurs.
+
+Freeze state:
+
+- Qualified local commit:
+  `fad6b8425bc14a956fb22f26f68cc485e46f71b9`.
+- Qualified local annotated tag: `m6e-qualified`.
+- Tag object: `2d09e095434b6d7a258b65a47d892e0b339e2b50`.
+- Tag target: `fad6b8425bc14a956fb22f26f68cc485e46f71b9`.
