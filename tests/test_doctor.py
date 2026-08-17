@@ -61,6 +61,27 @@ class LeakySchedulerStatusBackend:
         )
 
 
+class StaleCodexPathSchedulerBackend:
+    def install(self, request: object) -> ScheduleOperationResult:
+        raise AssertionError("not used")
+
+    def remove(self, *, task_name: str) -> ScheduleOperationResult:
+        raise AssertionError("not used")
+
+    def status(self, *, task_name: str) -> ScheduleStatus:
+        return ScheduleStatus(
+            backend="test",
+            task_name=task_name,
+            installed=True,
+            timezone="test local time",
+            arguments=(
+                "-d Ubuntu --exec env "
+                "PATH=/old/node/bin:/usr/local/bin:/usr/bin "
+                "/tmp/venv/bin/research-digest run"
+            ),
+        )
+
+
 class DoctorTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmpdir = tempfile.TemporaryDirectory()
@@ -205,6 +226,23 @@ class DoctorTests(unittest.TestCase):
         self.assertNotIn("/home/" + "inaeyk", message)
         self.assertNotIn("sk-secret", message)
         self.assertIn("[REDACTED_API_KEY]", message)
+
+    def test_scheduler_warns_when_installed_codex_path_is_stale(self) -> None:
+        with mock.patch(
+            "shutil.which",
+            return_value="/home/me/.nvm/versions/node/v22.22.2/bin/codex",
+        ):
+            report = run_doctor(
+                config=self.config,
+                db=self.db,
+                scheduler_backend=StaleCodexPathSchedulerBackend(),
+            )
+
+        scheduler = _check(report.to_mapping(), "scheduler")
+        message = str(scheduler["message"])
+        self.assertEqual(scheduler["severity"], DoctorSeverity.WARNING)
+        self.assertIn("does not include the current Codex directory", message)
+        self.assertIn("/home/me/.nvm/versions/node/v22.22.2/bin", message)
 
     def test_network_check_runs_only_when_requested(self) -> None:
         calls: list[tuple[str, float]] = []

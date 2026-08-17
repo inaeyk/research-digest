@@ -839,6 +839,39 @@ Final-audit MINOR follow-up:
 - clarified README and release-candidate packet upgrade instructions: back up an already-current active DB with `research-digest backup --export-json`; for an older repo-local M2 database, first keep a separate copy of the SQLite file, let startup adopt/migrate the copied legacy DB and create the pre-migration backup, then use `research-digest backup --export-json` against the current active DB after migration.
 - final release-candidate commit after MINOR follow-up: `eadedb71b7a64302edb6ac6b7d1fbfe1d6bfbe95`.
 - final campaign state set to `RELEASE_CANDIDATE_COMPLETE_AWAITING_HUMAN`; no public release tag, push, GitHub release, package publication, or public release operation was performed.
+- that prior human-stop state was later reopened only for the live scheduler environment repair below; the prior RC commit is superseded pending repair audit, local repair commit, and human live scheduler smoke.
+
+## Release-Candidate Scheduler Environment Repair
+
+Live finding:
+
+- interactive WSL resolved Codex at `/home/inaeyk/.nvm/versions/node/v22.22.2/bin/codex` and `codex login status` reported ChatGPT login.
+- manual installed-CLI execution completed a subscription-backed Codex digest on new papers.
+- the Windows Task Scheduler action ran WSL in a non-login environment whose `PATH` did not include the NVM directory containing Codex.
+- the scheduled smoke produced `ANALYSIS_UNAVAILABLE` and Windows Task Scheduler `LastTaskResult: 1`.
+
+Repair:
+
+- Codex-backed `research-digest schedule install` now resolves the interactive `codex` executable and records its containing directory in scheduled `PATH` ahead of the normal minimal WSL system path.
+- The scheduled task continues to preserve `HOME` by not overriding it and does not embed API keys, Codex tokens, copied auth files, or shell startup-file sourcing.
+- Missing Codex during Codex-backed schedule installation fails clearly.
+- `research-digest doctor` warns when an installed Codex-backed task lacks the current Codex executable directory, so reinstalling/updating the schedule can refresh stale Node/Codex paths.
+- Added deterministic regression coverage for NVM-like paths, safe quoting, secret exclusion, missing-Codex failure, OpenAI-provider independence, and stale scheduler PATH warning.
+- Added human live-smoke instructions in `docs/campaigns/release1/RC_SCHEDULER_LIVE_SMOKE.md`.
+
+Repair qualification:
+
+- full `pytest`: 149 passed.
+- `ruff check .`: PASS.
+- strict `mypy --strict src tests`: PASS.
+- `python -m compileall -q src tests`: PASS.
+- `git diff --check`: PASS.
+- fresh independent read-only scheduler repair Auditor: PASS with no BLOCKER or IMPORTANT findings.
+
+Current stop:
+
+- The repair is not final release acceptance.
+- Final release-candidate acceptance remains blocked until the human live scheduler smoke verifies the reinstalled/updated Windows task action, a new `COMPLETED` scheduled run, `LastTaskResult == 0`, and no secrets in the task action.
 
 Data-safety note:
 

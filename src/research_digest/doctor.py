@@ -35,7 +35,12 @@ from research_digest.config import (
 )
 from research_digest.db import CURRENT_SCHEMA_VERSION, Database, MigrationError
 from research_digest.errors import sanitize_error, sanitize_error_text
-from research_digest.scheduler import DEFAULT_TASK_NAME, SchedulerBackend, select_scheduler_backend
+from research_digest.scheduler import (
+    DEFAULT_TASK_NAME,
+    SchedulerBackend,
+    scheduler_codex_path_warning,
+    select_scheduler_backend,
+)
 
 ARXIV_HEALTH_URL = "https://export.arxiv.org/api/query?search_query=cat:hep-th&max_results=0"
 MAX_NETWORK_TIMEOUT_SECONDS = 60.0
@@ -166,7 +171,7 @@ def run_doctor(
         _schema_check(db),
         _config_version_check(config),
         _provider_check(config),
-        _scheduler_check(scheduler_backend),
+        _scheduler_check(config, scheduler_backend),
         _last_run_check(db),
     ]
     if network_timeout_check is not None:
@@ -348,13 +353,16 @@ def _provider_check(config: AppConfig) -> DoctorCheck:
     return DoctorCheck("provider", DoctorSeverity.FAILURE, "Analyzer provider is unsupported.")
 
 
-def _scheduler_check(scheduler_backend: SchedulerBackend | None) -> DoctorCheck:
+def _scheduler_check(config: AppConfig, scheduler_backend: SchedulerBackend | None) -> DoctorCheck:
     try:
         backend = scheduler_backend or select_scheduler_backend()
         status = backend.status(task_name=DEFAULT_TASK_NAME)
     except Exception as exc:
         return DoctorCheck("scheduler", DoctorSeverity.WARNING, sanitize_error(exc))
     if status.installed:
+        codex_warning = scheduler_codex_path_warning(config, status)
+        if codex_warning is not None:
+            return DoctorCheck("scheduler", DoctorSeverity.WARNING, codex_warning)
         return DoctorCheck("scheduler", DoctorSeverity.PASS, "Schedule is installed.")
     return DoctorCheck(
         "scheduler",

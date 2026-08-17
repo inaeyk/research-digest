@@ -48,6 +48,19 @@ def config(db_path: Path) -> AppConfig:
     )
 
 
+def openai_config(db_path: Path) -> AppConfig:
+    return AppConfig(
+        db_path=db_path,
+        data_dir=db_path.parent,
+        config_dir=db_path.parent / "config",
+        analyzer_provider="openai",
+        openai_api_key="sk-test-value-that-must-not-be-scheduled",
+        openai_model="gpt-test",
+        codex_model=None,
+        codex_timeout_seconds=12,
+    )
+
+
 class SchedulerTests(unittest.TestCase):
     def test_validate_time_of_day_accepts_hh_mm(self) -> None:
         validate_time_of_day("00:00")
@@ -62,15 +75,21 @@ class SchedulerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             workdir = Path(tmp) / "repo"
             workdir.mkdir()
-            request = build_schedule_request(
-                task_name="Research Digest Test",
-                time_of_day="07:30",
-                config=config(Path("runtime.sqlite3")),
-                wsl_distro="Ubuntu",
-                wsl_executable="C:\\Windows\\System32\\wsl.exe",
-                command_executable="research-digest",
-                working_directory=workdir,
-            )
+            with mock.patch(
+                "research_digest.scheduler.shutil.which",
+                side_effect=lambda name: "/home/me/.nvm/versions/node/v22.22.2/bin/codex"
+                if name == "codex"
+                else None,
+            ):
+                request = build_schedule_request(
+                    task_name="Research Digest Test",
+                    time_of_day="07:30",
+                    config=config(Path("runtime.sqlite3")),
+                    wsl_distro="Ubuntu",
+                    wsl_executable="C:\\Windows\\System32\\wsl.exe",
+                    command_executable="research-digest",
+                    working_directory=workdir,
+                )
 
         self.assertEqual(request.task_name, "Research Digest Test")
         self.assertEqual(request.wsl_distro, "Ubuntu")
@@ -78,24 +97,97 @@ class SchedulerTests(unittest.TestCase):
         self.assertEqual(request.environment["RESEARCH_DIGEST_DB"], str(request.db_path))
         self.assertEqual(request.environment["RESEARCH_DIGEST_ANALYZER"], "codex")
         self.assertEqual(request.environment["RESEARCH_DIGEST_CODEX_MODEL"], "codex-test")
+        self.assertEqual(
+            request.environment["PATH"],
+            "/home/me/.nvm/versions/node/v22.22.2/bin:"
+            "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        )
         scheduled_text = request.windows_action_arguments
         self.assertIn("research-digest run", scheduled_text)
         self.assertIn("RESEARCH_DIGEST_DB=", scheduled_text)
+        self.assertIn("/home/me/.nvm/versions/node/v22.22.2/bin", scheduled_text)
         self.assertNotIn("OPENAI_API_KEY", scheduled_text)
+        self.assertNotIn("CODEX_API_KEY", scheduled_text)
+        self.assertNotIn("auth", scheduled_text.lower())
         self.assertNotIn("sk-test-value", scheduled_text)
+
+    def test_codex_in_nvm_like_directory_with_spaces_is_quoted_safely(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "research_digest.scheduler.shutil.which",
+            side_effect=lambda name: "/home/me/.nvm/versions/node v22/bin/codex"
+            if name == "codex"
+            else None,
+        ):
+            request = build_schedule_request(
+                task_name="Research Digest Test",
+                time_of_day="07:30",
+                config=config(Path("/tmp/runtime.sqlite3")),
+                wsl_distro="Ubuntu",
+                wsl_executable="C:\\Windows\\System32\\wsl.exe",
+                command_executable="/tmp/venv/bin/research-digest",
+                working_directory=Path(tmp),
+            )
+
+        self.assertEqual(
+            request.environment["PATH"].split(":")[0],
+            "/home/me/.nvm/versions/node v22/bin",
+        )
+        self.assertIn(
+            '"PATH=/home/me/.nvm/versions/node v22/bin:',
+            request.windows_action_arguments,
+        )
+
+    def test_missing_codex_fails_schedule_install_for_codex_analyzer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "research_digest.scheduler.shutil.which",
+            return_value=None,
+        ), self.assertRaisesRegex(ScheduleError, "codex executable"):
+            build_schedule_request(
+                task_name="Research Digest Test",
+                time_of_day="07:30",
+                config=config(Path("/tmp/runtime.sqlite3")),
+                wsl_distro="Ubuntu",
+                wsl_executable="C:\\Windows\\System32\\wsl.exe",
+                command_executable="/tmp/venv/bin/research-digest",
+                working_directory=Path(tmp),
+            )
+
+    def test_openai_schedule_install_does_not_require_codex(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "research_digest.scheduler.shutil.which",
+            return_value=None,
+        ):
+            request = build_schedule_request(
+                task_name="Research Digest Test",
+                time_of_day="07:30",
+                config=openai_config(Path("/tmp/runtime.sqlite3")),
+                wsl_distro="Ubuntu",
+                wsl_executable="C:\\Windows\\System32\\wsl.exe",
+                command_executable="/tmp/venv/bin/research-digest",
+                working_directory=Path(tmp),
+            )
+
+        self.assertEqual(request.environment["RESEARCH_DIGEST_ANALYZER"], "openai")
+        self.assertNotIn("PATH", request.environment)
 
     def test_windows_install_uses_register_scheduled_task_force(self) -> None:
         runner = FakeRunner()
         backend = WindowsTaskSchedulerBackend(powershell_path="powershell.exe", runner=runner)
-        request = build_schedule_request(
-            task_name=DEFAULT_TASK_NAME,
-            time_of_day="06:15",
-            config=config(Path("/tmp/research-digest.sqlite3")),
-            wsl_distro="Ubuntu",
-            wsl_executable="C:\\Windows\\System32\\wsl.exe",
-            command_executable="research-digest",
-            working_directory=Path("/tmp/repo"),
-        )
+        with mock.patch(
+            "research_digest.scheduler.shutil.which",
+            side_effect=lambda name: "/home/me/.nvm/versions/node/v22.22.2/bin/codex"
+            if name == "codex"
+            else None,
+        ):
+            request = build_schedule_request(
+                task_name=DEFAULT_TASK_NAME,
+                time_of_day="06:15",
+                config=config(Path("/tmp/research-digest.sqlite3")),
+                wsl_distro="Ubuntu",
+                wsl_executable="C:\\Windows\\System32\\wsl.exe",
+                command_executable="research-digest",
+                working_directory=Path("/tmp/repo"),
+            )
 
         result = backend.install(request)
 

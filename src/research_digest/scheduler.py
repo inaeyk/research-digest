@@ -18,6 +18,7 @@ WINDOWS_LOCAL_TIME_DESCRIPTION = (
     "Windows Task Scheduler daily triggers use Windows local time and follow "
     "Windows daylight-saving rules."
 )
+DEFAULT_WSL_SCHEDULE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 
 class ScheduleError(RuntimeError):
@@ -228,13 +229,14 @@ def build_schedule_request(
     db_path = active_config.db_path
     if not db_path.is_absolute():
         db_path = (workdir / db_path).resolve()
+    resolved_command = command_executable or resolve_research_digest_command()
     environment = _scheduled_environment(active_config, db_path)
     return ScheduleRequest(
         task_name=task_name,
         time_of_day=time_of_day,
         wsl_distro=distro.strip(),
         wsl_executable=wsl_executable or resolve_windows_wsl_executable(),
-        command_executable=command_executable or resolve_research_digest_command(),
+        command_executable=resolved_command,
         working_directory=workdir,
         db_path=db_path,
         environment=environment,
@@ -258,6 +260,16 @@ def resolve_research_digest_command() -> str:
         raise ScheduleError(
             "research-digest command was not found on PATH; install the package before "
             "installing a schedule"
+        )
+    return resolved
+
+
+def resolve_codex_executable() -> str:
+    resolved = shutil.which("codex")
+    if resolved is None:
+        raise ScheduleError(
+            "Codex analyzer is configured, but the codex executable was not found on PATH. "
+            "Install Codex CLI and sign in with ChatGPT before installing the schedule."
         )
     return resolved
 
@@ -296,7 +308,65 @@ def _scheduled_environment(config: AppConfig, db_path: Path) -> dict[str, str]:
     }
     if config.codex_model is not None:
         values["RESEARCH_DIGEST_CODEX_MODEL"] = config.codex_model
+    if config.analyzer_provider == "codex":
+        values["PATH"] = _schedule_path_with_codex(resolve_codex_executable())
     return values
+
+
+def scheduler_codex_path_warning(config: AppConfig, status: ScheduleStatus) -> str | None:
+    if config.analyzer_provider != "codex" or not status.installed:
+        return None
+    current_codex = shutil.which("codex")
+    if current_codex is None:
+        return (
+            "Schedule is installed, but the current interactive environment cannot resolve "
+            "`codex`; reinstall after Codex CLI is available on PATH."
+        )
+    current_dir = Path(current_codex).parent.as_posix()
+    if status.arguments is None:
+        return (
+            "Schedule is installed, but its action arguments are unavailable; reinstall the "
+            "schedule if scheduled Codex runs cannot find `codex`."
+        )
+    scheduled_path = _scheduled_env_value(status.arguments, "PATH")
+    if scheduled_path is None:
+        return (
+            "Schedule is installed, but its action does not set PATH for Codex; reinstall "
+            "the schedule to capture the current Codex executable directory."
+        )
+    if current_dir not in scheduled_path.split(os.pathsep):
+        return (
+            "Schedule is installed, but its Codex PATH does not include the current Codex "
+            f"directory {current_dir}; reinstall the schedule to refresh the runtime path."
+        )
+    return None
+
+
+def _schedule_path_with_codex(codex_executable: str) -> str:
+    codex_dir = Path(codex_executable).parent.as_posix()
+    parts = [codex_dir, *DEFAULT_WSL_SCHEDULE_PATH.split(os.pathsep)]
+    deduplicated: list[str] = []
+    for part in parts:
+        if part and part not in deduplicated:
+            deduplicated.append(part)
+    return os.pathsep.join(deduplicated)
+
+
+def _scheduled_env_value(arguments: str, key: str) -> str | None:
+    prefix = f"{key}="
+    start = arguments.find(prefix)
+    if start < 0:
+        return None
+    value_start = start + len(prefix)
+    if start > 0 and arguments[start - 1] == '"':
+        value_end = arguments.find('"', value_start)
+        if value_end < 0:
+            return arguments[value_start:]
+        return arguments[value_start:value_end]
+    value_end = arguments.find(" ", value_start)
+    if value_end < 0:
+        return arguments[value_start:]
+    return arguments[value_start:value_end]
 
 
 def _install_script(request: ScheduleRequest) -> str:

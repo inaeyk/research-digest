@@ -1,6 +1,7 @@
 # Release Candidate Human Review Packet
 
-Status: draft for final release-candidate gate.
+Status: scheduler environment repair active; human live scheduler smoke required
+before final release-candidate acceptance.
 
 This packet is release-candidate material only. It does not authorize a public release, public version tag, GitHub release, package publication, or remote push.
 
@@ -9,7 +10,8 @@ This packet is release-candidate material only. It does not authorize a public r
 - package version in `pyproject.toml`: `0.1.0`
 - runtime version in `src/research_digest/__init__.py`: `0.1.0`
 - existing public-style version tags: none found by `git tag --list 'v*'`
-- release-candidate commit: `eadedb71b7a64302edb6ac6b7d1fbfe1d6bfbe95`
+- prior release-candidate commit before scheduler repair: `eadedb71b7a64302edb6ac6b7d1fbfe1d6bfbe95`
+- next release-candidate commit: pending scheduler repair closure audit, local repair commit, and human live scheduler smoke
 - suggested final public release tag for human review: `v0.1.0`
 
 The release campaign has local qualification tags through `m7i-qualified`; the final public version tag has not been created.
@@ -110,7 +112,19 @@ research-digest schedule remove
 
 The WSL2/Windows scheduled action invokes the installed headless CLI, not Streamlit. It includes non-secret runtime settings and excludes API keys/Codex authentication material.
 
-Live Task Scheduler probing in this environment is blocked by WSL socket errors; deterministic scheduler command construction, idempotency, status, and secret-exclusion behavior are covered by tests.
+For Codex-backed schedules, install or update the schedule from an interactive
+WSL shell where `command -v codex` works. The generated task action records the
+non-secret directory containing the resolved Codex executable in `PATH`, ahead
+of the normal minimal WSL system path, so non-login scheduled runs can discover
+Codex and its Node runtime. Reinstalling/updating the schedule refreshes this
+path after Node/Codex upgrades. `research-digest doctor` warns when the
+installed task action does not include the current Codex executable directory.
+
+Live Task Scheduler probing in the automated environment is blocked by WSL
+socket errors; deterministic scheduler command construction, idempotency,
+status, Codex PATH capture, stale-path warning, and secret-exclusion behavior
+are covered by tests. A human live scheduler smoke must pass before final
+release acceptance.
 
 ## Backup And Recovery
 

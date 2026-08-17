@@ -1,10 +1,16 @@
 # Final Release-Candidate Verification
 
-Status: final release audit pending.
+Status: scheduler environment repair active; human live scheduler smoke required
+before final release-candidate acceptance.
 
 Verification workspace: `/tmp/research-digest-rc.Q4O1FA`.
 
-Final release-candidate commit after final-audit MINOR documentation follow-up: `eadedb71b7a64302edb6ac6b7d1fbfe1d6bfbe95`.
+Prior release-candidate commit after final-audit MINOR documentation follow-up:
+`eadedb71b7a64302edb6ac6b7d1fbfe1d6bfbe95`. This candidate was superseded
+when a human live scheduler smoke found the non-login WSL Codex PATH defect
+recorded below. The next exact release-candidate commit remains pending the
+scheduler repair closure audit, local repair commit, and human live scheduler
+smoke.
 
 Release-candidate packet commit before final-audit MINOR documentation follow-up: `f8d87eda5048c111d5d754c2e089ef3a33254508`.
 
@@ -89,6 +95,9 @@ Scheduler:
 
 - `research-digest schedule status --json`: FAIL with sanitized WSL Task Scheduler socket error: `UtilBindVsockAnyPort ... socket failed 1`.
 - deterministic scheduler tests cover stable installed CLI invocation, idempotency, status, no Streamlit dependency, and no secrets in scheduled command lines.
+- human live RC scheduler smoke later found a real non-login WSL PATH defect: scheduled Codex-backed runs could not discover an NVM-installed `codex`, producing `ANALYSIS_UNAVAILABLE` and `LastTaskResult: 1` while manual installed-CLI Codex runs completed.
+- repair records the interactive Codex executable directory in scheduled `PATH` for Codex-backed schedules and adds doctor warnings for stale installed schedule PATH.
+- final release acceptance requires the human live scheduler smoke in `docs/campaigns/release1/RC_SCHEDULER_LIVE_SMOKE.md` to pass.
 
 Serve:
 
@@ -132,4 +141,8 @@ MINOR follow-up applied after audit:
 - corrected release bookkeeping to distinguish the M7-I base from the actual release-candidate commit.
 - clarified README and human packet upgrade/backup sequencing for older repo-local M2 development databases.
 
-Final human-stop state records `eadedb71b7a64302edb6ac6b7d1fbfe1d6bfbe95` as the exact release-candidate commit.
+The previous final human-stop state recorded
+`eadedb71b7a64302edb6ac6b7d1fbfe1d6bfbe95` as the exact release-candidate
+commit. That state is reopened only for the scheduler environment repair; final
+release-candidate acceptance must wait for the human live scheduler smoke in
+`docs/campaigns/release1/RC_SCHEDULER_LIVE_SMOKE.md`.

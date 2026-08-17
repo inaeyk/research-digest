@@ -106,7 +106,16 @@ research-digest schedule remove
 
 Schedule times are Windows local time and follow Windows daylight-saving rules.
 The scheduled command includes non-secret runtime settings such as the active
-SQLite path, but it does not embed API keys or Codex authentication material.
+SQLite path and, for Codex-backed schedules, the non-secret directory containing
+the resolved `codex` executable. It does not embed API keys, Codex
+authentication material, or copied auth files.
+
+If Codex was installed through NVM or another user-local runtime manager, run
+`research-digest schedule install ...` from an interactive shell where
+`command -v codex` works. Reinstalling or updating the schedule refreshes the
+recorded Codex runtime path after Node/Codex upgrades. `research-digest doctor`
+warns when an installed Codex-backed schedule does not include the current
+Codex executable directory.
 
 ## Doctor
 
