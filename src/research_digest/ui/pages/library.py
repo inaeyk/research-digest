@@ -4,9 +4,21 @@ from __future__ import annotations
 
 from typing import Any
 
+from research_digest.collections import (
+    CollectionValidationError,
+    add_article_to_collection,
+    create_collection,
+    delete_collection,
+    get_note,
+    list_article_collections,
+    list_collections,
+    remove_article_from_collection,
+    rename_collection,
+    save_note,
+)
 from research_digest.errors import sanitize_error
 from research_digest.library import LibraryItem, LibrarySort, list_library_items
-from research_digest.models import Article, LibraryRelevanceContext, TagOrigin
+from research_digest.models import Article, LibraryCollection, LibraryRelevanceContext, TagOrigin
 from research_digest.tags import (
     TagValidationError,
     add_user_tag,
@@ -18,7 +30,11 @@ from research_digest.tags import (
 from research_digest.ui.abstracts import render_abstract_control
 from research_digest.ui.common import get_ai_tag_generator, get_database
 from research_digest.ui.library_controls import render_library_control
-from research_digest.ui.tag_controls import ai_tag_generation_label, tag_action_key
+from research_digest.ui.tag_controls import (
+    ai_tag_generation_label,
+    collection_action_key,
+    tag_action_key,
+)
 
 _SORT_OPTIONS: tuple[LibrarySort, ...] = (
     "saved_newest",
@@ -39,6 +55,8 @@ def render() -> None:
 
     st.title("Library")
     db = get_database()
+    collections = list_collections(db)
+    known_tags = db.list_library_tags()
 
     with st.form("library_filters", border=False):
         query = st.text_input("Search Library", placeholder="Title, author, category, abstract...")
@@ -47,9 +65,26 @@ def render() -> None:
             options=_SORT_OPTIONS,
             format_func=lambda value: _SORT_LABELS[value],
         )
+        collection_filter = st.selectbox(
+            "Collection",
+            options=[None, *collections],
+            format_func=lambda value: "All collections" if value is None else value.name,
+        )
+        tag_filter = st.selectbox(
+            "Tag",
+            options=[None, *known_tags],
+            format_func=lambda value: "All tags" if value is None else value.display_name,
+        )
         st.form_submit_button("Apply", icon=":material/search:")
 
-    items = list_library_items(db, query=query, sort_by=sort_by)
+    _render_collection_management(collections)
+    items = list_library_items(
+        db,
+        query=query,
+        sort_by=sort_by,
+        collection_id=collection_filter.id if collection_filter is not None else None,
+        normalized_tag_name=tag_filter.normalized_name if tag_filter is not None else None,
+    )
     if not items:
         if query.strip():
             st.info("No saved papers match the current search.")
@@ -74,6 +109,8 @@ def _render_library_item(item: LibraryItem) -> None:
         metric_cols[1].metric("Published", f"{article.published_at:%Y-%m-%d}")
         _render_relevance_metric(metric_cols[2], item.relevance_context)
         _render_relevance_context(item.relevance_context)
+        _render_note_editor(item)
+        _render_collections(item)
         _render_tags(item)
         with st.container(horizontal=True):
             st.link_button("arXiv", article.abstract_url)
@@ -204,6 +241,158 @@ def _render_ai_tag_generation(*, article_id: int, has_ai_tags: bool) -> None:
         st.rerun()
     if generator is None and message:
         st.caption(f"AI tag generation unavailable: {sanitize_error(message)}")
+
+
+def _render_note_editor(item: LibraryItem) -> None:
+    import streamlit as st
+
+    article = item.article
+    if article.id is None:
+        return
+    db = get_database()
+    note = get_note(db, article_id=article.id)
+    with st.expander("Personal note", icon=":material/edit_note:"):
+        with st.form(f"library_note_{article.id}", border=False):
+            note_text = st.text_area(
+                "Note",
+                value=note.note_text if note is not None else "",
+                height=120,
+            )
+            submitted = st.form_submit_button("Save note", icon=":material/save:")
+        if submitted:
+            saved = save_note(db, article_id=article.id, note_text=note_text)
+            if saved is None:
+                st.success("Note cleared.", icon=":material/check_circle:")
+            else:
+                st.success("Note saved.", icon=":material/check_circle:")
+            st.rerun()
+
+
+def _render_collections(item: LibraryItem) -> None:
+    import streamlit as st
+
+    article = item.article
+    if article.id is None:
+        return
+    db = get_database()
+    all_collections = list_collections(db)
+    article_collections = list_article_collections(db, article_id=article.id)
+    assigned_ids = {collection.id for collection in article_collections}
+    st.markdown("**Collections**")
+    if article_collections:
+        for collection in article_collections:
+            if collection.id is None:
+                continue
+            with st.container(horizontal=True):
+                st.badge(collection.name, color="gray")
+                if st.button(
+                    "Remove",
+                    key=collection_action_key(
+                        action="remove_membership",
+                        collection_id=collection.id,
+                        article_id=article.id,
+                    ),
+                    icon=":material/close:",
+                ):
+                    remove_article_from_collection(
+                        db,
+                        collection_id=collection.id,
+                        article_id=article.id,
+                    )
+                    st.rerun()
+    else:
+        st.caption("No collections")
+    available = [
+        collection
+        for collection in all_collections
+        if collection.id is not None and collection.id not in assigned_ids
+    ]
+    if available:
+        selected = st.selectbox(
+            "Add to collection",
+            options=available,
+            format_func=lambda collection: collection.name,
+            key=f"add_collection_select_{article.id}",
+        )
+        if (
+            selected.id is not None
+            and st.button(
+                "Add to collection",
+                key=collection_action_key(
+                    action="add_membership",
+                    collection_id=selected.id,
+                    article_id=article.id,
+                ),
+                icon=":material/add:",
+            )
+        ):
+            add_article_to_collection(
+                db,
+                collection_id=selected.id,
+                article_id=article.id,
+            )
+            st.rerun()
+
+
+def _render_collection_management(collections: list[LibraryCollection]) -> None:
+    import streamlit as st
+
+    with st.expander("Collections", icon=":material/folder:"):
+        with st.form("create_collection", border=False):
+            name = st.text_input("New collection")
+            description = st.text_input("Description")
+            submitted = st.form_submit_button(
+                "Create collection",
+                icon=":material/create_new_folder:",
+            )
+        if submitted:
+            try:
+                create_collection(get_database(), name=name, description=description)
+            except CollectionValidationError as exc:
+                st.warning(str(exc), icon=":material/warning:")
+            except Exception as exc:
+                st.error(sanitize_error(exc), icon=":material/error:")
+            else:
+                st.rerun()
+        if not collections:
+            st.caption("No collections yet")
+            return
+        for collection in collections:
+            if collection.id is None:
+                continue
+            with st.container(border=True):
+                with st.form(f"edit_collection_{collection.id}", border=False):
+                    updated_name = st.text_input("Collection name", value=collection.name)
+                    updated_description = st.text_input(
+                        "Description",
+                        value=collection.description,
+                    )
+                    saved = st.form_submit_button("Save", icon=":material/save:")
+                if saved:
+                    try:
+                        rename_collection(
+                            get_database(),
+                            collection_id=collection.id,
+                            name=updated_name,
+                            description=updated_description,
+                        )
+                    except CollectionValidationError as exc:
+                        st.warning(str(exc), icon=":material/warning:")
+                    except Exception as exc:
+                        st.error(sanitize_error(exc), icon=":material/error:")
+                    else:
+                        st.rerun()
+                st.caption("Deleting a collection does not delete papers.")
+                if st.button(
+                    "Delete collection",
+                    key=collection_action_key(
+                        action="delete_collection",
+                        collection_id=collection.id,
+                    ),
+                    icon=":material/delete:",
+                ):
+                    delete_collection(get_database(), collection_id=collection.id)
+                    st.rerun()
 
 
 def _article_caption(article: Article) -> str:

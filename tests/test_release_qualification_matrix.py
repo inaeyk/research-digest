@@ -547,6 +547,9 @@ def _semantic_counts(path: Path) -> dict[str, int]:
         "library_tags",
         "library_tag_assignments",
         "library_ai_tag_suppressions",
+        "library_article_notes",
+        "library_collections",
+        "library_collection_memberships",
     )
     with sqlite3.connect(path) as conn:
         return {

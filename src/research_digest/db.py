@@ -21,7 +21,10 @@ from research_digest.models import (
     DateSelection,
     FeedbackLabel,
     InterestProfile,
+    LibraryCollection,
+    LibraryCollectionMembership,
     LibraryEntry,
+    LibraryNote,
     LibraryRelevanceContext,
     LibraryTag,
     LibraryTagAssignment,
@@ -36,7 +39,7 @@ from research_digest.models import (
 SOURCE_ARXIV = "arxiv"
 SCHEMA_VERSION_KEY = "schema_version"
 LAST_MIGRATION_BACKUP_KEY = "last_migration_backup_path"
-CURRENT_SCHEMA_VERSION = 10
+CURRENT_SCHEMA_VERSION = 11
 APP_RUN_STARTING = "STARTING"
 APP_RUN_RUNNING = "RUNNING"
 APP_RUN_COMPLETED = "COMPLETED"
@@ -590,6 +593,218 @@ class Database:
                 (article_id,),
             ).fetchall()
         return [_ai_tag_suppression_from_row(row) for row in rows]
+
+    def save_library_note(self, *, article_id: int, note_text: str) -> LibraryNote | None:
+        if article_id <= 0:
+            raise ValueError("article id must be positive")
+        text = note_text.strip()
+        if not text:
+            self.delete_library_note(article_id=article_id)
+            return None
+        now = datetime_to_db(utc_now())
+        with self._connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO library_article_notes (article_id, note_text, created_at, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(article_id) DO UPDATE SET
+                    note_text = excluded.note_text,
+                    updated_at = excluded.updated_at
+                """,
+                (article_id, text, now, now),
+            )
+            note = _get_library_note(conn, article_id)
+        if note is None:
+            raise RuntimeError("failed to load library note")
+        return note
+
+    def get_library_note(self, article_id: int) -> LibraryNote | None:
+        if article_id <= 0:
+            raise ValueError("article id must be positive")
+        with self._connection() as conn:
+            return _get_library_note(conn, article_id)
+
+    def delete_library_note(self, *, article_id: int) -> None:
+        if article_id <= 0:
+            raise ValueError("article id must be positive")
+        with self._connection() as conn:
+            conn.execute(
+                "DELETE FROM library_article_notes WHERE article_id = ?",
+                (article_id,),
+            )
+
+    def create_library_collection(
+        self,
+        *,
+        name: str,
+        normalized_name: str,
+        description: str = "",
+    ) -> LibraryCollection:
+        normalized = normalized_name.strip()
+        display_name = name.strip()
+        if not normalized:
+            raise ValueError("collection normalized name is required")
+        if not display_name:
+            raise ValueError("collection name is required")
+        now = datetime_to_db(utc_now())
+        with self._connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO library_collections (
+                    name, normalized_name, description, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(normalized_name) DO UPDATE SET
+                    description = excluded.description,
+                    updated_at = excluded.updated_at
+                """,
+                (display_name, normalized, description.strip(), now, now),
+            )
+            collection = _get_library_collection_by_normalized_name(conn, normalized)
+        if collection is None:
+            raise RuntimeError("failed to load library collection")
+        return collection
+
+    def update_library_collection(
+        self,
+        *,
+        collection_id: int,
+        name: str,
+        normalized_name: str,
+        description: str,
+    ) -> LibraryCollection:
+        if collection_id <= 0:
+            raise ValueError("collection id must be positive")
+        now = datetime_to_db(utc_now())
+        with self._connection() as conn:
+            conn.execute(
+                """
+                UPDATE library_collections
+                SET name = ?, normalized_name = ?, description = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (name.strip(), normalized_name.strip(), description.strip(), now, collection_id),
+            )
+            collection = _get_library_collection(conn, collection_id)
+        if collection is None:
+            raise ValueError(f"collection {collection_id} does not exist")
+        return collection
+
+    def delete_library_collection(self, collection_id: int) -> None:
+        if collection_id <= 0:
+            raise ValueError("collection id must be positive")
+        with self._connection() as conn:
+            conn.execute("DELETE FROM library_collections WHERE id = ?", (collection_id,))
+
+    def get_library_collection(self, collection_id: int) -> LibraryCollection | None:
+        if collection_id <= 0:
+            raise ValueError("collection id must be positive")
+        with self._connection() as conn:
+            return _get_library_collection(conn, collection_id)
+
+    def list_library_collections(self) -> list[LibraryCollection]:
+        with self._connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM library_collections
+                ORDER BY name COLLATE NOCASE ASC, id ASC
+                """
+            ).fetchall()
+        return [_library_collection_from_row(row) for row in rows]
+
+    def add_library_collection_membership(
+        self,
+        *,
+        collection_id: int,
+        article_id: int,
+    ) -> LibraryCollectionMembership:
+        if collection_id <= 0:
+            raise ValueError("collection id must be positive")
+        if article_id <= 0:
+            raise ValueError("article id must be positive")
+        now = datetime_to_db(utc_now())
+        with self._connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO library_collection_memberships (
+                    collection_id, article_id, added_at
+                )
+                VALUES (?, ?, ?)
+                ON CONFLICT(collection_id, article_id) DO NOTHING
+                """,
+                (collection_id, article_id, now),
+            )
+            membership = _get_library_collection_membership(
+                conn,
+                collection_id=collection_id,
+                article_id=article_id,
+            )
+        if membership is None:
+            raise RuntimeError("failed to load collection membership")
+        return membership
+
+    def remove_library_collection_membership(
+        self,
+        *,
+        collection_id: int,
+        article_id: int,
+    ) -> None:
+        if collection_id <= 0:
+            raise ValueError("collection id must be positive")
+        if article_id <= 0:
+            raise ValueError("article id must be positive")
+        with self._connection() as conn:
+            conn.execute(
+                """
+                DELETE FROM library_collection_memberships
+                WHERE collection_id = ? AND article_id = ?
+                """,
+                (collection_id, article_id),
+            )
+
+    def list_library_collections_for_article(
+        self,
+        article_id: int,
+    ) -> list[LibraryCollection]:
+        if article_id <= 0:
+            raise ValueError("article id must be positive")
+        with self._connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT collections.*
+                FROM library_collection_memberships AS memberships
+                JOIN library_collections AS collections
+                    ON collections.id = memberships.collection_id
+                WHERE memberships.article_id = ?
+                ORDER BY collections.name COLLATE NOCASE ASC, collections.id ASC
+                """,
+                (article_id,),
+            ).fetchall()
+        return [_library_collection_from_row(row) for row in rows]
+
+    def list_library_collection_memberships(
+        self,
+        collection_id: int | None = None,
+    ) -> list[LibraryCollectionMembership]:
+        params: tuple[object, ...] = ()
+        where = ""
+        if collection_id is not None:
+            if collection_id <= 0:
+                raise ValueError("collection id must be positive")
+            where = "WHERE collection_id = ?"
+            params = (collection_id,)
+        with self._connection() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT *
+                FROM library_collection_memberships
+                {where}
+                ORDER BY collection_id ASC, article_id ASC
+                """,
+                params,
+            ).fetchall()
+        return [_library_collection_membership_from_row(row) for row in rows]
 
     def count_articles(self) -> int:
         with self._connection() as conn:
@@ -1433,6 +1648,47 @@ def _migration_library_tags(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migration_library_notes_collections(conn: sqlite3.Connection) -> None:
+    _execute_schema_statements(
+        conn,
+        (
+            """
+            CREATE TABLE IF NOT EXISTS library_article_notes (
+                article_id INTEGER PRIMARY KEY,
+                note_text TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(article_id) REFERENCES articles(id) ON DELETE CASCADE
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS library_collections (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                normalized_name TEXT NOT NULL UNIQUE,
+                description TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS library_collection_memberships (
+                collection_id INTEGER NOT NULL,
+                article_id INTEGER NOT NULL,
+                added_at TEXT NOT NULL,
+                UNIQUE(collection_id, article_id),
+                FOREIGN KEY(collection_id) REFERENCES library_collections(id) ON DELETE CASCADE,
+                FOREIGN KEY(article_id) REFERENCES articles(id) ON DELETE CASCADE
+            )
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_library_collection_memberships_article
+            ON library_collection_memberships(article_id)
+            """,
+        ),
+    )
+
+
 MIGRATIONS: Sequence[SchemaMigration] = (
     SchemaMigration(1, "core m1/m2 tables", _migration_core_tables),
     SchemaMigration(2, "profile-fingerprinted relevance analyses", _migration_profile_fingerprints),
@@ -1448,6 +1704,11 @@ MIGRATIONS: Sequence[SchemaMigration] = (
     SchemaMigration(8, "app run profile fingerprint", _migration_app_run_profile_fingerprint),
     SchemaMigration(9, "saved article library", _migration_saved_article_library),
     SchemaMigration(10, "library tags and AI suppressions", _migration_library_tags),
+    SchemaMigration(
+        11,
+        "library notes and collections",
+        _migration_library_notes_collections,
+    ),
 )
 
 
@@ -1762,6 +2023,53 @@ def _get_ai_tag_suppression(
     return _ai_tag_suppression_from_row(row) if row is not None else None
 
 
+def _get_library_note(conn: sqlite3.Connection, article_id: int) -> LibraryNote | None:
+    row = conn.execute(
+        "SELECT * FROM library_article_notes WHERE article_id = ?",
+        (article_id,),
+    ).fetchone()
+    return _library_note_from_row(row) if row is not None else None
+
+
+def _get_library_collection(
+    conn: sqlite3.Connection,
+    collection_id: int,
+) -> LibraryCollection | None:
+    row = conn.execute(
+        "SELECT * FROM library_collections WHERE id = ?",
+        (collection_id,),
+    ).fetchone()
+    return _library_collection_from_row(row) if row is not None else None
+
+
+def _get_library_collection_by_normalized_name(
+    conn: sqlite3.Connection,
+    normalized_name: str,
+) -> LibraryCollection | None:
+    row = conn.execute(
+        "SELECT * FROM library_collections WHERE normalized_name = ?",
+        (normalized_name,),
+    ).fetchone()
+    return _library_collection_from_row(row) if row is not None else None
+
+
+def _get_library_collection_membership(
+    conn: sqlite3.Connection,
+    *,
+    collection_id: int,
+    article_id: int,
+) -> LibraryCollectionMembership | None:
+    row = conn.execute(
+        """
+        SELECT *
+        FROM library_collection_memberships
+        WHERE collection_id = ? AND article_id = ?
+        """,
+        (collection_id, article_id),
+    ).fetchone()
+    return _library_collection_membership_from_row(row) if row is not None else None
+
+
 def _get_article_feedback(
     conn: sqlite3.Connection,
     *,
@@ -1901,6 +2209,36 @@ def _ai_tag_suppression_from_row(row: sqlite3.Row) -> AITagSuppression:
         tag=_library_tag_from_joined_row(row),
         suppressed_at=datetime_from_db(str(row["suppressed_at"])),
         reason=str(row["reason"]),
+    )
+
+
+def _library_note_from_row(row: sqlite3.Row) -> LibraryNote:
+    return LibraryNote(
+        article_id=int(row["article_id"]),
+        note_text=str(row["note_text"]),
+        created_at=datetime_from_db(str(row["created_at"])),
+        updated_at=datetime_from_db(str(row["updated_at"])),
+    )
+
+
+def _library_collection_from_row(row: sqlite3.Row) -> LibraryCollection:
+    return LibraryCollection(
+        id=int(row["id"]),
+        name=str(row["name"]),
+        normalized_name=str(row["normalized_name"]),
+        description=str(row["description"]),
+        created_at=datetime_from_db(str(row["created_at"])),
+        updated_at=datetime_from_db(str(row["updated_at"])),
+    )
+
+
+def _library_collection_membership_from_row(
+    row: sqlite3.Row,
+) -> LibraryCollectionMembership:
+    return LibraryCollectionMembership(
+        collection_id=int(row["collection_id"]),
+        article_id=int(row["article_id"]),
+        added_at=datetime_from_db(str(row["added_at"])),
     )
 
 

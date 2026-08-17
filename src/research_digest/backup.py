@@ -182,6 +182,9 @@ def export_user_data(*, db_path: Path, schema_version: int | None = None) -> dic
             "library_tags": _library_tags(conn),
             "library_tag_assignments": _library_tag_assignments(conn),
             "library_ai_tag_suppressions": _library_ai_tag_suppressions(conn),
+            "library_article_notes": _library_article_notes(conn),
+            "library_collections": _library_collections(conn),
+            "library_collection_memberships": _library_collection_memberships(conn),
         }
 
 
@@ -564,6 +567,110 @@ def _library_ai_tag_suppressions(conn: sqlite3.Connection) -> list[dict[str, obj
             "tag": {
                 "normalized_name": str(row["normalized_name"]),
                 "display_name": str(row["display_name"]),
+            },
+            "article": {
+                "source": str(row["source"]) if row["source"] is not None else None,
+                "source_article_id": (
+                    str(row["source_article_id"])
+                    if row["source_article_id"] is not None
+                    else None
+                ),
+                "title": str(row["title"]) if row["title"] is not None else None,
+            },
+        }
+        for row in rows
+    ]
+
+
+def _library_article_notes(conn: sqlite3.Connection) -> list[dict[str, object]]:
+    if not _table_exists(conn, "library_article_notes"):
+        return []
+    rows = conn.execute(
+        """
+        SELECT
+            notes.article_id,
+            notes.note_text,
+            notes.created_at,
+            notes.updated_at,
+            articles.source,
+            articles.source_article_id,
+            articles.title
+        FROM library_article_notes AS notes
+        LEFT JOIN articles ON articles.id = notes.article_id
+        ORDER BY notes.article_id
+        """
+    ).fetchall()
+    return [
+        {
+            "article_id": int(row["article_id"]),
+            "note_text": str(row["note_text"]),
+            "created_at": str(row["created_at"]),
+            "updated_at": str(row["updated_at"]),
+            "article": {
+                "source": str(row["source"]) if row["source"] is not None else None,
+                "source_article_id": (
+                    str(row["source_article_id"])
+                    if row["source_article_id"] is not None
+                    else None
+                ),
+                "title": str(row["title"]) if row["title"] is not None else None,
+            },
+        }
+        for row in rows
+    ]
+
+
+def _library_collections(conn: sqlite3.Connection) -> list[dict[str, object]]:
+    if not _table_exists(conn, "library_collections"):
+        return []
+    rows = conn.execute(
+        """
+        SELECT id, name, normalized_name, description, created_at, updated_at
+        FROM library_collections
+        ORDER BY id
+        """
+    ).fetchall()
+    return [
+        {
+            "id": int(row["id"]),
+            "name": str(row["name"]),
+            "normalized_name": str(row["normalized_name"]),
+            "description": str(row["description"]),
+            "created_at": str(row["created_at"]),
+            "updated_at": str(row["updated_at"]),
+        }
+        for row in rows
+    ]
+
+
+def _library_collection_memberships(conn: sqlite3.Connection) -> list[dict[str, object]]:
+    if not _table_exists(conn, "library_collection_memberships"):
+        return []
+    rows = conn.execute(
+        """
+        SELECT
+            memberships.collection_id,
+            memberships.article_id,
+            memberships.added_at,
+            collections.name AS collection_name,
+            collections.normalized_name AS collection_normalized_name,
+            articles.source,
+            articles.source_article_id,
+            articles.title
+        FROM library_collection_memberships AS memberships
+        JOIN library_collections AS collections ON collections.id = memberships.collection_id
+        LEFT JOIN articles ON articles.id = memberships.article_id
+        ORDER BY memberships.collection_id, memberships.article_id
+        """
+    ).fetchall()
+    return [
+        {
+            "collection_id": int(row["collection_id"]),
+            "article_id": int(row["article_id"]),
+            "added_at": str(row["added_at"]),
+            "collection": {
+                "name": str(row["collection_name"]),
+                "normalized_name": str(row["collection_normalized_name"]),
             },
             "article": {
                 "source": str(row["source"]) if row["source"] is not None else None,

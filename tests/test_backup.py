@@ -11,6 +11,11 @@ from unittest import mock
 
 from research_digest.backup import BackupError, run_backup
 from research_digest.cli import run_cli
+from research_digest.collections import (
+    add_article_to_collection,
+    create_collection,
+    save_note,
+)
 from research_digest.db import APP_RUN_COMPLETED, Database
 from research_digest.models import (
     Article,
@@ -159,6 +164,18 @@ class BackupTests(unittest.TestCase):
             provenance={"prompt_version": "library_ai_tags_v1", "provider": "fake"},
         )
         remove_ai_tag(self.db, article_id=article.id, tag="KK spectra")
+        save_note(self.db, article_id=article.id, note_text="Private local note.")
+        collection = create_collection(
+            self.db,
+            name="GL project",
+            description="Collection description.",
+        )
+        assert collection.id is not None
+        add_article_to_collection(
+            self.db,
+            collection_id=collection.id,
+            article_id=article.id,
+        )
         self.db.upsert_article_feedback(
             article_id=article.id,
             profile_id=profile.id,
@@ -226,6 +243,12 @@ class BackupTests(unittest.TestCase):
         self.assertEqual(
             payload["library_ai_tag_suppressions"][0]["tag"]["display_name"],
             "KK spectra",
+        )
+        self.assertEqual(payload["library_article_notes"][0]["note_text"], "Private local note.")
+        self.assertEqual(payload["library_collections"][0]["name"], "GL project")
+        self.assertEqual(
+            payload["library_collection_memberships"][0]["collection"]["name"],
+            "GL project",
         )
         output = result.export_path.read_text(encoding="utf-8")
         self.assertNotIn("OPENAI_API_KEY", output)

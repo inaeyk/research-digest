@@ -23,3 +23,15 @@ def tag_action_key(
 
 def ai_tag_generation_label(*, has_ai_tags: bool) -> str:
     return "Regenerate AI tags" if has_ai_tags else "Generate AI tags"
+
+
+def collection_action_key(
+    *,
+    action: str,
+    collection_id: int | None = None,
+    article_id: int | None = None,
+    suffix: str = "",
+) -> str:
+    raw = f"{action}\0{collection_id or ''}\0{article_id or ''}\0{suffix}".encode()
+    digest = hashlib.sha256(raw).hexdigest()[:20]
+    return f"library_collection_{action}_{digest}"

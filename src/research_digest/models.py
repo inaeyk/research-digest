@@ -494,6 +494,58 @@ class AITagSuppression:
 
 
 @dataclass(frozen=True)
+class LibraryNote:
+    article_id: int
+    note_text: str
+    created_at: datetime
+    updated_at: datetime
+
+    def __post_init__(self) -> None:
+        if self.article_id <= 0:
+            raise ModelValidationError("library note article id must be positive")
+        object.__setattr__(self, "note_text", self.note_text.strip())
+        object.__setattr__(self, "created_at", ensure_utc(self.created_at))
+        object.__setattr__(self, "updated_at", ensure_utc(self.updated_at))
+
+
+@dataclass(frozen=True)
+class LibraryCollection:
+    id: int | None
+    name: str
+    normalized_name: str
+    description: str
+    created_at: datetime
+    updated_at: datetime
+
+    def __post_init__(self) -> None:
+        if self.id is not None and self.id <= 0:
+            raise ModelValidationError("library collection id must be positive")
+        if not self.name.strip():
+            raise ModelValidationError("library collection name is required")
+        if not self.normalized_name.strip():
+            raise ModelValidationError("library collection normalized name is required")
+        object.__setattr__(self, "name", normalize_whitespace(self.name))
+        object.__setattr__(self, "normalized_name", normalize_whitespace(self.normalized_name))
+        object.__setattr__(self, "description", self.description.strip())
+        object.__setattr__(self, "created_at", ensure_utc(self.created_at))
+        object.__setattr__(self, "updated_at", ensure_utc(self.updated_at))
+
+
+@dataclass(frozen=True)
+class LibraryCollectionMembership:
+    collection_id: int
+    article_id: int
+    added_at: datetime
+
+    def __post_init__(self) -> None:
+        if self.collection_id <= 0:
+            raise ModelValidationError("collection membership collection id must be positive")
+        if self.article_id <= 0:
+            raise ModelValidationError("collection membership article id must be positive")
+        object.__setattr__(self, "added_at", ensure_utc(self.added_at))
+
+
+@dataclass(frozen=True)
 class DigestItem:
     article: Article
     analysis: AnalysisResult

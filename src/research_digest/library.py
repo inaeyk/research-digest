@@ -85,6 +85,8 @@ def list_library_items(
     *,
     query: str = "",
     sort_by: LibrarySort = "saved_newest",
+    collection_id: int | None = None,
+    normalized_tag_name: str | None = None,
 ) -> list[LibraryItem]:
     items = [
         LibraryItem(
@@ -97,6 +99,20 @@ def list_library_items(
         )
         for entry in db.list_saved_library_entries()
     ]
+    if collection_id is not None:
+        memberships = db.list_library_collection_memberships(collection_id)
+        article_ids = {membership.article_id for membership in memberships}
+        items = [item for item in items if item.article.id in article_ids]
+    if normalized_tag_name is not None:
+        items = [
+            item
+            for item in items
+            if item.article.id is not None
+            and any(
+                assignment.tag.normalized_name == normalized_tag_name
+                for assignment in db.list_library_tag_assignments(item.article.id)
+            )
+        ]
     return sort_library_items(filter_library_items(items, query=query), sort_by=sort_by)
 
 

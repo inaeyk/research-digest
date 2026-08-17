@@ -228,3 +228,42 @@ Key frozen decisions:
 - Notes and memberships survive ordinary unsave/resave so user work is not
   lost.
 - M6-C uses additive SQLite schema version `11`; JSON config is unchanged.
+
+## M6-C Candidate
+
+Implemented:
+
+- Additive SQLite schema version `11` with `library_article_notes`,
+  `library_collections`, and `library_collection_memberships`.
+- Focused `research_digest.collections` service for note CRUD, collection CRUD,
+  membership add/remove, collection/tag filters, and name normalization.
+- Library page note editor with explicit save/clear semantics.
+- Library page collection creation, rename, delete, article membership
+  add/remove, and filters by collection and tag.
+- JSON backup export for notes, collections, and memberships.
+
+Preserved:
+
+- Notes and collections attach to Article identity, not run snapshots.
+- Empty/whitespace note save clears the note.
+- Viewing/listing notes and collections does not call Codex/analyzers.
+- Unsave/resave preserves notes and memberships.
+- Deleting a collection deletes memberships only, not papers, notes, tags,
+  analyses, feedback, history, or Library saved state.
+
+Deterministic candidate checks:
+
+- `pytest`: PASS, 290 passed.
+- `ruff check src tests`: PASS.
+- `mypy --strict src tests`: PASS.
+- `python -m compileall src tests`: PASS.
+- `git diff --check`: PASS.
+
+Audit state:
+
+- Fresh read-only M6-C Auditor PASS.
+- BLOCKER/IMPORTANT findings: none.
+- Audit repair rounds used: 0.
+- Deferred MINOR/OPTIONAL: Library tag filter options may include tags retained
+  only for AI suppression/tombstone history, which can yield no-result filter
+  options.
