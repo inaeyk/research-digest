@@ -610,6 +610,11 @@ Focused U2-H post-repair audit:
 
 U2-H freeze:
 
-- qualified commit: pending U2-H freeze commit.
-- qualified tag: pending `u2h-qualified`.
-- qualified tag object: pending `u2h-qualified`.
+- qualified commit: `37cc990dd5e793a2ac84d9d2591b34037638ec9c`.
+- qualified tag: `u2h-qualified`.
+- qualified tag object: `8f13e93661ac80c43c9b996bbcff859f303bbce0`.
+
+## Final RC Gate
+
+Status: final independent RC audit over the complete delta from `v0.1.0`
+pending.
