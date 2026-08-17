@@ -1,7 +1,7 @@
 # M6 Campaign State
 
-- campaign_state: M6_D_QUALIFIED_FROZEN
-- current_substage: M6-D Library search and scientific connections qualified and frozen locally
+- campaign_state: M6_E_PLAN_FROZEN
+- current_substage: M6-E longitudinal scientific intelligence plan frozen; implementation not started
 - current_branch: feature/m6-scientific-library-memory
 - baseline_branch: master
 - baseline_commit: fe92e77a3fce4037c0bf4ecbb0a7ce964763eb8b
@@ -21,15 +21,15 @@
 - candidate_schema_version: 12
 - config_version: 3
 - codegraph_state: no `.codegraph/` directory exists at repository root.
-- current_qualification_state: M6-D repair round 1 deterministic qualification and fresh read-only repair Auditor PASS; local commit/tag freeze complete.
+- current_qualification_state: M6-D repair round 1 deterministic qualification and fresh read-only repair Auditor PASS; M6-E plan frozen.
 - audit_round: M6-D audit repair round 1 PASS. M6-B audit repair round 1 PASS. M6-A initial candidate PASS; no M6-A audit-driven repair rounds used.
 - deterministic_checks: final v0.2 freeze gate recorded `pytest` 262 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-A final gate recorded `pytest` 268 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-B candidate recorded `pytest` 283 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-B repair round 1 recorded `pytest` 284 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-C candidate recorded `pytest` 290 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-D candidate recorded `pytest` 300 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-D repair round 1 recorded `pytest` 302 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS.
 - live_checks: v0.2 live smoke was accepted by the human before the M6 branch. M6-B synthetic live Codex tag smoke reached the Codex CLI but exited non-zero with the sanitized authentication/usage-limits message; record as environment/provider limitation for later human live smoke, not deterministic code failure. M6-D synthetic live Codex connection smoke reached the Codex CLI but failed before model work because the CLI could not initialize in the read-only runtime; record as environment/provider limitation for later human live smoke, not deterministic code failure.
-- schema_config_migration_state: v0.2 baseline uses ordered SQLite migrations through schema 8 and JSON config 3. M6-A adds additive SQLite schema 9 with `library_articles`; JSON config is unchanged. M6-B adds additive SQLite schema 10 for Library tags, tag assignments, and AI tag suppressions; JSON config is unchanged. M6-C adds additive SQLite schema 11 for article notes, collections/projects, and collection memberships; JSON config is unchanged. M6-D candidate adds additive SQLite schema 12 for rebuildable Library search documents and article relationship suggestions with soft dismissal; JSON config is unchanged.
+- schema_config_migration_state: v0.2 baseline uses ordered SQLite migrations through schema 8 and JSON config 3. M6-A adds additive SQLite schema 9 with `library_articles`; JSON config is unchanged. M6-B adds additive SQLite schema 10 for Library tags, tag assignments, and AI tag suppressions; JSON config is unchanged. M6-C adds additive SQLite schema 11 for article notes, collections/projects, and collection memberships; JSON config is unchanged. M6-D adds additive SQLite schema 12 for rebuildable Library search documents and article relationship suggestions with soft dismissal; JSON config is unchanged. M6-E is expected to add additive SQLite schema 13 for per-new-paper Library context suggestions and collection intelligence snapshots; JSON config changes are not expected.
 - qualified_local_commit: 82c323d56c9ed9fbbdb8c36f602d03bd9d3d34b0
 - qualified_local_tag: annotated local tag `m6d-qualified`; tag object `400e031ee29bf48b807e909d28304ea345b06b72`; target `82c323d56c9ed9fbbdb8c36f602d03bd9d3d34b0`. Prior local tags: `m6c-qualified` targets `7208191b3aa66c21863ec63d21e7d1f60ebe82b0`; `m6b-qualified` targets `104780a0ba9c98cd9663ef8d1088cb9472d53e09`; `m6a-qualified` targets `17e047c325bb61008cf39b9a135bea02bb63a968`.
 - deferred_minor_optional_findings: M6-A Auditor noted Library save/remove UI lacks a dedicated Streamlit click smoke; deterministic service/helper coverage passed and this was classified MINOR/OPTIONAL. M6-B repair Auditor noted regeneration replacement is not a single DB transaction after provider success; current supported paths are covered, but a future atomic replace helper would be safer if the persistence path broadens. M6-C Auditor noted tag filter options may include tags retained only for AI suppression/tombstone history, which can yield no-result filter options. M6-D initial Auditor noted personal-note-derived tokens could be sent to Codex without explicit cue; repair round 1 excludes note text from Codex-facing connection candidate evidence while preserving local note search.
-- next_permitted_action: freeze detailed M6-E longitudinal scientific intelligence plan before implementation.
+- next_permitted_action: implement M6-E longitudinal scientific intelligence according to the frozen plan below.
 - human_stop_reason: none active
 
 ## Recovered v0.2 Baseline
@@ -670,3 +670,144 @@ Qualification:
   run Codex; otherwise record provider/environment limitation for human live
   smoke.
 - After PASS, commit locally and create annotated local tag `m6d-qualified`.
+
+## Frozen M6-E Plan
+
+Goal: use the saved Library to contextualize new digest papers and provide a
+lightweight longitudinal view for collections/projects without redefining daily
+relevance.
+
+Core semantic decisions:
+
+- The Interest Profile remains the authority for relevance scoring and
+  preselection. Library memory adds context only.
+- M6-E context statements are suggestions/inferences grounded in stored
+  metadata, analyses, tags, collections, notes where explicitly local-only, and
+  M6-D relationships.
+- Do not send the entire Library to Codex. All prompt inputs must be bounded by
+  deterministic local candidate selection.
+- Do not introduce embeddings, vector databases, distributed services, or M5
+  full-paper reading.
+- Personal notes remain local/private by default. Do not send note text to
+  Codex in M6-E prompts unless a later explicit user action authorizes it.
+- Historical digest run snapshots remain immutable. New M6-E context is stored
+  as additive records keyed to Article identity and run id where appropriate.
+
+Data model:
+
+- Add additive SQLite schema version 13.
+- Add `library_context_suggestions` for new/analyzed digest articles:
+  `id`, `run_id`, `article_id`, `related_article_id`, optional
+  `collection_id`, `relation_label`, `rationale`, `origin`,
+  `provenance_json`, optional `confidence`, `created_at`, `dismissed_at`.
+- Canonicalize article pair meaning where only two papers are involved, but keep
+  the new article/related saved article roles explicit for display.
+- Add `collection_intelligence_snapshots` or a similarly focused table for
+  lightweight collection/project summaries: `collection_id`, `title`,
+  `summary`, `evidence_json`, `origin`, `provenance_json`, `generated_at`,
+  optional `dismissed_at`.
+- Dismissals must durably hide repeated suggestions without deleting papers,
+  tags, notes, collections, M6-D connections, analyses, feedback, or history.
+
+Deterministic candidate selection:
+
+- For each newly analyzed article, select a bounded saved-Library context set
+  using local evidence first:
+  - shared Library tags / matched topics;
+  - shared arXiv categories;
+  - M6-D persisted relationships if the article is already saved;
+  - Library search over title/abstract/tags/collections, excluding personal note
+    text from Codex-facing evidence;
+  - collection membership evidence for related saved papers.
+- Bound context per new article, initially with conservative defaults such as
+  top 5 saved papers and top 3 collections.
+- Deterministic ordering: local score descending, then saved/recent publication
+  recency, then source identity.
+- Exclude self-links, unsaved articles, dismissed context suggestions, and
+  candidates without meaningful local evidence.
+
+AI context generation:
+
+- Add a `LibraryContextGenerator` protocol and Codex CLI implementation with
+  prompt version `library_context_v1`.
+- Prompt input: one newly analyzed paper, its existing analysis result, bounded
+  saved-paper candidates, collection labels/descriptions, tags, and local
+  evidence. No personal notes. No full Library dump.
+- Output: zero or more grounded context suggestions with related saved-paper id,
+  optional collection id, concise relation label, rationale, optional
+  confidence.
+- Validate returned ids, reject duplicates/unknown/self links, sanitize provider
+  errors, and persist only valid suggestions.
+- Viewing stored context or opening Today/History/Library pages must not call
+  Codex. Generation can happen explicitly after a digest run or through a
+  bounded service hook if an analyzer/provider is available and tests prove it
+  does not affect run success semantics.
+
+Daily result UI:
+
+- Add `Connections to your Library` beneath analyzed paper cards or as a
+  compact section near synthesis.
+- Clearly label each item as a suggested relationship and show the related
+  saved paper/collection and rationale.
+- Preserve existing Relevant, All analyzed, Below threshold, preselected-out,
+  NEW/REUSED, synthesis, feedback, abstract, and Library controls.
+- If no Library or no grounded context exists, show no noisy filler.
+- Add dismiss controls for repeated suggestions with stable per-article keys.
+
+Collection/project intelligence view:
+
+- Add a lightweight section in the Library page under each collection or a
+  dedicated collection detail expander.
+- Show stored evidence-driven summaries such as recently connected papers,
+  recurring tags/topics, recent additions, and suggested developments.
+- Deterministic local summaries can be shown without Codex. Optional Codex
+  collection intelligence generation is explicit, bounded, and uses prompt
+  version `collection_intelligence_v1`.
+- Do not present grand scientific conclusions. Use wording that distinguishes
+  stored evidence from model inference.
+
+Synthesis integration:
+
+- Cross-paper synthesis may include a compact count/list of grounded Library
+  connections for relevant papers, but relevance scores and matched_topics are
+  unchanged.
+- Do not mutate existing `AnalysisResult` or analysis cache identity merely to
+  add Library context.
+
+Backup/export:
+
+- Export durable context suggestions, dismissals, and collection intelligence
+  snapshots with article/collection identities.
+- Do not export derived/rebuildable candidate scores unless needed as
+  provenance evidence.
+
+Tests required:
+
+- bounded context candidate selection and deterministic ordering.
+- no-library and no-connection behavior.
+- no personal note text in Codex context prompts.
+- prompt construction labels article metadata as untrusted data and remains
+  bounded.
+- provider output validation for duplicate/unknown/self ids.
+- dismissed relation/context handling.
+- collection isolation and collection-intelligence evidence.
+- cache/reuse semantics: Library context does not change relevance-analysis
+  cache keys and does not force reanalysis.
+- historical run snapshots remain immutable.
+- Today UI helper/state tests for context display and dismiss controls.
+- upgrade from schema 12 creates M6-E tables and preserves M6-A/B/C/D data.
+
+Qualification:
+
+- Focused deterministic tests for candidate selection, persistence, prompts,
+  provider parsing, UI helpers, backup, and migration.
+- Full `pytest`.
+- `ruff check src tests`.
+- `mypy --strict src tests`.
+- `python -m compileall src tests`.
+- `git diff --check`.
+- Fresh independent read-only M6-E Auditor.
+- Attempt a small live Codex context-generation smoke if the environment can
+  run Codex; otherwise record provider/environment limitation for human live
+  smoke.
+- After PASS, commit locally and create annotated local tag `m6e-qualified`.

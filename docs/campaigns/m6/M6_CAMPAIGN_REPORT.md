@@ -369,3 +369,23 @@ Freeze state:
 - Qualified local annotated tag: `m6d-qualified`.
 - Tag object: `400e031ee29bf48b807e909d28304ea345b06b72`.
 - Tag target: `82c323d56c9ed9fbbdb8c36f602d03bd9d3d34b0`.
+
+## M6-E Plan Freeze
+
+The detailed M6-E plan is recorded in `CAMPAIGN_STATE.md`.
+
+Key frozen decisions:
+
+- Daily relevance and Library memory remain separate layers; M6-E does not
+  change relevance scoring, preselection, feedback, or analysis cache identity.
+- New-paper Library context is bounded by deterministic local candidate
+  selection before any Codex reasoning.
+- Personal note text remains local/private by default and is excluded from
+  Codex context prompts.
+- Context suggestions and collection intelligence are persisted as additive
+  provenance-bearing records, not as mutations of historical run snapshots or
+  relevance analyses.
+- UI wording must distinguish stored evidence from model-inferred suggested
+  relationships.
+- M6-E is expected to use additive SQLite schema version `13`; JSON config is
+  unchanged.
