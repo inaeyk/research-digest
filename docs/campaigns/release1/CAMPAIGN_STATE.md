@@ -1,11 +1,11 @@
 # Release 1 Campaign State
 
-- current_substage: M7-H audit PASS ready to freeze
+- current_substage: M7-I audit PASS ready to freeze
 - status: ACTIVE
-- current_git_head: 4070cce4744fc0862e418b1db51f43019fb0a78c
-- current_tags_at_head: m7g-qualified
+- current_git_head: e972d95933fc8145924883f0fa29cfeec52d4600
+- current_tags_at_head: m7h-qualified
 - current_branch: master
-- local_remote_tracking: `master` tracks `origin/master`; local branch is 11 commits ahead after M7-G freeze
+- local_remote_tracking: `master` tracks `origin/master`; local branch is 12 commits ahead after M7-H freeze
 - online_remote_verification: attempted `git ls-remote --heads --tags origin`; blocked by DNS resolution failure for `github.com` even after network escalation
 - baseline_m1_qualified_commit: 36bd1cbe60f95d588e8ccdd41bfce914e9b1d7da
 - baseline_m1_qualified_tag: m1-qualified
@@ -50,15 +50,18 @@
 - m7g_qualified_commit: 4070cce4744fc0862e418b1db51f43019fb0a78c
 - m7g_qualified_tag: m7g-qualified
 - m7g_qualified_tag_object: 1a11880d39ba71aed06163620142eeca0aaa372f
+- m7h_qualified_commit: e972d95933fc8145924883f0fa29cfeec52d4600
+- m7h_qualified_tag: m7h-qualified
+- m7h_qualified_tag_object: 4a1b6ab618265a15f9c99682e4d638583f362c32
 - skipped_campaigns: M3 additional source types; M5 full-paper reading; M6 long-term research memory
 - active_campaign_scope: M4 automatic daily operation; M7 release engineering, upgradeability, and productization; first release candidate
-- qualification_status: M7H_AUDIT_PASS_READY_FREEZE
-- audit_repair_round: 0
-- last_deterministic_verification: M7-H post-audit qualification gate: `pytest` 139 passed; `ruff check .` PASS; strict `mypy --strict src tests` PASS; `compileall -q src tests` PASS; `git diff --check` PASS.
-- last_live_verification: M7-H `research-digest serve --port 18601` direct smoke blocked by local socket `Operation not permitted`; temp-path `status --json` PASS; `doctor --json` PASS with sanitized warnings. Deterministic serve port-conflict construction remains covered by tests.
+- qualification_status: M7I_AUDIT_PASS_READY_FREEZE
+- audit_repair_round: 1
+- last_deterministic_verification: M7-I repair round 1 second full gate: full `pytest` 145 passed; `ruff check .` PASS; strict `mypy --strict src tests` PASS; `python -m compileall -q src tests` PASS; `git diff --check` PASS.
+- last_live_verification: M7-I repair round 1 package smoke: offline `pip wheel . --no-deps` PASS; isolated fresh-venv wheel install with `--no-deps` PASS; installed `research-digest --version` PASS from `/tmp`; installed entry point metadata PASS; installed `status --json` PASS with isolated data/config; documented editable `pip install -e '.[dev]' --no-deps` PASS; editable installed CLI PASS. Final current-state package smoke repeated under `/tmp/research-digest-m7i-finalpkg3.RhYfM6` and PASS; wheel contains no `__pycache__` or `.pyc` members and includes `dev` extra metadata. Live arXiv/Codex/scheduler/serve limitations remain environment-blocked as previously recorded.
 - migration_data_safety_status: M7-B candidate adds explicit schema version metadata, ordered migrations, backup before schema-changing upgrades of existing DBs, rollback on failed migration, and visible migration backup path. Repo-local `research_digest.sqlite3` remains ignored and was not used for upgrade testing.
 - deferred_minor_optional_findings: none
-- next_permitted_action: run post-audit full M7-H qualification gate, inspect Git hygiene, stage only qualified M7-H/release1 docs files, commit, and tag `m7h-qualified`
+- next_permitted_action: run post-audit M7-I qualification gate, inspect Git hygiene, stage only qualified M7-I files, commit, and tag `m7i-qualified`
 - human_stop_reason: none
 
 ## Restored Release Campaign Charter Authority
@@ -914,6 +917,158 @@ Post-audit qualification:
 - `git diff --check`: PASS.
 
 Freeze:
+
+- committed `e972d95933fc8145924883f0fa29cfeec52d4600` (`Qualify M7-H release UI polish`) and created local annotated tag `m7h-qualified` with tag object `4a1b6ab618265a15f9c99682e4d638583f362c32`.
+
+## M7-I Frozen Specification
+
+Goal: demonstrate that the first release is installable, upgradeable, recoverable, and operable in realistic conditions.
+
+M7-I is a release qualification stage, not a feature-development stage.
+
+Required qualification matrix:
+
+- Case 1 fresh install: isolated fresh environment, no existing DB/config; package installs, CLI exists, data/config directories initialize correctly, fresh DB/schema/config initialize, enough state can be configured for a digest, and the application starts cleanly. Do not depend on the development checkout remaining on `PYTHONPATH`.
+- Case 2 upgrade from qualified M2 state: use a copy of representative M2-era data, never the user's only live DB; verify adoption/migration preserves profiles, source settings, articles, relevance analyses, preselection data, feedback/calibration, synthesis/digests, and run history where applicable; validate counts and meaningful relationships/invariants.
+- Case 3 repeated upgrade/startup: repeated startup after upgrade must not duplicate migrations, duplicate semantic data, recreate/adopt legacy state incorrectly, or corrupt configuration.
+- Case 4 Codex unavailable: with Codex provider configured but executable/auth unavailable, doctor/status/run give clear bounded failure/warning, no secrets are exposed, DB remains valid, and UI remains reasonably inspectable.
+- Case 5 live Codex authenticated: perform a small real subscription-backed Codex digest covering arXiv, preselection, relevance analysis, feedback/calibration context as applicable, synthesis, persistence, and history.
+- Case 6 network unavailable: simulate or exercise bounded network failure, sanitized failure, failed run record, DB integrity preservation, and later retry.
+- Case 7 scheduled headless run: exercise supported scheduling path on current WSL2/Windows where available; verify stable installed CLI, no Streamlit dependency, History/status visibility, inspectable schedule status, and no secrets embedded in task command line.
+- Case 8 overlapping manual/scheduled run: verify M4-C exclusion behavior, safe duplicate/racing prevention, user-visible/CLI outcome, no corruption, and stale lock recovery.
+- Case 9 application code upgrade: verify code is replaceable and user data/config survive replacement/reinstallation/upgrading of application code.
+- Case 10 migration failure: controlled disposable migration failure verifies pre-migration backup where required, recoverability of previous user data, fail-closed behavior, and documented/testable recovery procedure.
+- Case 11 backup: verify `research-digest backup`, SQLite snapshot validation, JSON export validation, awkward/reserved source paths, collision behavior, and secret exclusion.
+- Case 12 serve/port conflict: verify `research-digest serve` handles an unavailable preferred port sensibly, prints actual usable URL, avoids raw Streamlit development invocation, and remains bounded/understandable.
+
+Minimum deterministic/packaging gate:
+
+- full `pytest`
+- `ruff check .`
+- strict `mypy --strict src tests`
+- `python -m compileall -q src tests`
+- `git diff --check`
+- Git hygiene/inventory checks
+- package build/install verification
+- isolated fresh-venv installation
+- installed CLI smoke tests
+
+Execution rules:
+
+- Use real clean environments where practical.
+- Do not depend only on the current development venv.
+- Document exact environment limitations when a case cannot be executed.
+- After the qualification matrix passes, launch a fresh independent read-only M7-I Auditor.
+
+Freeze criteria:
+
+- fresh independent read-only M7-I audit PASS or justified PASS WITH MINOR FINDINGS.
+- all required deterministic/packaging gates PASS or have documented environment limitations where live execution is impossible.
+- staged inventory excludes `research_digest.sqlite3`, `.venv`, `.env`/secrets, caches, and local agent/runtime state.
+- commit and annotated local tag `m7i-qualified`.
+
+Candidate implementation/evidence:
+
+- Added durable matrix document `docs/campaigns/release1/M7I_QUALIFICATION_MATRIX.md` covering all twelve restored-charter release qualification cases.
+- Added deterministic release qualification harness `tests/test_release_qualification_matrix.py`.
+- Harness covers fresh install-like config/DB/status initialization, representative unversioned/M2-style data adoption and migration, repeated startup without duplicate semantic data, backup/export from upgraded data, Codex-unavailable doctor behavior without secrets, sanitized bounded network failure, and serve port-conflict command construction.
+- Package build and fresh-venv install were attempted and are environment-blocked by inability to resolve `hatchling` from PyPI, including after network escalation.
+- Live arXiv reachability is environment-blocked by DNS failure, including after network escalation.
+- Live Codex execution is environment-blocked: default Codex home hits read-only filesystem; throwaway writable `CODEX_HOME` reaches CLI session setup but cannot connect to OpenAI endpoints from this environment.
+- Live Windows Task Scheduler path remains environment-blocked by WSL `UtilBindVsockAnyPort ... socket failed 1`.
+- Live `research-digest serve` listener remains environment-blocked by local socket `Operation not permitted`; deterministic port-conflict command construction remains covered.
+
+Candidate verification:
+
+- `pytest tests/test_release_qualification_matrix.py`: 4 passed.
+- `ruff check tests/test_release_qualification_matrix.py`: PASS.
+- strict `mypy --strict tests/test_release_qualification_matrix.py`: PASS.
+- `python -m pip show research-digest`: PASS in current venv, editable install version `0.1.0`.
+- temp-path `python -m research_digest.cli status --json`: PASS.
+- `python -m research_digest.cli doctor --json`: PASS with sanitized environment warnings and no failures.
+- `python -m research_digest.cli --version`: PASS, `research-digest 0.1.0`.
+
+Full candidate gate:
+
+- full `pytest`: 143 passed.
+- `ruff check .`: PASS.
+- strict `mypy --strict src tests`: PASS.
+- `python -m compileall -q src tests`: PASS.
+- `git diff --check`: PASS.
+
+Initial M7-I audit:
+
+- fresh independent read-only M7-I Auditor returned FAIL with two BLOCKER findings.
+- BLOCKER 1: installed CLI smoke evidence was missing and contradicted by the environment; the candidate used `python -m research_digest.cli`, while `research-digest` was not on PATH and the editable install did not expose a console script.
+- BLOCKER 2: the upgrade harness did not durably demonstrate upgrade from qualified M2 state; it created current-schema data with the current `Database` API, dropped only `schema_metadata`, and included current run snapshots.
+
+Repair round 1:
+
+- Replaced the external `hatchling` build backend with repo-local `_research_digest_build`, a minimal pure-Python PEP 517 backend that builds the package wheel and declared `research-digest` console script without network access.
+- Replaced the upgrade fixture with hand-built representative `m2-qualified` schema/data: no `schema_metadata`, no run snapshots, M2-style profiles/source settings/articles/relevance analyses/profile fingerprints/feedback/app run/preselection counters.
+- The repair harness verifies schema migration to current version, pre-migration backup creation, semantic count stability across repeated startup, M2 fingerprint preservation, and backup/export from the upgraded copy.
+
+Repair round 1 focused verification:
+
+- `pytest tests/test_release_qualification_matrix.py`: 5 passed.
+- `ruff check _research_digest_build.py tests/test_release_qualification_matrix.py pyproject.toml`: PASS.
+- strict `mypy --strict tests/test_release_qualification_matrix.py`: PASS.
+- `python -m pip wheel . --no-deps -w /tmp/research-digest-m7i-package.CtC0I9/wheelhouse`: PASS.
+- isolated fresh-venv wheel install with `--no-deps`: PASS.
+- installed wheel CLI `/tmp/research-digest-m7i-package.CtC0I9/venv/bin/research-digest --version`: PASS, `research-digest 0.1.0`.
+- installed entry point metadata query: PASS, `research_digest.cli:main`.
+- installed wheel CLI `status --json` from `/tmp` with isolated data/config: PASS, schema version 4 and config version 1 initialized; scheduler warning sanitized.
+- isolated fresh source install `pip install --no-deps .`: PASS.
+- installed source CLI `/tmp/research-digest-m7i-package.CtC0I9/sourcevenv/bin/research-digest --version`: PASS, `research-digest 0.1.0`.
+
+Repair round 1 full gate:
+
+- full `pytest`: 144 passed.
+- `ruff check .`: PASS.
+- strict `mypy --strict src tests`: PASS.
+- `python -m compileall -q src tests`: PASS.
+- `git diff --check`: PASS.
+- package backend bytecode/cache repair: `_research_digest_build` now excludes `__pycache__` and `.pyc` files; harness asserts this.
+- final current-state `python -m pip wheel . --no-deps -w /tmp/research-digest-m7i-finalpkg2.VfZt6V/wheelhouse`: PASS.
+- final isolated fresh-venv wheel install with `--no-deps`: PASS.
+- final installed CLI `/tmp/research-digest-m7i-finalpkg2.VfZt6V/venv/bin/research-digest --version`: PASS, `research-digest 0.1.0`.
+- final installed CLI `status --json` from `/tmp` with isolated data/config: PASS, schema version 4 and config version 1 initialized; scheduler warning sanitized.
+- final installed entry point metadata query: PASS, `research_digest.cli:main`.
+- final wheel-content cache/bytecode check: PASS, no `__pycache__` or `.pyc` members.
+
+Repair round 1 closure audit:
+
+- fresh independent read-only M7-I Auditor returned FAIL after verifying the two earlier BLOCKERs were closed.
+- IMPORTANT finding: the repo-local PEP 517 backend did not support the README-documented editable/dev installation path `pip install -e ".[dev]"`, and package metadata omitted the `dev` extra.
+
+Repair round 1 installability follow-up:
+
+- Added PEP 660 editable hooks to `_research_digest_build`.
+- Added `Provides-Extra` and extra-scoped `Requires-Dist` metadata for optional dependencies, including `dev`.
+- Added regression coverage for wheel metadata, bytecode/cache exclusion, and the documented editable install command.
+- focused `pytest tests/test_release_qualification_matrix.py`: 6 passed.
+- focused `ruff check _research_digest_build.py tests/test_release_qualification_matrix.py pyproject.toml`: PASS.
+- focused strict `mypy --strict tests/test_release_qualification_matrix.py`: PASS.
+- second full `pytest`: 145 passed.
+- second full `ruff check .`: PASS.
+- second full strict `mypy --strict src tests`: PASS.
+- second `python -m compileall -q src tests`: PASS.
+- second `git diff --check`: PASS.
+- final current-state `python -m pip wheel . --no-deps -w /tmp/research-digest-m7i-finalpkg3.RhYfM6/wheelhouse`: PASS.
+- wheel metadata/content check: PASS, no generated bytecode/cache files; console script entry point present; `dev` extra metadata present.
+- isolated wheel install with `--no-deps`: PASS.
+- installed wheel CLI `--version`: PASS, `research-digest 0.1.0`.
+- installed wheel CLI `status --json` from `/tmp` with isolated data/config: PASS.
+- documented editable install `pip install -e '.[dev]' --no-deps`: PASS.
+- editable installed CLI `--version`: PASS, `research-digest 0.1.0`.
+
+Second closure audit:
+
+- fresh independent read-only M7-I Auditor returned PASS with no BLOCKER/IMPORTANT/MINOR/OPTIONAL findings.
+- Auditor independently verified the original installed-CLI and M2-upgrade BLOCKERs remain closed.
+- Auditor independently verified the README-documented editable/dev install path is supported, `dev` extra metadata is emitted, wheel/editable installs work from isolated `/tmp` contexts, the twelve-case matrix is credible, generated cache/bytecode files are excluded from wheels, and the environment-blocked live Codex/arXiv/scheduler/serve limitations are concrete and acceptable for M7-I if carried into final RC materials.
+
+Historical M7-G freeze record:
 
 - committed `4070cce4744fc0862e418b1db51f43019fb0a78c` (`Qualify M7-G backup export`) and created local annotated tag `m7g-qualified` with tag object `1a11880d39ba71aed06163620142eeca0aaa372f`.
 

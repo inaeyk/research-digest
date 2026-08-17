@@ -1,6 +1,7 @@
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = []
+build-backend = "_research_digest_build"
+backend-path = ["."]
 
 [project]
 name = "research-digest"
@@ -22,9 +23,6 @@ dev = [
   "pytest>=8.0",
   "ruff>=0.5",
 ]
-
-[tool.hatch.build.targets.wheel]
-packages = ["src/research_digest"]
 
 [tool.ruff]
 line-length = 100
