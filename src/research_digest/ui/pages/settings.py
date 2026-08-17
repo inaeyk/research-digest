@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import date
+from datetime import UTC, date, datetime
+from pathlib import Path
 
 from research_digest import __version__
 from research_digest.automation import (
@@ -13,6 +14,7 @@ from research_digest.automation import (
     remove_schedule,
     run_automatic_digest_now,
 )
+from research_digest.backup import BackupResult, run_backup
 from research_digest.config import AppConfig, ConfigError, load_config, save_automation_settings
 from research_digest.db import Database
 from research_digest.doctor import DoctorCheck, DoctorReport, DoctorSeverity, run_doctor
@@ -34,37 +36,45 @@ def render() -> None:
         return
 
     db = get_database()
-    _render_runtime_summary(config, db)
-    _render_provider_summary(config)
+    _render_general(config, db)
+    doctor_report = run_doctor(config=config, db=db, include_network=False)
+    _render_analysis(config, doctor_report)
     _render_automation(config, db)
-    _render_doctor(config, db)
-    _render_release_commands()
+    _render_data(config)
+    _render_doctor(doctor_report)
 
 
-def _render_runtime_summary(config: AppConfig, db: Database) -> None:
+def _render_general(config: AppConfig, db: Database) -> None:
     import streamlit as st
 
-    st.subheader("Runtime")
+    st.subheader("General")
     col1, col2, col3 = st.columns(3)
-    col1.metric("Application version", __version__)
+    col1.metric("App version", __version__)
     col2.metric("Schema version", db.get_schema_version())
     col3.metric("Config version", config.config_version)
 
     with st.container(border=True):
         st.markdown("**Locations**")
-        st.caption("Active SQLite data")
+        st.caption("Active SQLite data file")
         st.code(str(config.db_path), language=None)
+        st.caption("Data directory")
+        st.code(str(config.data_dir), language=None)
         st.caption("Configuration file")
         st.code(str(config.config_path or config.config_dir), language=None)
+        st.caption("Configuration directory")
+        st.code(str(config.config_dir), language=None)
 
 
-def _render_provider_summary(config: AppConfig) -> None:
+def _render_analysis(config: AppConfig, report: DoctorReport) -> None:
     import streamlit as st
 
-    st.subheader("Analyzer")
+    st.subheader("Analysis")
     with st.container(border=True):
         provider = provider_label(config)
         st.metric("Provider", provider)
+        provider_check = provider_health_check(report)
+        if provider_check is not None:
+            _render_inline_check(provider_check)
         if config.analyzer_provider == "codex":
             st.caption("Codex uses the signed-in Codex CLI and ChatGPT-managed authentication.")
             st.write(f"Model: {config.codex_model or 'Codex CLI default'}")
@@ -73,6 +83,8 @@ def _render_provider_summary(config: AppConfig) -> None:
             st.caption("OpenAI API mode reads the API key from the environment.")
             st.write(f"Model: {config.openai_model}")
             st.write("API key: configured" if config.openai_api_key else "API key: missing")
+        st.markdown("**Preselection effort**")
+        st.caption(preselection_effort_summary())
 
 
 def _render_automation(config: AppConfig, db: Database) -> None:
@@ -195,11 +207,45 @@ def _run_automatic_now(config: AppConfig, db: Database) -> None:
         st.write(run_now_summary(result))
 
 
-def _render_doctor(config: AppConfig, db: Database) -> None:
+def _render_data(config: AppConfig) -> None:
+    import streamlit as st
+
+    st.subheader("Data")
+    with st.container(border=True):
+        st.markdown("**Backup**")
+        st.caption("Creates a verified copy of the active SQLite data file.")
+        st.caption("Active data file")
+        st.code(str(config.db_path), language=None)
+        st.caption("Default backup directory")
+        st.code(str(default_backup_directory(config.db_path)), language=None)
+        export_json = st.toggle("Include JSON export sidecar", value=False)
+        if st.button("Backup now", icon=":material/download:"):
+            _run_backup_now(export_json=export_json)
+
+
+def _run_backup_now(*, export_json: bool) -> None:
+    import streamlit as st
+
+    with st.status("Creating backup...", expanded=True) as status:
+        try:
+            result = run_backup(export_json=export_json, timestamp=datetime.now(UTC))
+        except Exception as exc:
+            status.update(label="Backup failed", state="error")
+            st.error(sanitize_error(exc), icon=":material/error:")
+            return
+        status.update(label="Backup complete", state="complete")
+        st.success(backup_result_message(result), icon=":material/check_circle:")
+        st.caption("Backup file")
+        st.code(str(result.backup_path), language=None)
+        if result.export_path is not None:
+            st.caption("JSON export")
+            st.code(str(result.export_path), language=None)
+
+
+def _render_doctor(report: DoctorReport) -> None:
     import streamlit as st
 
     st.subheader("Health")
-    report = run_doctor(config=config, db=db, include_network=False)
     severity = doctor_overall_severity(report)
     if severity == DoctorSeverity.FAILURE:
         st.error(doctor_summary(report), icon=":material/error:")
@@ -211,6 +257,18 @@ def _render_doctor(config: AppConfig, db: Database) -> None:
     with st.expander("Doctor checks", icon=":material/stethoscope:"):
         for check in report.checks:
             _render_check(check)
+
+
+def _render_inline_check(check: DoctorCheck) -> None:
+    import streamlit as st
+
+    message = sanitize_error(check.message)
+    if check.severity == DoctorSeverity.FAILURE:
+        st.error(message, icon=":material/error:")
+    elif check.severity == DoctorSeverity.WARNING:
+        st.warning(message, icon=":material/warning:")
+    else:
+        st.success(message, icon=":material/check_circle:")
 
 
 def _render_check(check: DoctorCheck) -> None:
@@ -225,26 +283,35 @@ def _render_check(check: DoctorCheck) -> None:
         st.success(f"{label} - {check.message}", icon=":material/check_circle:")
 
 
-def _render_release_commands() -> None:
-    import streamlit as st
-
-    st.subheader("Release commands")
-    commands = [
-        "research-digest serve",
-        "research-digest run",
-        "research-digest status",
-        "research-digest doctor",
-        "research-digest backup --export-json",
-    ]
-    with st.container(border=True):
-        st.caption("Use the installed CLI for release operations.")
-        st.code("\n".join(commands), language="bash")
-
-
 def provider_label(config: AppConfig) -> str:
     if config.analyzer_provider == "codex":
         return "Codex CLI"
     return "OpenAI API"
+
+
+def provider_health_check(report: DoctorReport) -> DoctorCheck | None:
+    for check in report.checks:
+        if check.name == "provider":
+            return check
+    return None
+
+
+def preselection_effort_summary() -> str:
+    return (
+        "Research Digest retrieves all eligible articles for the selected source dates. "
+        "Cached analyses are reused, and deterministic abstract preselection decides which "
+        "cache-miss articles need new full LLM analysis."
+    )
+
+
+def backup_result_message(result: BackupResult) -> str:
+    if result.export_path is None:
+        return f"Backup created at {result.backup_path}."
+    return f"Backup created at {result.backup_path}; JSON export created at {result.export_path}."
+
+
+def default_backup_directory(db_path: Path) -> Path:
+    return db_path.parent / "backups"
 
 
 def doctor_overall_severity(report: DoctorReport) -> DoctorSeverity:

@@ -5,6 +5,7 @@ import unittest
 from datetime import date
 from pathlib import Path
 
+from research_digest.backup import BackupResult
 from research_digest.db import APP_RUN_COMPLETED, Database
 from research_digest.doctor import DoctorCheck, DoctorReport, DoctorSeverity
 from research_digest.models import RunOrigin
@@ -36,6 +37,52 @@ class SettingsPageTests(unittest.TestCase):
         self.assertEqual(settings.doctor_summary(warning), "No failures, 1 warning(s)")
         self.assertEqual(settings.doctor_overall_severity(passed), DoctorSeverity.PASS)
         self.assertEqual(settings.doctor_summary(passed), "All checks passed")
+
+    def test_provider_health_check_uses_doctor_report(self) -> None:
+        provider = DoctorCheck("provider", DoctorSeverity.PASS, "Codex analyzer is configured.")
+        report = DoctorReport(
+            checks=(
+                DoctorCheck("sqlite", DoctorSeverity.PASS, "ok"),
+                provider,
+            )
+        )
+
+        self.assertEqual(settings.provider_health_check(report), provider)
+        self.assertIsNone(settings.provider_health_check(DoctorReport(checks=())))
+
+    def test_preselection_effort_summary_describes_date_native_effort(self) -> None:
+        summary = settings.preselection_effort_summary()
+
+        self.assertIn("retrieves all eligible articles", summary)
+        self.assertIn("selected source dates", summary)
+        self.assertIn("Cached analyses are reused", summary)
+        self.assertIn("preselection", summary)
+
+    def test_backup_result_message_shows_backup_and_optional_export(self) -> None:
+        backup = BackupResult(
+            db_path=Path("/tmp/research-digest.sqlite3"),
+            backup_path=Path("/tmp/backups/research_digest.sqlite3"),
+            export_path=None,
+            schema_version=6,
+        )
+        exported = BackupResult(
+            db_path=backup.db_path,
+            backup_path=backup.backup_path,
+            export_path=Path("/tmp/backups/research_digest.export.json"),
+            schema_version=6,
+        )
+
+        self.assertEqual(
+            settings.backup_result_message(backup),
+            "Backup created at /tmp/backups/research_digest.sqlite3.",
+        )
+        self.assertIn("JSON export created", settings.backup_result_message(exported))
+
+    def test_default_backup_directory_is_next_to_active_database(self) -> None:
+        self.assertEqual(
+            settings.default_backup_directory(Path("/tmp/research/research_digest.sqlite3")),
+            Path("/tmp/research/backups"),
+        )
 
     def test_schedule_time_default_uses_next_then_last_run(self) -> None:
         status = ScheduleStatus(

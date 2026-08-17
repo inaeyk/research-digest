@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from research_digest.errors import sanitize_error
 from research_digest.models import (
-    MAX_ARXIV_LOOKBACK_HOURS,
-    MAX_ARXIV_RESULTS,
     ArxivSourceConfig,
     ModelValidationError,
 )
@@ -20,6 +18,10 @@ def render() -> None:
     config = db.get_arxiv_config() or ArxivSourceConfig()
 
     with st.form("arxiv_source_config"):
+        st.caption(
+            "Manual digests choose arXiv source dates on Today. "
+            "Research Digest retrieves all eligible articles for those dates."
+        )
         enabled = st.toggle("arXiv enabled", value=config.enabled)
         category_text = st.text_area(
             "Categories",
@@ -27,31 +29,10 @@ def render() -> None:
             help="Enter arXiv categories separated by commas or new lines.",
             height=120,
         )
-        lookback_hours = st.number_input(
-            "Lookback hours",
-            min_value=1,
-            max_value=MAX_ARXIV_LOOKBACK_HOURS,
-            value=config.lookback_hours,
-            step=1,
-        )
-        max_results = st.number_input(
-            "Max results",
-            min_value=1,
-            max_value=MAX_ARXIV_RESULTS,
-            value=config.max_results,
-            step=5,
-        )
-        submitted = st.form_submit_button("Save")
+        submitted = st.form_submit_button("Save", icon=":material/save:")
         if submitted:
             try:
-                db.save_arxiv_config(
-                    ArxivSourceConfig(
-                        enabled=enabled,
-                        categories=_parse_categories(category_text),
-                        lookback_hours=int(lookback_hours),
-                        max_results=int(max_results),
-                    )
-                )
+                db.save_arxiv_config(updated_arxiv_config(config, enabled, category_text))
             except ModelValidationError as exc:
                 st.error(sanitize_error(exc))
             else:
@@ -62,3 +43,16 @@ def render() -> None:
 def _parse_categories(value: str) -> list[str]:
     normalized = value.replace(",", "\n")
     return [line.strip() for line in normalized.splitlines() if line.strip()]
+
+
+def updated_arxiv_config(
+    existing: ArxivSourceConfig,
+    enabled: bool,
+    category_text: str,
+) -> ArxivSourceConfig:
+    return ArxivSourceConfig(
+        enabled=enabled,
+        categories=_parse_categories(category_text),
+        lookback_hours=existing.lookback_hours,
+        max_results=existing.max_results,
+    )

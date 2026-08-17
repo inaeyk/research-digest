@@ -457,3 +457,61 @@ U2-F freeze:
 - qualified commit: `4ec80f759c4db041759b9dab550e390559afaa9b`.
 - qualified tag: `u2f-qualified`.
 - qualified tag object: `f63a39f33060b980889214e918b395d081de1f00`.
+
+## U2-G Candidate
+
+Implementation summary:
+
+- Settings now presents General, Analysis, Automation, Data, and Health
+  sections for normal administration.
+- General shows the app version, schema/config versions, active SQLite data
+  path, configuration path, data directory, and configuration directory.
+- Analysis shows the configured analyzer provider, non-secret model/runtime
+  details, provider health from the existing doctor/provider check, and the M2
+  preselection effort model.
+- Automation preserves the U2-E shared scheduler UI/service behavior.
+- Data adds Backup now through the existing backup service, including the
+  already-qualified optional JSON export sidecar and sanitized failure display.
+- Health continues to render the existing doctor report and checks through
+  `run_doctor()`.
+- The normal Sources form no longer presents `lookback_hours` or `max_results`;
+  saving arXiv enabled/categories preserves legacy stored values for
+  administrative compatibility.
+- The previous primary Release commands Settings block was removed from the
+  ordinary Settings surface.
+
+Candidate deterministic verification:
+
+- focused Settings/Sources tests: 11 passed.
+- `pytest`: 210 passed.
+- `ruff check .`: PASS.
+- `mypy --strict src tests`: PASS.
+- `python -m compileall -q src tests`: PASS.
+- `git diff --check`: PASS.
+
+Live smoke:
+
+- `python -m research_digest.cli serve --port 18612` failed with local socket
+  `[Errno 1] Operation not permitted`.
+- Same command after escalation failed with the same result.
+
+Fresh U2-G audit:
+
+- Auditor `01a00fcd-4dcb-7ce2-aaeb-772be6644c8c` returned PASS.
+- No BLOCKER or IMPORTANT findings remain.
+- The auditor verified Settings section coverage, shared doctor/automation/
+  backup service boundaries, no secret exposure, normal Sources removal of
+  `lookback_hours`/`max_results`, legacy limit preservation, and no scope
+  expansion.
+- Auditor checks: full pytest passed, focused Settings/Sources pytest passed,
+  `ruff check .` PASS, strict mypy PASS, compileall over touched files PASS,
+  and `git diff --check u2f-qualified` PASS.
+- OPTIONAL: Settings backup directory display hardcodes the current backup
+  directory name instead of importing `backup.DEFAULT_BACKUP_DIRNAME`; behavior
+  matches the backup service.
+
+U2-G freeze:
+
+- qualified commit: pending U2-G freeze commit.
+- qualified tag: pending `u2g-qualified`.
+- qualified tag object: pending `u2g-qualified`.
