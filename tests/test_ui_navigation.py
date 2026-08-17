@@ -11,6 +11,7 @@ from research_digest.ui import app
 class PageCall:
     page: Callable[[], None]
     title: str | None
+    icon: str | None
     url_path: str | None
     default: bool
 
@@ -25,10 +26,11 @@ class FakeStreamlit:
         page: Callable[[], None],
         *,
         title: str | None = None,
+        icon: str | None = None,
         url_path: str | None = None,
         default: bool = False,
     ) -> PageCall:
-        return PageCall(page=page, title=title, url_path=url_path, default=default)
+        return PageCall(page=page, title=title, icon=icon, url_path=url_path, default=default)
 
 
 class NavigationTests(unittest.TestCase):
@@ -37,11 +39,21 @@ class NavigationTests(unittest.TestCase):
 
         self.assertEqual(
             [page.title for page in pages],
-            ["Today", "History", "Interests", "Sources"],
+            ["Today", "History", "Interests", "Sources", "Settings"],
         )
         self.assertEqual(
             [page.effective_url_path for page in pages],
-            ["", "history", "interests", "sources"],
+            ["", "history", "interests", "sources", "settings"],
+        )
+        self.assertEqual(
+            [page.icon for page in pages],
+            [
+                ":material/today:",
+                ":material/history:",
+                ":material/person_search:",
+                ":material/travel_explore:",
+                ":material/settings:",
+            ],
         )
         self.assertEqual(
             len({page.effective_url_path for page in pages}),

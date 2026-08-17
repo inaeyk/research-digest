@@ -70,7 +70,10 @@ def render() -> None:
     )
 
     if not profiles:
-        st.info("Create and enable an interest profile before running a digest.")
+        st.info(
+            "Create and enable an interest profile on the Interests page before running a digest.",
+            icon=":material/info:",
+        )
         return
 
     profile = st.selectbox(
@@ -82,9 +85,13 @@ def render() -> None:
 
     analyzer, analyzer_message = get_analyzer()
     if analyzer_message is not None:
-        st.warning(f"Analysis unavailable: {sanitize_error(analyzer_message)}")
+        st.warning(
+            "Analysis provider needs attention: "
+            f"{sanitize_error(analyzer_message)}. Run `research-digest doctor` for details.",
+            icon=":material/warning:",
+        )
 
-    if st.button("Run Digest", type="primary"):
+    if st.button("Run digest", type="primary", icon=":material/play_arrow:"):
         with st.spinner("Fetching and analyzing recent papers..."):
             try:
                 if profile.id is None:
@@ -97,9 +104,9 @@ def render() -> None:
                 )
                 result = service_result.digest
             except (DigestPipelineError, SourceError, ModelValidationError) as exc:
-                st.error(sanitize_error(exc))
+                st.error(sanitize_error(exc), icon=":material/error:")
             except Exception as exc:
-                st.error(f"Digest run failed: {sanitize_error(exc)}")
+                st.error(f"Digest run failed: {sanitize_error(exc)}", icon=":material/error:")
             else:
                 st.session_state[_LAST_DIGEST_RESULT_KEY] = result
                 st.session_state[_LAST_DIGEST_SIGNATURE_KEY] = current_signature

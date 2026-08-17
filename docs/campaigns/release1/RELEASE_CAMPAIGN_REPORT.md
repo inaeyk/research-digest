@@ -577,6 +577,56 @@ Audit:
 - closure Auditor verified SQLite backup API/integrity validation, safe `Path.as_uri()` read-only SQLite URI handling, output collision/all-or-nothing preflight, missing/invalid DB behavior before output mutation, secret/privacy exclusion, CLI integration, Git hygiene, full deterministic gates, URI-reserved path smoke, and sidecar-collision preflight smoke.
 - post-audit M7-G qualification gate passed: full `pytest` 137 passed; `ruff check .` PASS; strict `mypy --strict src tests` PASS; `compileall -q src tests` PASS; `git diff --check` PASS.
 
+M7-G freeze:
+
+- qualified commit: `4070cce4744fc0862e418b1db51f43019fb0a78c`.
+- qualified tag: `m7g-qualified`.
+- qualified tag object: `1a11880d39ba71aed06163620142eeca0aaa372f`.
+- post-freeze Git state: local `master` is 11 commits ahead of `origin/master`; online remote inspection remains blocked by DNS/network limits in this session.
+
+## M7-H Specification Freeze
+
+M7-H is frozen as release UI and installation polish for the already-qualified local-first arXiv research digest application.
+
+The implementation must make the first-release Streamlit and documentation experience coherent without adding M3/M5/M6 functionality. Desired navigation is Today, History, Interests, Sources, and Settings. `research-digest serve` is the supported UI launch path. README/release-facing docs must guide ordinary users through installation, first run, Codex/ChatGPT authentication, optional OpenAI API provider, data/config locations, manual runs, UI launch, daily scheduling, backup, doctor, upgrades, known limitations, and release scope.
+
+M7-H must preserve existing qualified service/config/CLI boundaries and avoid duplicating business logic in Streamlit.
+
+## M7-H Candidate
+
+Implementation summary:
+
+- Added a Settings page to release navigation.
+- Settings shows application/schema/config versions, data/config locations, analyzer provider status, doctor health summary, detailed doctor checks, and installed release commands.
+- Added Material Symbols icons to Streamlit navigation.
+- Improved Today first-run, no-provider/Codex-unavailable, and failure messages with sanitized actionable release copy.
+- Rewrote README to use installed `research-digest` commands rather than raw Streamlit development launch commands.
+- README now covers installation, first run, Codex/ChatGPT authentication, optional OpenAI API provider, data/config locations, manual digest, UI launch, daily scheduling, backup, doctor, upgrade expectations, known limitations, and M3/M5/M6 roadmap.
+
+Deterministic verification:
+
+- focused UI/docs tests: `pytest tests/test_ui_navigation.py tests/test_settings_page.py tests/test_release_docs.py tests/test_today_state.py` passed, 14 tests.
+- focused UI/docs `ruff`: PASS.
+- focused UI/docs strict `mypy`: PASS.
+- full `pytest`: 139 passed.
+- `ruff check .`: PASS.
+- strict `mypy --strict src tests`: PASS.
+- `compileall -q src tests`: PASS.
+- `git diff --check`: PASS.
+
+Live/UI verification:
+
+- `python -m research_digest.cli --version`: PASS, `research-digest 0.1.0`.
+- temp-path `python -m research_digest.cli status --json`: PASS.
+- `python -m research_digest.cli doctor --json`: PASS with sanitized warnings and no failures.
+- direct `python -m research_digest.cli serve --port 18601` is blocked in this execution environment by local socket `Operation not permitted`; the same bind/connect restriction occurred after sandbox escalation during a port-conflict smoke. Deterministic CLI coverage verifies the `research-digest serve` command construction path, occupied-port fallback, and printed URL.
+
+Audit:
+
+- fresh independent read-only M7-H Auditor returned PASS with no BLOCKER/IMPORTANT/MINOR findings.
+- Auditor verified Today/History/Interests/Sources/Settings navigation, first-run/no-provider/loading/failed/stale/empty/history states, Settings reuse of existing boundaries without business-logic duplication, README release CLI guidance and known limitations, no M3/M5/M6 feature implementation, Streamlit release hygiene, deterministic evidence, environment-limited serve smoke documentation, and Git hygiene.
+- post-audit M7-H qualification gate passed: full `pytest` 139 passed; `ruff check .` PASS; strict `mypy --strict src tests` PASS; `compileall -q src tests` PASS; `git diff --check` PASS.
+
 Data-safety note:
 
 - During re-audit, the auditor reported one accidental manual CLI smoke without `RESEARCH_DIGEST_DB`; it likely wrote one runtime run record to ignored repo-local `research_digest.sqlite3`.

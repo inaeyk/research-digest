@@ -1,11 +1,11 @@
 # Release 1 Campaign State
 
-- current_substage: M7-G audit PASS ready to freeze
+- current_substage: M7-H audit PASS ready to freeze
 - status: ACTIVE
-- current_git_head: 478f4d8582a2e3c9ad7b114fcfb4301253b1a961
-- current_tags_at_head: m7f-qualified
+- current_git_head: 4070cce4744fc0862e418b1db51f43019fb0a78c
+- current_tags_at_head: m7g-qualified
 - current_branch: master
-- local_remote_tracking: `master` tracks `origin/master`; local branch is 10 commits ahead after M7-F freeze
+- local_remote_tracking: `master` tracks `origin/master`; local branch is 11 commits ahead after M7-G freeze
 - online_remote_verification: attempted `git ls-remote --heads --tags origin`; blocked by DNS resolution failure for `github.com` even after network escalation
 - baseline_m1_qualified_commit: 36bd1cbe60f95d588e8ccdd41bfce914e9b1d7da
 - baseline_m1_qualified_tag: m1-qualified
@@ -47,15 +47,18 @@
 - m7f_qualified_commit: 478f4d8582a2e3c9ad7b114fcfb4301253b1a961
 - m7f_qualified_tag: m7f-qualified
 - m7f_qualified_tag_object: 68746dba9d860cb53b3682ccc19d82b087411984
+- m7g_qualified_commit: 4070cce4744fc0862e418b1db51f43019fb0a78c
+- m7g_qualified_tag: m7g-qualified
+- m7g_qualified_tag_object: 1a11880d39ba71aed06163620142eeca0aaa372f
 - skipped_campaigns: M3 additional source types; M5 full-paper reading; M6 long-term research memory
 - active_campaign_scope: M4 automatic daily operation; M7 release engineering, upgradeability, and productization; first release candidate
-- qualification_status: M7G_AUDIT_PASS_READY_FREEZE
-- audit_repair_round: 1
-- last_deterministic_verification: M7-G post-audit qualification gate: full `pytest` 137 passed; `ruff check .` PASS; strict `mypy --strict src tests` PASS; `compileall -q src tests` PASS; `git diff --check` PASS.
-- last_live_verification: M7-G repair round 1 isolated CLI backup/export smoke passed against a temp DB path containing `?` and `#`; backup SQLite `PRAGMA integrity_check` returned `ok`; JSON export contained expected profile data.
+- qualification_status: M7H_AUDIT_PASS_READY_FREEZE
+- audit_repair_round: 0
+- last_deterministic_verification: M7-H post-audit qualification gate: `pytest` 139 passed; `ruff check .` PASS; strict `mypy --strict src tests` PASS; `compileall -q src tests` PASS; `git diff --check` PASS.
+- last_live_verification: M7-H `research-digest serve --port 18601` direct smoke blocked by local socket `Operation not permitted`; temp-path `status --json` PASS; `doctor --json` PASS with sanitized warnings. Deterministic serve port-conflict construction remains covered by tests.
 - migration_data_safety_status: M7-B candidate adds explicit schema version metadata, ordered migrations, backup before schema-changing upgrades of existing DBs, rollback on failed migration, and visible migration backup path. Repo-local `research_digest.sqlite3` remains ignored and was not used for upgrade testing.
 - deferred_minor_optional_findings: none
-- next_permitted_action: run post-audit full M7-G qualification gate, inspect Git hygiene, stage only qualified M7-G/release1 docs files, commit, and tag `m7g-qualified`
+- next_permitted_action: run post-audit full M7-H qualification gate, inspect Git hygiene, stage only qualified M7-H/release1 docs files, commit, and tag `m7h-qualified`
 - human_stop_reason: none
 
 ## Restored Release Campaign Charter Authority
@@ -905,6 +908,95 @@ Fresh closure audit:
 Post-audit qualification:
 
 - full `pytest`: 137 passed.
+- `ruff check .`: PASS.
+- strict `mypy --strict src tests`: PASS.
+- `python -m compileall -q src tests`: PASS.
+- `git diff --check`: PASS.
+
+Freeze:
+
+- committed `4070cce4744fc0862e418b1db51f43019fb0a78c` (`Qualify M7-G backup export`) and created local annotated tag `m7g-qualified` with tag object `1a11880d39ba71aed06163620142eeca0aaa372f`.
+
+## M7-H Frozen Specification
+
+Goal: turn the already-qualified application into a coherent first-release user experience without adding M3/M5/M6 functionality.
+
+Release UI:
+
+- Keep the Streamlit UI modest and local-first.
+- Desired release navigation is approximately Today, History, Interests, Sources, Settings.
+- Settings may expose existing release functionality such as analyzer/provider selection/status, preselection fraction, schedule status/configuration, active data location, application version, schema/config version, and health/doctor summary.
+- Do not duplicate CLI/business logic in Streamlit. Use the same application/service/configuration boundaries already qualified elsewhere.
+
+Required release states:
+
+- First run: useful empty state and clear path to configure an interest profile/source/provider; no traceback when no historical data exists.
+- Empty digest: clearly communicate that no eligible/relevant items were found.
+- Loading/running: clear visible progress/state; avoid appearing to do nothing.
+- No provider/Codex unavailable: sanitized actionable message while keeping the application inspectable where possible.
+- Failed run: visible through existing run/history semantics with sanitized error text and no secret/path leakage.
+- Stale result: retain M1/M2 semantic invalidation protections.
+- History: remain lightweight run history, not M6 semantic memory/trend analysis.
+- Sources: remain arXiv-first; do not add RSS, HTML, arbitrary APIs, or other M3 sources.
+
+Installation/user experience:
+
+- Update README and release-facing documentation so ordinary users use installed commands rather than development commands.
+- `research-digest serve` is the supported UI launch path.
+- Document installation, first run, ChatGPT/Codex CLI authentication, optional OpenAI API provider, data/config locations, manual digest, UI launch, daily schedule install/status/remove, backup, doctor, upgrade expectations, known limitations, and release scope.
+- Do not introduce authentication/multi-user support, cloud deployment requirements, fancy frontend frameworks, or M3/M5/M6 functionality.
+
+Tests required before M7-H freeze:
+
+- deterministic tests for changed UI/application helpers where useful.
+- UI navigation includes Settings and preserves existing Today/History/Interests/Sources navigation.
+- release docs prefer installed CLI (`research-digest serve`) over raw Streamlit development launch.
+- first-run/empty/failure state helpers are deterministic and sanitized where changed.
+- full deterministic suite remains green.
+
+Live verification required before M7-H freeze:
+
+- real release-facing UI smoke through `research-digest serve` or the same serve command construction path, including port-conflict behavior where practical.
+
+Freeze criteria:
+
+- fresh independent read-only M7-H audit PASS or justified PASS WITH MINOR FINDINGS.
+- `pytest`, `ruff check .`, strict `mypy --strict src tests`, `compileall -q src tests`, and `git diff --check` PASS.
+- staged inventory excludes `research_digest.sqlite3`, `.venv`, `.env`/secrets, caches, and local agent/runtime state.
+- commit and annotated local tag `m7h-qualified`.
+
+Candidate implementation:
+
+- Added a Settings page to Streamlit navigation with release runtime summary, data/config paths, analyzer provider status, doctor health summary, detailed doctor checks, and installed release commands.
+- Added Material Symbols icons to the Today, History, Interests, Sources, and Settings navigation entries.
+- Improved Today first-run, provider-unavailable, and digest-failure messages with sanitized actionable copy and release CLI guidance.
+- Rewrote README around installed release commands: `research-digest serve`, `run`, `status`, `doctor`, `backup`, and schedule install/status/remove.
+- README now documents installation, first run, Codex/ChatGPT authentication, optional OpenAI API provider, data/config locations, manual digest, UI launch, scheduling, doctor, backup/recovery, upgrade expectations, known release limitations, and post-release M3/M5/M6 roadmap.
+- Added deterministic tests for Settings helper behavior and release README command/limitation coverage.
+
+Candidate verification:
+
+- focused `pytest tests/test_ui_navigation.py tests/test_settings_page.py tests/test_release_docs.py tests/test_today_state.py`: 14 passed.
+- focused `ruff check src/research_digest/ui tests/test_ui_navigation.py tests/test_settings_page.py tests/test_release_docs.py`: PASS.
+- focused strict `mypy --strict src/research_digest/ui tests/test_ui_navigation.py tests/test_settings_page.py tests/test_release_docs.py`: PASS.
+- full `pytest`: 139 passed.
+- `ruff check .`: PASS.
+- strict `mypy --strict src tests`: PASS.
+- `python -m compileall -q src tests`: PASS.
+- `git diff --check`: PASS.
+- `python -m research_digest.cli --version`: PASS, `research-digest 0.1.0`.
+- temp-path `python -m research_digest.cli status --json`: PASS.
+- `python -m research_digest.cli doctor --json`: PASS with sanitized warnings and no failures.
+- direct `python -m research_digest.cli serve --port 18601`: blocked by this execution environment with sanitized `[Errno 1] Operation not permitted` during local socket probing; rerun after sandbox escalation had the same socket restriction. Existing deterministic CLI test verifies occupied-port fallback and printed usable URL through the serve command construction path.
+
+Fresh audit:
+
+- fresh independent read-only M7-H Auditor returned PASS with no BLOCKER/IMPORTANT/MINOR findings.
+- Auditor verified navigation, required release UI states, Settings reuse of existing config/database/doctor boundaries, release CLI README guidance, known limitations, absence of M3/M5/M6 functionality, Streamlit release concerns, deterministic gates, environment-limited serve smoke documentation, and Git hygiene.
+
+Post-audit qualification:
+
+- full `pytest`: 139 passed.
 - `ruff check .`: PASS.
 - strict `mypy --strict src tests`: PASS.
 - `python -m compileall -q src tests`: PASS.
