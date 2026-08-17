@@ -14,7 +14,7 @@
 - schema_version: 6
 - config_version: 3
 - worktree_state_at_campaign_start: clean tracked worktree; ignored runtime files include `.env`, local SQLite, virtualenv, caches, and local agent/runtime directories.
-- qualification_state: U2-F qualified; U2-G plan/implementation pending.
+- qualification_state: U2-F qualified; U2-G plan frozen; implementation pending.
 - audit_round: 0
 - deterministic_checks: baseline `pytest` 149 passed; U2-A post-repair `pytest` 166 passed; U2-B post-repair `pytest` 174 passed; U2-C repair round 1 `pytest` 184 passed; U2-D repair round 1 `pytest` 195 passed; U2-E candidate `pytest` 202 passed; U2-F candidate `pytest` 204 passed; `ruff check .` PASS; `mypy --strict src tests` PASS; `python -m compileall -q src tests` PASS; `git diff --check` PASS.
 - live_checks: U2-A live arXiv latest-available smoke blocked by DNS resolution failure for `export.arxiv.org` before and after network escalation. U2-C Streamlit serve smoke blocked by local socket `Operation not permitted` before and after escalation. U2-D disposable live arXiv automatic headless smoke blocked by DNS resolution failure for `export.arxiv.org` before and after network escalation. U2-E Streamlit serve smoke blocked by local socket `Operation not permitted` before and after escalation. U2-E Windows Task Scheduler status smoke blocked by WSL `UtilBindVsockAnyPort` socket failure before and after escalation.
@@ -41,7 +41,7 @@
 - u2f_qualified_tag: u2f-qualified
 - u2f_qualified_tag_object: f63a39f33060b980889214e918b395d081de1f00
 - deferred_minor_optional_findings: U2-A re-auditor OPTIONAL: future hardening could add a separate raw API-row/page scan ceiling for malformed or inconsistent API responses; not required for U2-A after explicit-date repair. U2-C initial auditor OPTIONAL: Sources page still exposes legacy `Lookback hours` and `Max results`; defer demotion/removal to U2-G unless later substages require it earlier. U2-F auditor OPTIONAL: selected-entry partial retrieval warnings are visible, but the selectbox/status label can still say `Completed`; requested/covered detail captions use ISO source-date strings rather than friendly date labels.
-- next_permitted_action: freeze U2-G detailed implementation plan, then implement Settings/nontechnical user polish.
+- next_permitted_action: implement U2-G Settings/nontechnical user polish, then run deterministic checks and a fresh independent U2-G Auditor.
 - human_stop_reason: none
 
 ## Recovered v0.1.0 Baseline
@@ -119,6 +119,62 @@ Privacy and durability:
   contents, API keys, Codex auth material, or local auth paths in campaign docs.
 - Preserve the v0.1.0 invariant: code is replaceable and user data survives
   independently.
+
+## Frozen U2-G Plan
+
+Goal: make routine Research Digest administration usable from Streamlit while
+keeping the CLI as a power-user/debugging surface and preserving existing
+service boundaries.
+
+1. General Settings
+   - Rename the current Runtime presentation to General.
+   - Show app version, schema/config versions, active SQLite data path, config
+     path, data directory, and config directory.
+   - Keep paths visible because they help backup/recovery, but do not expose
+     secrets or environment values containing credentials.
+
+2. Analysis Settings
+   - Show the configured analyzer provider and non-secret runtime details.
+   - Derive provider health from the existing doctor/provider check rather than
+     duplicating provider probing logic in Streamlit.
+   - Explain the existing M2 preselection effort model: all selected-date
+     source articles are retrieved, cached analyses are reused, and only
+     cache-miss articles that pass deterministic abstract preselection are sent
+     for full LLM analysis.
+   - Do not add a new effort slider or reinterpret `max_results`.
+
+3. Automation Settings
+   - Preserve the U2-E scheduler UI and shared automation service usage.
+   - Keep catch-up behavior, status, Run Now, and unsupported-environment
+     handling intact.
+
+4. Data Settings
+   - Add Backup now controls using the existing `backup.run_backup()` service.
+   - Support the already-qualified optional JSON export sidecar.
+   - Show backup/export destinations after success and sanitized errors after
+     failure.
+   - Do not inspect or display SQLite contents.
+
+5. Health Settings
+   - Keep doctor summary/check rendering through `run_doctor()`.
+   - Surface actionable warnings without stack traces.
+
+6. Sources cleanup
+   - Remove `lookback_hours` and `max_results` from the normal Sources form.
+   - Preserve legacy stored values when saving enabled/categories settings so
+     administrative compatibility is not destroyed.
+   - Add user-facing source-date wording that directs normal manual operation
+     to the Today date selector.
+
+7. Tests and verification
+   - Add deterministic tests for backup result messaging, provider-health
+     extraction, preselection effort text, and Sources legacy value
+     preservation.
+   - Run focused tests, full pytest, ruff, strict mypy, compileall, and
+     `git diff --check`.
+   - Attempt a Streamlit serve smoke if the environment permits; record any
+     sandbox/socket block.
+   - Require a fresh independent U2-G Auditor before qualification.
 
 ## Frozen U2-A Plan
 
