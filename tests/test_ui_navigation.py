@@ -39,16 +39,17 @@ class NavigationTests(unittest.TestCase):
 
         self.assertEqual(
             [page.title for page in pages],
-            ["Today", "History", "Interests", "Sources", "Settings"],
+            ["Today", "Library", "History", "Interests", "Sources", "Settings"],
         )
         self.assertEqual(
             [page.effective_url_path for page in pages],
-            ["", "history", "interests", "sources", "settings"],
+            ["", "library", "history", "interests", "sources", "settings"],
         )
         self.assertEqual(
             [page.icon for page in pages],
             [
                 ":material/today:",
+                ":material/bookmarks:",
                 ":material/history:",
                 ":material/person_search:",
                 ":material/travel_explore:",

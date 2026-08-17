@@ -149,6 +149,7 @@ class BackupTests(unittest.TestCase):
         )
         article, _ = self.db.upsert_article(sample_article())
         assert article.id is not None
+        self.db.save_library_article(article.id)
         self.db.upsert_article_feedback(
             article_id=article.id,
             profile_id=profile.id,
@@ -209,6 +210,8 @@ class BackupTests(unittest.TestCase):
         self.assertEqual(payload["runs"][0]["status"], APP_RUN_COMPLETED)
         self.assertEqual(payload["run_snapshots"][0]["snapshot"]["profile_name"], "Gravity")
         self.assertEqual(payload["source_date_coverage"][0]["source_date"], "2026-08-14")
+        self.assertEqual(payload["library_articles"][0]["article"]["title"], "Backup export title")
+        self.assertTrue(payload["library_articles"][0]["saved"])
         output = result.export_path.read_text(encoding="utf-8")
         self.assertNotIn("OPENAI_API_KEY", output)
         self.assertNotIn("sk-secret", output)

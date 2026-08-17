@@ -9,7 +9,7 @@ from typing import Any
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from research_digest.ui.pages import history, interests, settings, sources, today
+from research_digest.ui.pages import history, interests, library, settings, sources, today
 
 
 def _build_pages(st_module: Any) -> list[Any]:
@@ -19,6 +19,12 @@ def _build_pages(st_module: Any) -> list[Any]:
             title="Today",
             icon=":material/today:",
             default=True,
+        ),
+        st_module.Page(
+            library.render,
+            title="Library",
+            icon=":material/bookmarks:",
+            url_path="library",
         ),
         st_module.Page(
             history.render,

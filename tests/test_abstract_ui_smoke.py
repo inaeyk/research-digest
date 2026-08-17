@@ -142,7 +142,7 @@ class AbstractUiSmokeTests(unittest.TestCase):
         self.assert_text_present(at, "Above threshold source abstract.")
         self.assert_text_absent(at, "Generated summary for 0.9.")
 
-        at.button[1].click().run()
+        at.button[2].click().run()
         self.assert_no_streamlit_exceptions(at)
         self.assert_text_present(at, "Preselected-out source abstract.")
 

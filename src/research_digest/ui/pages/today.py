@@ -41,6 +41,7 @@ from research_digest.synthesis import CrossPaperSynthesis, build_cross_paper_syn
 from research_digest.ui.abstracts import render_abstract_control
 from research_digest.ui.common import get_analyzer, get_database
 from research_digest.ui.date_status import month_bounds, render_date_status_grid
+from research_digest.ui.library_controls import render_library_control
 
 DigestInputSignature: TypeAlias = tuple[str, str]
 DigestView: TypeAlias = Literal["relevant", "all_analyzed", "below_threshold"]
@@ -574,8 +575,8 @@ def _render_items(result: DigestResult, db: Database) -> None:
                 current_feedback,
                 context=f"today:{result.run_id}:{view}",
             )
-    _render_preselected_out_articles(result)
-    _render_unresolved_articles(result)
+    _render_preselected_out_articles(result, db)
+    _render_unresolved_articles(result, db)
 
 
 def load_feedback_by_article_id(
@@ -703,6 +704,11 @@ def _render_item(
             abstract=article.abstract,
             context=f"{context}:{article.source}:{article.source_article_id}",
         )
+        render_library_control(
+            db=db,
+            article=article,
+            context=f"{context}:library:{article.source}:{article.source_article_id}",
+        )
         _render_feedback_control(
             item,
             db,
@@ -712,7 +718,7 @@ def _render_item(
         )
 
 
-def _render_preselected_out_articles(result: DigestResult) -> None:
+def _render_preselected_out_articles(result: DigestResult, db: Database) -> None:
     import streamlit as st
 
     if not result.skipped_articles:
@@ -739,13 +745,21 @@ def _render_preselected_out_articles(result: DigestResult) -> None:
                 abstract=article.abstract,
                 context=f"today:{result.run_id}:preselected:{article.source}:{article.source_article_id}",
             )
+            render_library_control(
+                db=db,
+                article=article,
+                context=(
+                    f"today:{result.run_id}:preselected:library:"
+                    f"{article.source}:{article.source_article_id}"
+                ),
+            )
 
 
 def _article_sort_key(article: Article) -> tuple[str, str, str]:
     return (article.title.lower(), article.source, article.source_article_id)
 
 
-def _render_unresolved_articles(result: DigestResult) -> None:
+def _render_unresolved_articles(result: DigestResult, db: Database) -> None:
     import streamlit as st
 
     if not result.unresolved_articles:
@@ -763,6 +777,14 @@ def _render_unresolved_articles(result: DigestResult) -> None:
                 source_article_id=article.source_article_id,
                 abstract=article.abstract,
                 context=f"today:{result.run_id}:unresolved:{article.source}:{article.source_article_id}",
+            )
+            render_library_control(
+                db=db,
+                article=article,
+                context=(
+                    f"today:{result.run_id}:unresolved:library:"
+                    f"{article.source}:{article.source_article_id}"
+                ),
             )
 
 

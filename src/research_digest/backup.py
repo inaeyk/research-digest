@@ -178,6 +178,7 @@ def export_user_data(*, db_path: Path, schema_version: int | None = None) -> dic
             "runs": _runs(conn),
             "run_snapshots": _run_snapshots(conn),
             "source_date_coverage": _source_date_coverage(conn),
+            "library_articles": _library_articles(conn),
         }
 
 
@@ -418,6 +419,44 @@ def _source_date_coverage(conn: sqlite3.Connection) -> list[dict[str, object]]:
             "run_origin": str(row["run_origin"]),
             "covered_at": str(row["covered_at"]),
             "updated_at": str(row["updated_at"]),
+        }
+        for row in rows
+    ]
+
+
+def _library_articles(conn: sqlite3.Connection) -> list[dict[str, object]]:
+    if not _table_exists(conn, "library_articles"):
+        return []
+    rows = conn.execute(
+        """
+        SELECT
+            library_articles.article_id,
+            library_articles.saved,
+            library_articles.saved_at,
+            library_articles.updated_at,
+            articles.source,
+            articles.source_article_id,
+            articles.title
+        FROM library_articles
+        LEFT JOIN articles ON articles.id = library_articles.article_id
+        ORDER BY library_articles.article_id
+        """
+    ).fetchall()
+    return [
+        {
+            "article_id": int(row["article_id"]),
+            "saved": bool(row["saved"]),
+            "saved_at": str(row["saved_at"]),
+            "updated_at": str(row["updated_at"]),
+            "article": {
+                "source": str(row["source"]) if row["source"] is not None else None,
+                "source_article_id": (
+                    str(row["source_article_id"])
+                    if row["source_article_id"] is not None
+                    else None
+                ),
+                "title": str(row["title"]) if row["title"] is not None else None,
+            },
         }
         for row in rows
     ]

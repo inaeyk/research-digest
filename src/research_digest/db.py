@@ -20,6 +20,8 @@ from research_digest.models import (
     DateSelection,
     FeedbackLabel,
     InterestProfile,
+    LibraryEntry,
+    LibraryRelevanceContext,
     ReadingPriority,
     RunOrigin,
     datetime_from_db,
@@ -30,7 +32,7 @@ from research_digest.models import (
 SOURCE_ARXIV = "arxiv"
 SCHEMA_VERSION_KEY = "schema_version"
 LAST_MIGRATION_BACKUP_KEY = "last_migration_backup_path"
-CURRENT_SCHEMA_VERSION = 8
+CURRENT_SCHEMA_VERSION = 9
 APP_RUN_STARTING = "STARTING"
 APP_RUN_RUNNING = "RUNNING"
 APP_RUN_COMPLETED = "COMPLETED"
@@ -255,6 +257,106 @@ class Database:
     def get_article_by_source_id(self, source: str, source_article_id: str) -> Article | None:
         with self._connection() as conn:
             return _get_article_by_source_id(conn, source, source_article_id)
+
+    def save_library_article(self, article_id: int) -> LibraryEntry:
+        if article_id <= 0:
+            raise ValueError("article id must be positive")
+        now = datetime_to_db(utc_now())
+        with self._connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO library_articles (article_id, saved, saved_at, updated_at)
+                VALUES (?, 1, ?, ?)
+                ON CONFLICT(article_id) DO UPDATE SET
+                    saved = 1,
+                    saved_at = CASE
+                        WHEN library_articles.saved = 0 THEN excluded.saved_at
+                        ELSE library_articles.saved_at
+                    END,
+                    updated_at = excluded.updated_at
+                """,
+                (article_id, now, now),
+            )
+            entry = _get_library_entry(conn, article_id)
+        if entry is None:
+            raise ValueError(f"article {article_id} does not exist")
+        return entry
+
+    def unsave_library_article(self, article_id: int) -> None:
+        if article_id <= 0:
+            raise ValueError("article id must be positive")
+        with self._connection() as conn:
+            conn.execute(
+                """
+                UPDATE library_articles
+                SET saved = 0, updated_at = ?
+                WHERE article_id = ?
+                """,
+                (datetime_to_db(utc_now()), article_id),
+            )
+
+    def get_library_entry(self, article_id: int) -> LibraryEntry | None:
+        if article_id <= 0:
+            raise ValueError("article id must be positive")
+        with self._connection() as conn:
+            return _get_library_entry(conn, article_id)
+
+    def list_saved_library_entries(self) -> list[LibraryEntry]:
+        with self._connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    articles.*,
+                    library_articles.saved_at AS library_saved_at,
+                    library_articles.updated_at AS library_updated_at
+                FROM library_articles
+                JOIN articles ON articles.id = library_articles.article_id
+                WHERE library_articles.saved = 1
+                ORDER BY library_articles.saved_at DESC, articles.title COLLATE NOCASE ASC
+                """
+            ).fetchall()
+        return [_library_entry_from_row(row) for row in rows]
+
+    def list_saved_library_article_ids(self, article_ids: Iterable[int]) -> set[int]:
+        ids = sorted({int(article_id) for article_id in article_ids if int(article_id) > 0})
+        if not ids:
+            return set()
+        placeholders = ", ".join("?" for _ in ids)
+        with self._connection() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT article_id
+                FROM library_articles
+                WHERE saved = 1 AND article_id IN ({placeholders})
+                """,
+                tuple(ids),
+            ).fetchall()
+        return {int(row["article_id"]) for row in rows}
+
+    def get_latest_relevance_context(
+        self,
+        article_id: int,
+    ) -> LibraryRelevanceContext | None:
+        if article_id <= 0:
+            raise ValueError("article id must be positive")
+        with self._connection() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    relevance_analyses.profile_id,
+                    interest_profiles.name AS profile_name,
+                    relevance_analyses.relevance_score,
+                    relevance_analyses.reading_priority,
+                    relevance_analyses.analyzed_at
+                FROM relevance_analyses
+                JOIN interest_profiles ON interest_profiles.id = relevance_analyses.profile_id
+                WHERE relevance_analyses.article_id = ?
+                ORDER BY relevance_analyses.analyzed_at DESC, relevance_analyses.id DESC
+                LIMIT 1
+                """,
+                (article_id,),
+            ).fetchone()
+        return _library_relevance_context_from_row(row) if row is not None else None
 
     def count_articles(self) -> int:
         with self._connection() as conn:
@@ -1028,6 +1130,26 @@ def _migration_app_run_profile_fingerprint(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE app_runs ADD COLUMN profile_fingerprint TEXT")
 
 
+def _migration_saved_article_library(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS library_articles (
+            article_id INTEGER PRIMARY KEY,
+            saved INTEGER NOT NULL DEFAULT 1,
+            saved_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(article_id) REFERENCES articles(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_library_articles_saved_saved_at
+        ON library_articles(saved, saved_at DESC)
+        """
+    )
+
+
 MIGRATIONS: Sequence[SchemaMigration] = (
     SchemaMigration(1, "core m1/m2 tables", _migration_core_tables),
     SchemaMigration(2, "profile-fingerprinted relevance analyses", _migration_profile_fingerprints),
@@ -1041,6 +1163,7 @@ MIGRATIONS: Sequence[SchemaMigration] = (
     SchemaMigration(6, "source date coverage", _migration_source_date_coverage),
     SchemaMigration(7, "app run source fingerprint", _migration_app_run_source_fingerprint),
     SchemaMigration(8, "app run profile fingerprint", _migration_app_run_profile_fingerprint),
+    SchemaMigration(9, "saved article library", _migration_saved_article_library),
 )
 
 
@@ -1272,6 +1395,22 @@ def _get_article_by_source_id(
     return _article_from_row(row) if row is not None else None
 
 
+def _get_library_entry(conn: sqlite3.Connection, article_id: int) -> LibraryEntry | None:
+    row = conn.execute(
+        """
+        SELECT
+            articles.*,
+            library_articles.saved_at AS library_saved_at,
+            library_articles.updated_at AS library_updated_at
+        FROM library_articles
+        JOIN articles ON articles.id = library_articles.article_id
+        WHERE library_articles.article_id = ? AND library_articles.saved = 1
+        """,
+        (article_id,),
+    ).fetchone()
+    return _library_entry_from_row(row) if row is not None else None
+
+
 def _get_article_feedback(
     conn: sqlite3.Connection,
     *,
@@ -1337,6 +1476,14 @@ def _article_from_row(row: sqlite3.Row) -> Article:
     )
 
 
+def _library_entry_from_row(row: sqlite3.Row) -> LibraryEntry:
+    return LibraryEntry(
+        article=_article_from_row(row),
+        saved_at=datetime_from_db(str(row["library_saved_at"])),
+        updated_at=datetime_from_db(str(row["library_updated_at"])),
+    )
+
+
 def _analysis_from_row(row: sqlite3.Row) -> AnalysisResult:
     return AnalysisResult(
         relevance_score=float(row["relevance_score"]),
@@ -1345,6 +1492,16 @@ def _analysis_from_row(row: sqlite3.Row) -> AnalysisResult:
         summary=str(row["summary"]),
         why_it_matters=str(row["why_it_matters"]),
         reading_priority=cast(ReadingPriority, str(row["reading_priority"])),
+    )
+
+
+def _library_relevance_context_from_row(row: sqlite3.Row) -> LibraryRelevanceContext:
+    return LibraryRelevanceContext(
+        profile_id=int(row["profile_id"]),
+        profile_name=str(row["profile_name"]),
+        relevance_score=float(row["relevance_score"]),
+        reading_priority=cast(ReadingPriority, str(row["reading_priority"])),
+        analyzed_at=datetime_from_db(str(row["analyzed_at"])),
     )
 
 

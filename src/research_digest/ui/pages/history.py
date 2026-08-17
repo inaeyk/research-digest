@@ -9,10 +9,12 @@ from research_digest.db import (
     APP_RUN_COMPLETED,
     APP_RUN_FAILED,
     APP_RUN_PARTIAL,
+    Database,
 )
 from research_digest.history import RunHistoryEntry, get_run_snapshot, list_run_history
 from research_digest.ui.abstracts import render_abstract_control
 from research_digest.ui.common import get_database
+from research_digest.ui.library_controls import render_library_control_for_source_identity
 
 
 def render() -> None:
@@ -36,7 +38,7 @@ def render() -> None:
     if snapshot is None:
         st.info("No persisted digest snapshot is available for this run.")
         return
-    _render_snapshot(snapshot)
+    _render_snapshot(snapshot, db)
 
 
 def _run_label(entry: RunHistoryEntry) -> str:
@@ -79,7 +81,7 @@ def _render_entry(entry: RunHistoryEntry) -> None:
             st.error(entry.error_message)
 
 
-def _render_snapshot(snapshot: dict[str, object]) -> None:
+def _render_snapshot(snapshot: dict[str, object], db: Database) -> None:
     import streamlit as st
 
     synthesis = snapshot.get("synthesis")
@@ -118,18 +120,22 @@ def _render_snapshot(snapshot: dict[str, object]) -> None:
                 url = item.get("abstract_url")
                 if isinstance(url, str) and url:
                     st.link_button("Open arXiv", url)
-                source = item.get("source")
-                if not isinstance(source, str) or not source:
-                    source = str(snapshot.get("source", "unknown"))
-                source_article_id = item.get("source_article_id")
-                if not isinstance(source_article_id, str):
-                    source_article_id = str(item.get("title", "unknown"))
+                source, source_article_id = _snapshot_source_identity(item, snapshot)
                 render_abstract_control(
                     source=source,
                     source_article_id=source_article_id,
                     abstract=item.get("abstract"),
                     context=(
                         f"history:{snapshot.get('run_id', 'unknown')}:"
+                        f"{source}:{source_article_id}"
+                    ),
+                )
+                _render_snapshot_library_control(
+                    db=db,
+                    source=source,
+                    source_article_id=source_article_id,
+                    context=(
+                        f"history:{snapshot.get('run_id', 'unknown')}:library:"
                         f"{source}:{source_article_id}"
                     ),
                 )
@@ -142,12 +148,7 @@ def _render_snapshot(snapshot: dict[str, object]) -> None:
                 continue
             with st.container(border=True):
                 st.markdown(f"**{article.get('title', 'Untitled paper')}**")
-                source = article.get("source")
-                if not isinstance(source, str) or not source:
-                    source = str(snapshot.get("source", "unknown"))
-                source_article_id = article.get("source_article_id")
-                if not isinstance(source_article_id, str):
-                    source_article_id = str(article.get("title", "unknown"))
+                source, source_article_id = _snapshot_source_identity(article, snapshot)
                 st.caption(f"{source}:{source_article_id}")
                 url = article.get("abstract_url")
                 if isinstance(url, str) and url:
@@ -161,6 +162,15 @@ def _render_snapshot(snapshot: dict[str, object]) -> None:
                         f"preselected:{source}:{source_article_id}"
                     ),
                 )
+                _render_snapshot_library_control(
+                    db=db,
+                    source=source,
+                    source_article_id=source_article_id,
+                    context=(
+                        f"history:{snapshot.get('run_id', 'unknown')}:preselected:library:"
+                        f"{source}:{source_article_id}"
+                    ),
+                )
 
     unresolved_articles = snapshot.get("unresolved_articles")
     if isinstance(unresolved_articles, list) and unresolved_articles:
@@ -170,12 +180,7 @@ def _render_snapshot(snapshot: dict[str, object]) -> None:
                 continue
             with st.container(border=True):
                 st.markdown(f"**{article.get('title', 'Untitled paper')}**")
-                source = article.get("source")
-                if not isinstance(source, str) or not source:
-                    source = str(snapshot.get("source", "unknown"))
-                source_article_id = article.get("source_article_id")
-                if not isinstance(source_article_id, str):
-                    source_article_id = str(article.get("title", "unknown"))
+                source, source_article_id = _snapshot_source_identity(article, snapshot)
                 st.caption(f"{source}:{source_article_id}")
                 url = article.get("abstract_url")
                 if isinstance(url, str) and url:
@@ -189,6 +194,45 @@ def _render_snapshot(snapshot: dict[str, object]) -> None:
                         f"unresolved:{source}:{source_article_id}"
                     ),
                 )
+                _render_snapshot_library_control(
+                    db=db,
+                    source=source,
+                    source_article_id=source_article_id,
+                    context=(
+                        f"history:{snapshot.get('run_id', 'unknown')}:unresolved:library:"
+                        f"{source}:{source_article_id}"
+                    ),
+                )
+
+
+def _snapshot_source_identity(
+    article_payload: dict[str, object],
+    snapshot: dict[str, object],
+) -> tuple[str, str]:
+    source = article_payload.get("source")
+    if not isinstance(source, str) or not source.strip():
+        source = str(snapshot.get("source", "unknown"))
+    source_article_id = article_payload.get("source_article_id")
+    if not isinstance(source_article_id, str) or not source_article_id.strip():
+        source_article_id = "unknown"
+    return source, source_article_id
+
+
+def _render_snapshot_library_control(
+    *,
+    db: Database,
+    source: str,
+    source_article_id: str,
+    context: str,
+) -> None:
+    if source == "unknown" or source_article_id == "unknown":
+        return
+    render_library_control_for_source_identity(
+        db=db,
+        source=source,
+        source_article_id=source_article_id,
+        context=context,
+    )
 
 
 def history_period_label(entry: RunHistoryEntry) -> str:

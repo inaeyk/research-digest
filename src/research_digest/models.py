@@ -322,6 +322,19 @@ class Article:
 
 
 @dataclass(frozen=True)
+class LibraryEntry:
+    article: Article
+    saved_at: datetime
+    updated_at: datetime
+
+    def __post_init__(self) -> None:
+        if self.article.id is None:
+            raise ModelValidationError("library entry article id is required")
+        object.__setattr__(self, "saved_at", ensure_utc(self.saved_at))
+        object.__setattr__(self, "updated_at", ensure_utc(self.updated_at))
+
+
+@dataclass(frozen=True)
 class AnalysisResult:
     relevance_score: float
     relevance_reason: str
@@ -390,6 +403,27 @@ class AnalysisResult:
             "why_it_matters": self.why_it_matters,
             "reading_priority": self.reading_priority,
         }
+
+
+@dataclass(frozen=True)
+class LibraryRelevanceContext:
+    profile_id: int
+    profile_name: str
+    relevance_score: float
+    reading_priority: ReadingPriority
+    analyzed_at: datetime
+
+    def __post_init__(self) -> None:
+        if self.profile_id <= 0:
+            raise ModelValidationError("library relevance profile id must be positive")
+        if not self.profile_name.strip():
+            raise ModelValidationError("library relevance profile name is required")
+        if not 0 <= self.relevance_score <= 1:
+            raise ModelValidationError("library relevance score must be between 0 and 1")
+        if self.reading_priority not in {"LOW", "MEDIUM", "HIGH"}:
+            raise ModelValidationError("library relevance priority must be LOW, MEDIUM, or HIGH")
+        object.__setattr__(self, "profile_name", normalize_whitespace(self.profile_name))
+        object.__setattr__(self, "analyzed_at", ensure_utc(self.analyzed_at))
 
 
 @dataclass(frozen=True)
