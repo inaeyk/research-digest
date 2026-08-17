@@ -1,7 +1,7 @@
 # M6 Campaign State
 
-- campaign_state: M6_E_QUALIFIED_FROZEN
-- current_substage: M6-E longitudinal scientific intelligence qualified and frozen locally
+- campaign_state: M6_RELEASE_CANDIDATE_COMPLETE_AWAITING_HUMAN
+- current_substage: M6-F upgrade/end-to-end qualification complete; final human release decision required
 - current_branch: feature/m6-scientific-library-memory
 - baseline_branch: master
 - baseline_commit: fe92e77a3fce4037c0bf4ecbb0a7ce964763eb8b
@@ -21,16 +21,16 @@
 - candidate_schema_version: 13
 - config_version: 3
 - codegraph_state: no `.codegraph/` directory exists at repository root.
-- current_qualification_state: M6-E repair round 1 deterministic qualification and fresh read-only repair Auditor PASS; local commit/tag freeze complete.
-- audit_round: M6-E audit repair round 1 PASS. M6-D audit repair round 1 PASS. M6-B audit repair round 1 PASS. M6-A initial candidate PASS; no M6-A audit-driven repair rounds used.
-- deterministic_checks: final v0.2 freeze gate recorded `pytest` 262 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-A final gate recorded `pytest` 268 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-B candidate recorded `pytest` 283 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-B repair round 1 recorded `pytest` 284 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-C candidate recorded `pytest` 290 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-D candidate recorded `pytest` 300 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-D repair round 1 recorded `pytest` 302 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-E candidate recorded `pytest` 310 passed after an implementation test repair, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-E repair round 1 recorded `pytest` 312 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS.
-- live_checks: v0.2 live smoke was accepted by the human before the M6 branch. M6-B synthetic live Codex tag smoke reached the Codex CLI but exited non-zero with the sanitized authentication/usage-limits message; record as environment/provider limitation for later human live smoke, not deterministic code failure. M6-D synthetic live Codex connection smoke reached the Codex CLI but failed before model work because the CLI could not initialize in the read-only runtime; record as environment/provider limitation for later human live smoke, not deterministic code failure. M6-E synthetic live Codex context smoke reached the Codex CLI but failed before model work because the CLI could not initialize in the read-only runtime; record as environment/provider limitation for later human live smoke, not deterministic code failure.
+- current_qualification_state: M6-F deterministic qualification PASS; fresh final read-only Auditor found one IMPORTANT connection-batch atomicity issue; repair round 1 PASS; final local freeze/tag authorized but no public release/push performed.
+- audit_round: M6-F audit repair round 1 PASS. M6-E audit repair round 1 PASS. M6-D audit repair round 1 PASS. M6-B audit repair round 1 PASS. M6-A initial candidate PASS; no M6-A audit-driven repair rounds used.
+- deterministic_checks: final v0.2 freeze gate recorded `pytest` 262 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-A final gate recorded `pytest` 268 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-B candidate recorded `pytest` 283 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-B repair round 1 recorded `pytest` 284 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-C candidate recorded `pytest` 290 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-D candidate recorded `pytest` 300 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-D repair round 1 recorded `pytest` 302 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-E candidate recorded `pytest` 310 passed after an implementation test repair, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-E repair round 1 recorded `pytest` 312 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-F final repaired gate recorded `pytest` 315 passed, `ruff check .` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, `git diff --check` PASS, package wheel build PASS, isolated wheel install PASS, installed CLI `--version` PASS, installed CLI `status --json` PASS, installed CLI backup PASS, and Streamlit Library AppTest smoke PASS.
+- live_checks: v0.2 live smoke was accepted by the human before the M6 branch. M6-B synthetic live Codex tag smoke reached the Codex CLI but exited non-zero with the sanitized authentication/usage-limits message; record as environment/provider limitation for later human live smoke, not deterministic code failure. M6-D synthetic live Codex connection smoke reached the Codex CLI but failed before model work because the CLI could not initialize in the read-only runtime; record as environment/provider limitation for later human live smoke, not deterministic code failure. M6-E synthetic live Codex context smoke reached the Codex CLI but failed before model work because the CLI could not initialize in the read-only runtime; record as environment/provider limitation for later human live smoke, not deterministic code failure. M6-F installed status smoke reported unsupported Windows Task Scheduler backend in this Linux/WSL sandbox; this is the expected environment limitation and not a scheduler code failure.
 - schema_config_migration_state: v0.2 baseline uses ordered SQLite migrations through schema 8 and JSON config 3. M6-A adds additive SQLite schema 9 with `library_articles`; JSON config is unchanged. M6-B adds additive SQLite schema 10 for Library tags, tag assignments, and AI tag suppressions; JSON config is unchanged. M6-C adds additive SQLite schema 11 for article notes, collections/projects, and collection memberships; JSON config is unchanged. M6-D adds additive SQLite schema 12 for rebuildable Library search documents and article relationship suggestions with soft dismissal; JSON config is unchanged. M6-E candidate adds additive SQLite schema 13 for per-new-paper Library context suggestions and collection intelligence snapshots; JSON config is unchanged.
-- qualified_local_commit: fad6b8425bc14a956fb22f26f68cc485e46f71b9
-- qualified_local_tag: annotated local tag `m6e-qualified`; tag object `2d09e095434b6d7a258b65a47d892e0b339e2b50`; target `fad6b8425bc14a956fb22f26f68cc485e46f71b9`. Prior local tags: `m6d-qualified` targets `82c323d56c9ed9fbbdb8c36f602d03bd9d3d34b0`; `m6c-qualified` targets `7208191b3aa66c21863ec63d21e7d1f60ebe82b0`; `m6b-qualified` targets `104780a0ba9c98cd9663ef8d1088cb9472d53e09`; `m6a-qualified` targets `17e047c325bb61008cf39b9a135bea02bb63a968`.
-- deferred_minor_optional_findings: M6-A Auditor noted Library save/remove UI lacks a dedicated Streamlit click smoke; deterministic service/helper coverage passed and this was classified MINOR/OPTIONAL. M6-B repair Auditor noted regeneration replacement is not a single DB transaction after provider success; current supported paths are covered, but a future atomic replace helper would be safer if the persistence path broadens. M6-C Auditor noted tag filter options may include tags retained only for AI suppression/tombstone history, which can yield no-result filter options. M6-D initial Auditor noted personal-note-derived tokens could be sent to Codex without explicit cue; repair round 1 excludes note text from Codex-facing connection candidate evidence while preserving local note search. M6-E repair Auditor noted context candidate eligibility can still spend prompt budget on a candidate whose only existing suggestion is collection-scoped and will later be skipped during assignment; no incorrect mutation occurs.
-- next_permitted_action: run M6-F upgrade and end-to-end qualification matrix.
-- human_stop_reason: none active
+- qualified_local_commit: final local commit tagged `m6f-qualified` after this document update.
+- qualified_local_tag: annotated local tag `m6f-qualified` is the M6 release-candidate qualification tag. Prior local tags: `m6e-qualified` targets `fad6b8425bc14a956fb22f26f68cc485e46f71b9`; `m6d-qualified` targets `82c323d56c9ed9fbbdb8c36f602d03bd9d3d34b0`; `m6c-qualified` targets `7208191b3aa66c21863ec63d21e7d1f60ebe82b0`; `m6b-qualified` targets `104780a0ba9c98cd9663ef8d1088cb9472d53e09`; `m6a-qualified` targets `17e047c325bb61008cf39b9a135bea02bb63a968`.
+- deferred_minor_optional_findings: M6-B repair Auditor noted regeneration replacement is not a single DB transaction after provider success; current supported paths are covered, but a future atomic replace helper would be safer if the persistence path broadens. M6-C Auditor noted tag filter options may include tags retained only for AI suppression/tombstone history, which can yield no-result filter options. M6-E repair Auditor noted context candidate eligibility can still spend prompt budget on a candidate whose only existing suggestion is collection-scoped and will later be skipped during assignment; no incorrect mutation occurs. M6 live Codex smokes require a runtime where Codex can initialize and authenticate; sandbox attempts reached the CLI but could not complete model work.
+- next_permitted_action: stop for final human release decision; do not push, publish, create a public release, or create a public M6 version tag without human authority.
+- human_stop_reason: M6 final human gate reached.
 
 ## Recovered v0.2 Baseline
 
@@ -811,3 +811,143 @@ Qualification:
   run Codex; otherwise record provider/environment limitation for human live
   smoke.
 - After PASS, commit locally and create annotated local tag `m6e-qualified`.
+
+## M6-F Upgrade and End-to-End Qualification
+
+State:
+
+- M6-F deterministic qualification is complete after one final audit-driven
+  repair round.
+- The release-candidate state is
+  `M6_RELEASE_CANDIDATE_COMPLETE_AWAITING_HUMAN`.
+- No public push, public tag, package publication, or release creation has been
+  performed.
+
+Schema/config:
+
+- Latest pre-M6 baseline: SQLite schema `8`, JSON config `3`.
+- M6 release candidate: SQLite schema `13`, JSON config `3`.
+- Schema migrations are additive:
+  - schema 9: saved Library articles;
+  - schema 10: Library tags, assignments, AI suppressions;
+  - schema 11: notes, collections, memberships;
+  - schema 12: derived Library search documents and article connections;
+  - schema 13: Library context suggestions and collection intelligence
+    snapshots.
+- No new secret-bearing config fields were added.
+
+Upgrade and preservation evidence:
+
+- Deterministic release matrix covers fresh install, repeated startup,
+  v0.1.0/M2-style upgrade, config upgrade, migration backups, user-data backup,
+  packaging, installed editable CLI entry point, Codex unavailable, and network
+  failure sanitization.
+- Substage tests cover preservation and behavior for profiles, articles,
+  analyses, feedback, synthesis/run history, coverage, scheduler config, saved
+  Library entries, user tags, AI tags, AI suppressions, notes, collections,
+  memberships, Library search/index, article connections, Library context, and
+  collection intelligence.
+- Article identity remains anchored on the existing `articles(source,
+  source_article_id)` uniqueness contract and `articles.id` is the local
+  Library identity bridge.
+- Historical digest snapshots remain immutable.
+
+Final deterministic checks:
+
+- `pytest`: PASS, 315 passed.
+- `ruff check .`: PASS.
+- `mypy --strict src tests`: PASS.
+- `python -m compileall src tests`: PASS.
+- `git diff --check`: PASS.
+- Package build: PASS via `python -m pip wheel . --no-deps`.
+- Isolated wheel install: PASS.
+- Installed CLI smoke: PASS for `research-digest --version`.
+- Installed CLI fresh status smoke: PASS; schema 13/config 3/no last run.
+- Installed backup smoke: PASS.
+- Streamlit Library smoke: PASS through `streamlit.testing.v1.AppTest`.
+
+Final audit:
+
+- Fresh final read-only Auditor first found one IMPORTANT issue:
+  `assign_connection_suggestions()` could persist a valid relationship before
+  raising on a later invalid provider suggestion.
+- Repair round 1 validates the full connection-provider batch before any
+  connection persistence.
+- Added regressions for valid-then-duplicate and valid-then-unknown batches
+  leaving no persisted connections.
+- Focused repair Auditor PASS; no BLOCKER/IMPORTANT findings remain.
+
+Live checks:
+
+- Human v0.2 live smoke was accepted before M6 began.
+- M6-B/M6-D/M6-E synthetic Codex smokes reached the Codex CLI but could not
+  complete model work in this sandbox because of provider/auth/runtime
+  limitations. These are recorded as environment limitations, not deterministic
+  code failures.
+- Scheduler backend status in this Linux/WSL sandbox reports unsupported
+  Windows Task Scheduler socket behavior; deterministic scheduler tests remain
+  passing.
+
+Release notes draft:
+
+- Adds a user-curated saved Article Library.
+- Adds explicit save/remove controls from Today and History paper cards.
+- Adds Library page with sorting/filtering, relevance context, arXiv/PDF links,
+  and original abstract display.
+- Adds user tags, AI tags, AI provenance, and durable AI tag suppressions.
+- Adds personal article notes and collections/projects.
+- Adds local Library search over saved scientific material.
+- Adds AI-suggested saved-paper connections with provenance and dismissal.
+- Adds bounded Library context suggestions for new digest papers.
+- Adds lightweight collection/project intelligence snapshots.
+
+User guide draft:
+
+- Use `Save to Library` on Today or History cards to deliberately keep a paper.
+- Open `Library` to filter, sort, inspect abstracts, manage tags, edit notes,
+  organize collections, and inspect related saved papers.
+- Add user tags manually; use explicit AI tag generation only for saved papers
+  when Codex is available.
+- Removing an AI tag records a suppression so ordinary regeneration does not
+  immediately re-add it.
+- Collections group saved papers without owning or deleting them.
+- Connections and Library context are suggestions with provenance, not
+  scientific facts.
+
+Privacy/data ownership notes:
+
+- Library state, tags, suppressions, notes, collections, connections, and
+  context are stored locally in SQLite.
+- Personal notes are excluded from Codex-facing connection/context prompts.
+- Viewing Library, tags, abstracts, notes, connections, or context does not call
+  Codex.
+- External article metadata and abstracts are rendered and passed to prompts as
+  untrusted text.
+- Backup exports M6 user data but not API keys, `.env`, Codex auth material,
+  virtualenvs, caches, or runtime databases outside the active application DB.
+
+Known limitations:
+
+- arXiv remains the only source family.
+- Analysis remains abstract-level; no PDF/full-paper reading.
+- No RSS/journal/API expansion from M3.
+- No vector database or embedding infrastructure.
+- No multi-user/authentication infrastructure.
+- AI tags, connections, and context require an available Codex runtime.
+- M6 does not make automated scientific conclusions; it stores and presents
+  bounded suggestions and local evidence.
+
+Suggested next version:
+
+- Use a post-0.2 feature version such as `0.3.0` for M6 if this is the next
+  public feature release, or a project-specific milestone tag if version
+  numbering is being decided separately.
+
+Final human stop:
+
+- Stop at this state for the human release decision.
+- Suggested local qualification tag: `m6f-qualified`.
+- Suggested public release tag target, if approved later: a human-approved
+  release commit derived from `m6f-qualified` that sets the chosen public
+  package/runtime version. The current qualification commit intentionally still
+  reports package/runtime version `0.2.0` pending that release decision.

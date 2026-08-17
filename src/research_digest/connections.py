@@ -183,18 +183,14 @@ def assign_connection_suggestions(
     by_candidate_id = {
         article_candidate_id(candidate.article): candidate for candidate in candidates
     }
-    seen: set[str] = set()
+    validated = _validate_connection_suggestions(
+        article_id=article_id,
+        by_candidate_id=by_candidate_id,
+        suggestions=suggestions,
+    )
     connections: list[LibraryConnection] = []
-    for suggestion in suggestions:
-        candidate_key = suggestion.candidate_id.strip()
-        if candidate_key in seen:
-            raise ValueError(f"duplicate connection suggestion for {candidate_key}")
-        seen.add(candidate_key)
-        candidate = by_candidate_id.get(candidate_key)
-        if candidate is None or candidate.article.id is None:
-            raise ValueError(f"unknown connection candidate: {candidate_key}")
-        if candidate.article.id == article_id:
-            raise ValueError("connection suggestion cannot link an article to itself")
+    for suggestion, candidate in validated:
+        assert candidate.article.id is not None
         existing = db.get_library_connection_by_pair(article_id, candidate.article.id)
         if existing is not None and existing.dismissed_at is not None and not revive:
             continue
@@ -215,6 +211,28 @@ def assign_connection_suggestions(
             )
         )
     return connections
+
+
+def _validate_connection_suggestions(
+    *,
+    article_id: int,
+    by_candidate_id: dict[str, ConnectionCandidate],
+    suggestions: Sequence[LibraryConnectionSuggestion],
+) -> list[tuple[LibraryConnectionSuggestion, ConnectionCandidate]]:
+    seen: set[str] = set()
+    validated: list[tuple[LibraryConnectionSuggestion, ConnectionCandidate]] = []
+    for suggestion in suggestions:
+        candidate_key = suggestion.candidate_id.strip()
+        if candidate_key in seen:
+            raise ValueError(f"duplicate connection suggestion for {candidate_key}")
+        seen.add(candidate_key)
+        candidate = by_candidate_id.get(candidate_key)
+        if candidate is None or candidate.article.id is None:
+            raise ValueError(f"unknown connection candidate: {candidate_key}")
+        if candidate.article.id == article_id:
+            raise ValueError("connection suggestion cannot link an article to itself")
+        validated.append((suggestion, candidate))
+    return validated
 
 
 @dataclass(frozen=True)

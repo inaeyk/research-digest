@@ -315,6 +315,57 @@ class ConnectionTests(unittest.TestCase):
                 provenance={"provider": "fake"},
             )
 
+    def test_invalid_connection_batch_does_not_partially_persist(self) -> None:
+        assert self.target.id is not None
+        candidate = ConnectionCandidate(article=self.related, score=1.0, evidence={})
+        valid = LibraryConnectionSuggestion(
+            candidate_id=article_candidate_id(self.related),
+            relation_label="shared method",
+            rationale="Grounded.",
+        )
+        duplicate = LibraryConnectionSuggestion(
+            candidate_id=article_candidate_id(self.related),
+            relation_label="same system",
+            rationale="Also grounded.",
+        )
+
+        with self.assertRaisesRegex(ValueError, "duplicate"):
+            assign_connection_suggestions(
+                self.db,
+                article_id=self.target.id,
+                candidates=[candidate],
+                suggestions=[valid, duplicate],
+                provenance={"provider": "fake"},
+            )
+
+        self.assertEqual(self.db.list_library_connections(), [])
+
+    def test_unknown_after_valid_connection_does_not_partially_persist(self) -> None:
+        assert self.target.id is not None
+        candidate = ConnectionCandidate(article=self.related, score=1.0, evidence={})
+
+        with self.assertRaisesRegex(ValueError, "unknown"):
+            assign_connection_suggestions(
+                self.db,
+                article_id=self.target.id,
+                candidates=[candidate],
+                suggestions=[
+                    LibraryConnectionSuggestion(
+                        candidate_id=article_candidate_id(self.related),
+                        relation_label="shared method",
+                        rationale="Grounded.",
+                    ),
+                    LibraryConnectionSuggestion(
+                        candidate_id="arxiv:missing",
+                        relation_label="same system",
+                        rationale="Not grounded.",
+                    ),
+                ],
+                provenance={"provider": "fake"},
+            )
+
+        self.assertEqual(self.db.list_library_connections(), [])
+
     def test_prompt_is_bounded_and_labels_untrusted_data(self) -> None:
         candidate = ConnectionCandidate(
             article=self.related,

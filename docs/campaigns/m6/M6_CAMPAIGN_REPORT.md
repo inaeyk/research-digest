@@ -465,3 +465,154 @@ Freeze state:
 - Qualified local annotated tag: `m6e-qualified`.
 - Tag object: `2d09e095434b6d7a258b65a47d892e0b339e2b50`.
 - Tag target: `fad6b8425bc14a956fb22f26f68cc485e46f71b9`.
+
+## M6-F Final Release-Candidate Qualification
+
+Implemented during the final gate:
+
+- Added a deterministic Streamlit Library page smoke test using
+  `streamlit.testing.v1.AppTest`.
+- Repaired Library connection assignment so invalid provider batches cannot
+  partially persist relationships before raising.
+- Added regressions proving valid-then-duplicate and valid-then-unknown
+  connection batches leave no persisted connection rows.
+
+Final deterministic checks:
+
+- `pytest`: PASS, 315 passed.
+- `ruff check .`: PASS.
+- `mypy --strict src tests`: PASS.
+- `python -m compileall src tests`: PASS.
+- `git diff --check`: PASS.
+- Package build: PASS with `python -m pip wheel . --no-deps`.
+- Isolated wheel install: PASS.
+- Installed CLI smoke: PASS for `research-digest --version`.
+- Installed CLI fresh status smoke: PASS; schema `13`, config `3`, no last run
+  in an isolated `/tmp` working directory.
+- Installed backup smoke: PASS.
+- Streamlit Library smoke: PASS through AppTest.
+
+Final audit:
+
+- Fresh read-only final M6 Auditor reviewed the complete M6 delta from
+  `v0.2.0`.
+- Initial result: FAIL with one IMPORTANT finding. `assign_connection_suggestions`
+  interleaved validation and writes, so a later invalid provider suggestion
+  could leave an earlier connection persisted while the UI reported generation
+  failure.
+- Repair round 1 validates the entire provider batch before any connection
+  writes.
+- Focused repair Auditor result: PASS. No BLOCKER/IMPORTANT findings remain.
+
+Upgrade/migration evidence:
+
+- Additive migrations advance SQLite schema from v0.2 schema `8` to M6 schema
+  `13`.
+- JSON config remains version `3`.
+- Deterministic tests cover fresh install, repeated migration/startup,
+  v0.1.0/M2-style upgrade, backup/export, Codex unavailable, network
+  unavailable/sanitized failures, packaging, installed CLI entry points, and
+  Streamlit Library rendering.
+- Existing profiles, articles, relevance analyses, feedback, synthesis/run
+  history, source-date coverage, scheduler config, and History semantics remain
+  preserved by the release matrix and substage tests.
+- M6 data covered by deterministic tests includes saved articles, AI/user tags,
+  tag suppressions, notes, collections, memberships, search documents,
+  connections, Library context suggestions, and collection intelligence
+  snapshots.
+
+Privacy and safety evidence:
+
+- No new secret-bearing configuration keys were added.
+- Viewing Library, abstracts, tags, notes, connections, and context does not
+  call Codex.
+- Personal notes are excluded from Codex-facing connection/context prompts.
+- Article metadata and abstracts are treated as untrusted text in prompt
+  boundaries.
+- Secret-pattern scan found only fake redaction-test strings and existing
+  documentation examples; ignored local `.env`, SQLite, cache, and virtualenv
+  files are not tracked.
+
+Live/smoke limitations:
+
+- M6-B/M6-D/M6-E synthetic Codex smokes reached the Codex CLI but could not
+  complete model work in this sandbox because of provider/auth/runtime
+  limitations. This is recorded as an environment limitation, not a deterministic
+  code failure.
+- Installed scheduler status smoke reports unsupported Windows Task Scheduler
+  socket behavior in this environment; deterministic scheduler tests remain
+  passing. First-class WSL2/Windows scheduler live validation remains a human
+  environment smoke when release authority is granted.
+
+Known limitations:
+
+- arXiv-only source family.
+- Abstract-level analysis only; no PDF/full-paper reading.
+- No M3 RSS/journal/API/general-web sources.
+- No vector database, embedding service, Redis, Celery, distributed runtime,
+  multi-user authentication, or cloud requirement.
+- AI tags, connections, and Library context require an available Codex runtime.
+- AI-generated connections/context are provenance-bearing suggestions, not
+  scientific facts.
+
+Release notes draft:
+
+- Saved Article Library with explicit save/remove from Today and History.
+- Library page with sorting/filtering, relevance context, arXiv/PDF links, and
+  original source abstract display.
+- User tags, AI tags, AI provenance, and durable AI tag suppressions.
+- Personal notes and collections/projects for saved papers.
+- Local Library search over title, authors, tags, collections, abstracts, and
+  notes where appropriate.
+- AI-suggested relationships among saved papers with dismissal.
+- Bounded Library context suggestions for newly analyzed papers.
+- Lightweight collection intelligence snapshots.
+
+User guide draft:
+
+- Save papers deliberately with `Save to Library`; relevant papers are not
+  saved automatically.
+- Use the `Library` page to search, sort, inspect abstracts, add tags, edit
+  notes, and manage collections.
+- Use explicit AI actions to generate tags, saved-paper connections, or Library
+  context when Codex is available.
+- Remove AI suggestions to hide them durably; user tags and notes remain
+  authoritative.
+- Collections group papers without deleting papers when a collection is
+  removed.
+- Treat generated connections/context as suggested relationships grounded in
+  stored evidence.
+
+Suggested release commands after human approval:
+
+```bash
+git status --short --branch
+# After choosing the public version, update pyproject.toml and
+# src/research_digest/__init__.py from 0.2.0 to the approved version.
+pytest
+ruff check .
+mypy --strict src tests
+python -m compileall src tests
+git diff --check
+git commit -am "Prepare Research Digest <APPROVED_VERSION> release"
+git tag -a v<APPROVED_VERSION> -m "Research Digest v<APPROVED_VERSION>" HEAD
+git push origin feature/m6-scientific-library-memory
+git push origin v<APPROVED_VERSION>
+python -m pip wheel . --no-deps --wheel-dir dist
+```
+
+Do not run these commands until the human release decision is made. The current
+M6 qualification commit intentionally still reports package/runtime version
+`0.2.0`; the public release tag should target the later human-approved
+version-bump release commit.
+
+Final state:
+
+- Campaign state is
+  `M6_RELEASE_CANDIDATE_COMPLETE_AWAITING_HUMAN`.
+- Suggested local qualification tag: `m6f-qualified`.
+- Suggested public release tag target, if approved later: a version-bump
+  release commit derived from `m6f-qualified`, not the unbumped qualification
+  commit unless the human explicitly chooses to keep version `0.2.0`.
+- No push, package publication, public version tag creation, or public release
+  has been performed by this campaign.
