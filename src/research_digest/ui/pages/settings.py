@@ -16,12 +16,27 @@ from research_digest.automation import (
 )
 from research_digest.backup import BackupResult, run_backup
 from research_digest.config import AppConfig, ConfigError, load_config, save_automation_settings
-from research_digest.db import Database
+from research_digest.coverage import (
+    build_automatic_coverage_plan,
+    build_date_coverage_statuses,
+    digest_is_coverage_eligible,
+)
+from research_digest.db import (
+    APP_RUN_ANALYSIS_UNAVAILABLE,
+    APP_RUN_COMPLETED,
+    APP_RUN_FAILED,
+    APP_RUN_PARTIAL,
+    SOURCE_ARXIV,
+    Database,
+)
 from research_digest.doctor import DoctorCheck, DoctorReport, DoctorSeverity, run_doctor
 from research_digest.errors import sanitize_error
 from research_digest.scheduler import ScheduleOperationResult, ScheduleStatus
 from research_digest.sources.arxiv import ArxivSource
 from research_digest.ui.common import get_analyzer, get_database
+from research_digest.ui.date_status import month_bounds, render_date_status_grid
+
+_RUN_NOW_NOTICE_KEY = "automation_run_now_notice"
 
 
 def render() -> None:
@@ -110,7 +125,17 @@ def _render_automation(config: AppConfig, db: Database) -> None:
                 "Catch up missed source dates",
                 value=config.automatic_catch_up_enabled,
             )
+            catch_up_from = st.date_input(
+                "Catch up from",
+                value=config.automatic_coverage_start_date,
+            )
             st.caption("Windows local time; follows Windows daylight-saving rules.")
+            st.caption(
+                "Earlier successfully covered dates are not reprocessed. "
+                "Failed or incomplete dates remain pending. Moving this date earlier may "
+                "add pending dates; moving it later changes future pending consideration "
+                "without deleting historical runs or coverage records."
+            )
             submitted = st.form_submit_button(
                 "Save / update schedule",
                 type="primary",
@@ -118,7 +143,10 @@ def _render_automation(config: AppConfig, db: Database) -> None:
             )
         if submitted:
             try:
-                updated_config = save_automation_settings(catch_up_missed_dates=catch_up)
+                updated_config = save_automation_settings(
+                    catch_up_missed_dates=catch_up,
+                    coverage_start_date=_coerce_date(catch_up_from),
+                )
                 if enabled:
                     result = install_or_update_schedule(
                         time_of_day=daily_time,
@@ -134,6 +162,9 @@ def _render_automation(config: AppConfig, db: Database) -> None:
             else:
                 st.success(schedule_operation_message(result), icon=":material/check_circle:")
                 st.rerun()
+
+        _render_coverage_overview(config, db)
+        _render_run_now_notice()
 
         with st.container(horizontal=True):
             if st.button("Run now", icon=":material/play_arrow:"):
@@ -181,8 +212,113 @@ def _render_schedule_status(status: AutomationStatus) -> None:
         st.caption(sanitize_error(schedule.message))
 
 
+def _render_coverage_overview(config: AppConfig, db: Database) -> None:
+    import streamlit as st
+
+    source_config = db.get_arxiv_config()
+    profiles = db.list_interest_profiles(enabled_only=True)
+    if source_config is None or not profiles:
+        st.info("Coverage status is available after arXiv and an enabled profile are configured.")
+        return
+    selected_profile = st.selectbox(
+        "Coverage profile",
+        options=profiles,
+        format_func=lambda profile: profile.name,
+        key="automation_coverage_profile",
+    )
+    source = ArxivSource()
+    try:
+        plan = build_automatic_coverage_plan(
+            db=db,
+            profiles=tuple(profiles),
+            source_name=SOURCE_ARXIV,
+            source_config=source_config,
+            latest_resolver=source,
+            coverage_start_date=config.automatic_coverage_start_date,
+            catch_up_missed_dates=config.automatic_catch_up_enabled,
+        )
+    except Exception as exc:
+        st.warning(
+            "Pending coverage dates could not be resolved: " + sanitize_error(exc),
+            icon=":material/warning:",
+        )
+        return
+    st.caption(f"Catch up from: {config.automatic_coverage_start_date.isoformat()}")
+    if plan.latest_available_date is None:
+        st.caption("Latest available source date: unavailable")
+    else:
+        st.caption(f"Latest available source date: {plan.latest_available_date.isoformat()}")
+    st.caption(
+        "Pending source dates: "
+        + (
+            ", ".join(value.isoformat() for value in plan.pending_dates)
+            if plan.pending_dates
+            else "none"
+        )
+    )
+    if (
+        plan.latest_available_date is not None
+        and config.automatic_coverage_start_date > plan.latest_available_date
+    ):
+        st.info(
+            run_now_noop_message(
+                coverage_start_date=config.automatic_coverage_start_date,
+                latest_available_source_date=plan.latest_available_date,
+            ),
+            icon=":material/info:",
+        )
+    anchor = plan.latest_available_date or config.automatic_coverage_start_date
+    start_date, end_date = month_bounds(anchor)
+    render_date_status_grid(
+        statuses=build_date_coverage_statuses(
+            db=db,
+            profile=selected_profile,
+            source_name=SOURCE_ARXIV,
+            source_config=source_config,
+            start_date=start_date,
+            end_date=end_date,
+            pending_dates=plan.pending_dates,
+        ),
+        title=f"Automation coverage for {anchor:%B %Y}",
+    )
+
+
 def _run_automatic_now(config: AppConfig, db: Database) -> None:
     import streamlit as st
+
+    source_config = db.get_arxiv_config()
+    profiles = db.list_interest_profiles(enabled_only=True)
+    if source_config is None or not profiles:
+        st.warning(
+            "Run now is available after arXiv and an enabled profile are configured.",
+            icon=":material/warning:",
+        )
+        return
+    source = ArxivSource()
+    try:
+        plan = build_automatic_coverage_plan(
+            db=db,
+            profiles=tuple(profiles),
+            source_name=SOURCE_ARXIV,
+            source_config=source_config,
+            latest_resolver=source,
+            coverage_start_date=config.automatic_coverage_start_date,
+            catch_up_missed_dates=config.automatic_catch_up_enabled,
+        )
+    except Exception as exc:
+        st.error(
+            "Run now could not resolve pending dates: " + sanitize_error(exc),
+            icon=":material/error:",
+        )
+        return
+    if not plan.pending_dates:
+        message = run_now_noop_message(
+            coverage_start_date=config.automatic_coverage_start_date,
+            latest_available_source_date=plan.latest_available_date,
+        )
+        st.session_state[_RUN_NOW_NOTICE_KEY] = ("info", message)
+        st.info(message, icon=":material/info:")
+        return
 
     analyzer, analyzer_message = get_analyzer()
     if analyzer_message is not None:
@@ -196,15 +332,45 @@ def _run_automatic_now(config: AppConfig, db: Database) -> None:
             result = run_automatic_digest_now(
                 config=config,
                 db=db,
-                source=ArxivSource(),
+                source=source,
                 analyzer=analyzer,
             )
         except Exception as exc:
             status.update(label="Run now failed", state="error")
-            st.error(sanitize_error(exc), icon=":material/error:")
+            message = sanitize_error(exc)
+            st.session_state[_RUN_NOW_NOTICE_KEY] = ("error", message)
+            st.error(message, icon=":material/error:")
             return
-        status.update(label="Run now completed", state="complete")
-        st.write(run_now_summary(result))
+        notice_level = run_now_notice_level(result)
+        status_state = "error" if notice_level == "error" else "complete"
+        status.update(label="Run now completed", state=status_state)
+        st.session_state[_RUN_NOW_NOTICE_KEY] = (notice_level, run_now_summary(result))
+        st.rerun()
+
+
+def _render_run_now_notice() -> None:
+    import streamlit as st
+
+    notice = st.session_state.get(_RUN_NOW_NOTICE_KEY)
+    if not isinstance(notice, tuple) or len(notice) != 2:
+        return
+    level, message = notice
+    if not isinstance(message, str):
+        return
+    if level == "success":
+        st.success(message, icon=":material/check_circle:")
+    elif level == "warning":
+        st.warning(message, icon=":material/warning:")
+    elif level == "error":
+        st.error(message, icon=":material/error:")
+    else:
+        st.info(message, icon=":material/info:")
+
+
+def _coerce_date(value: object) -> date:
+    if isinstance(value, date):
+        return value
+    raise ConfigError("catch-up start date must be a calendar date")
 
 
 def _render_data(config: AppConfig) -> None:
@@ -388,8 +554,121 @@ def run_now_summary(result: object) -> str:
     relevant = getattr(result, "relevant_count", 0)
     pending = getattr(result, "pending_source_dates", ())
     dates = ", ".join(value.isoformat() for value in pending if isinstance(value, date))
+    run_ids = _run_now_run_ids(result)
+    outcome = _run_now_date_outcome_summary(result)
+    errors = _run_now_error_messages(result)
     return (
         f"{succeeded} profile(s) succeeded, {failed} failed; "
         f"retrieved {retrieved}, analyzed {analyzed}, relevant {relevant}"
         + (f"; source dates {dates}" if dates else "; no uncovered source dates")
+        + (f"; runs {', '.join(f'#{run_id}' for run_id in run_ids)}" if run_ids else "")
+        + f"; {outcome}"
+        + (f"; errors: {'; '.join(errors)}" if errors else "")
+    )
+
+
+def run_now_notice_level(result: object) -> str:
+    failed = int(getattr(result, "failed_count", 0))
+    succeeded = int(getattr(result, "succeeded_count", 0))
+    if failed and not succeeded:
+        return "error"
+    if failed:
+        return "warning"
+    return "success"
+
+
+def _run_now_run_ids(result: object) -> tuple[int, ...]:
+    run_ids: list[int] = []
+    for profile in getattr(result, "profiles", ()):
+        digest_run = getattr(profile, "digest", None)
+        digest = getattr(digest_run, "digest", None)
+        run_id = getattr(digest, "run_id", None)
+        if isinstance(run_id, int):
+            run_ids.append(run_id)
+    return tuple(run_ids)
+
+
+def _run_now_date_outcome_summary(result: object) -> str:
+    completed_dates: set[date] = set()
+    empty_dates: set[date] = set()
+    partial_dates: set[date] = set()
+    failed_count = 0
+    for profile in getattr(result, "profiles", ()):
+        digest_run = getattr(profile, "digest", None)
+        digest = getattr(digest_run, "digest", None)
+        if digest is None:
+            if not bool(getattr(profile, "success", False)):
+                failed_count += 1
+            continue
+        run_status = getattr(digest, "run_status", None)
+        if digest_is_coverage_eligible(digest):
+            empty = {
+                value
+                for value in getattr(digest, "empty_source_dates", ())
+                if isinstance(value, date)
+            }
+            covered = {
+                value
+                for value in getattr(digest, "covered_source_dates", ())
+                if isinstance(value, date)
+            }
+            empty_dates.update(empty)
+            completed_dates.update(covered - empty)
+        elif run_status in (APP_RUN_PARTIAL, APP_RUN_ANALYSIS_UNAVAILABLE, APP_RUN_COMPLETED):
+            partial_dates.update(_run_now_digest_attempted_dates(digest))
+        elif run_status == APP_RUN_FAILED:
+            failed_count += 1
+    return (
+        f"date outcomes: completed {len(completed_dates)}, "
+        f"empty {len(empty_dates)}, partial {len(partial_dates)}, failed {failed_count}"
+    )
+
+
+def _run_now_digest_attempted_dates(digest: object) -> set[date]:
+    incomplete = {
+        value
+        for value in getattr(digest, "incomplete_source_dates", ())
+        if isinstance(value, date)
+    }
+    if incomplete:
+        return incomplete
+    requested = {
+        value for value in getattr(digest, "requested_source_dates", ()) if isinstance(value, date)
+    }
+    if requested:
+        return requested
+    return {
+        value for value in getattr(digest, "covered_source_dates", ()) if isinstance(value, date)
+    }
+
+
+def _run_now_error_messages(result: object) -> tuple[str, ...]:
+    messages: list[str] = []
+    for profile in getattr(result, "profiles", ()):
+        if bool(getattr(profile, "success", False)):
+            continue
+        raw = getattr(profile, "error_message", None)
+        profile_id = getattr(profile, "profile_id", "unknown")
+        if isinstance(raw, str) and raw.strip():
+            message = sanitize_error(raw)
+        else:
+            message = "profile did not complete successfully"
+        messages.append(f"profile {profile_id}: {message}")
+    return tuple(messages)
+
+
+def run_now_noop_message(
+    *,
+    coverage_start_date: date,
+    latest_available_source_date: date | None,
+) -> str:
+    latest = (
+        latest_available_source_date.isoformat()
+        if latest_available_source_date is not None
+        else "unavailable"
+    )
+    return (
+        "No pending source dates. "
+        f"Catch-up starts {coverage_start_date.isoformat()}. "
+        f"Latest available source date is {latest}."
     )

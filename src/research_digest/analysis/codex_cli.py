@@ -64,7 +64,11 @@ class CodexCLIAnalyzer(LLMAnalyzer):
 
     def analyze(self, *, profile: InterestProfile, article: Article) -> AnalysisResult:
         results = self.analyze_many(profile=profile, articles=[article])
-        return results[article_analysis_key(article)]
+        key = article_analysis_key(article)
+        analysis = results.get(key)
+        if analysis is None:
+            raise AnalyzerError(f"Codex CLI did not return usable analysis for {key}.")
+        return analysis
 
     def analyze_many(
         self,
@@ -273,31 +277,34 @@ def _parse_batch_output(
     if not isinstance(raw_results, list):
         raise AnalyzerError("Codex CLI output must contain a results list.")
 
-    requested_ids = [article_analysis_key(article) for article in requested_articles]
-    requested_id_set = set(requested_ids)
+    requested_id_set = {article_analysis_key(article) for article in requested_articles}
     seen_ids: set[str] = set()
+    duplicate_ids: set[str] = set()
     analyses: dict[str, AnalysisResult] = {}
     for raw_result in raw_results:
         if not isinstance(raw_result, dict):
-            raise AnalyzerError("Codex CLI returned a non-object result item.")
+            continue
         raw_article_id = raw_result.get("article_id")
         if not isinstance(raw_article_id, str) or not raw_article_id.strip():
-            raise AnalyzerError("Codex CLI returned a result without article_id.")
+            continue
         article_id = raw_article_id.strip()
         if article_id in seen_ids:
-            raise AnalyzerError(f"Codex CLI returned duplicate analysis for {article_id}.")
+            duplicate_ids.add(article_id)
+            analyses.pop(article_id, None)
+            continue
         if article_id not in requested_id_set:
-            raise AnalyzerError(f"Codex CLI returned unknown article_id {article_id}.")
+            continue
         seen_ids.add(article_id)
 
         analysis_payload = dict(raw_result)
         analysis_payload.pop("article_id")
-        analyses[article_id] = AnalysisResult.from_mapping(analysis_payload)
+        try:
+            analyses[article_id] = AnalysisResult.from_mapping(analysis_payload)
+        except Exception:
+            analyses.pop(article_id, None)
 
-    missing_ids = requested_id_set - seen_ids
-    if missing_ids:
-        missing = ", ".join(sorted(missing_ids))
-        raise AnalyzerError(f"Codex CLI did not return analysis for: {missing}.")
+    for article_id in duplicate_ids:
+        analyses.pop(article_id, None)
     return analyses
 
 

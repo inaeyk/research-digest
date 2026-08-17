@@ -68,7 +68,7 @@ class DatabaseTests(unittest.TestCase):
         config = self.db.get_arxiv_config()
         self.assertIsNotNone(config)
         assert config is not None
-        self.assertEqual(config.categories, ["hep-th", "gr-qc"])
+        self.assertEqual(config.categories, ["gr-qc", "hep-th"])
 
         self.db.save_arxiv_config(
             ArxivSourceConfig(
@@ -85,6 +85,22 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(updated.categories, ["math-ph"])
         self.assertEqual(updated.lookback_hours, 12)
         self.assertEqual(updated.max_results, 10)
+
+    def test_arxiv_config_reload_preserves_category_semantic_equality(self) -> None:
+        self.db.save_arxiv_config(
+            ArxivSourceConfig(
+                enabled=True,
+                categories=[" hep-th ", "gr-qc", "hep-th"],
+                lookback_hours=12,
+                max_results=10,
+            )
+        )
+
+        reloaded = self.db.get_arxiv_config()
+
+        self.assertIsNotNone(reloaded)
+        assert reloaded is not None
+        self.assertEqual(reloaded.categories, ["gr-qc", "hep-th"])
 
     def test_fresh_database_records_current_schema_version(self) -> None:
         self.assertEqual(self.db.get_schema_version(), CURRENT_SCHEMA_VERSION)
@@ -214,8 +230,13 @@ class DatabaseTests(unittest.TestCase):
             description="Higher-dimensional gravity.",
         )
         assert profile.id is not None
-        run_id = self.db.create_app_run(profile_id=profile.id, source_name="arxiv")
         fingerprint = profile_semantic_fingerprint(profile)
+        run_id = self.db.create_app_run(
+            profile_id=profile.id,
+            profile_fingerprint=fingerprint,
+            source_name="arxiv",
+        )
+        self.assertEqual(self.db.get_app_runs()[0]["profile_fingerprint"], fingerprint)
 
         self.db.mark_source_date_covered(
             profile_id=profile.id,
@@ -501,6 +522,7 @@ class DatabaseTests(unittest.TestCase):
             },
         )
         self.assertEqual(runs[-1]["run_origin"], "LEGACY")
+        self.assertIsNone(runs[-1]["profile_fingerprint"])
         self.assertIsNone(runs[-1]["date_selection_json"])
         self.assertEqual(runs[-1]["requested_source_dates_json"], "[]")
         self.assertEqual(runs[-1]["covered_source_dates_json"], "[]")

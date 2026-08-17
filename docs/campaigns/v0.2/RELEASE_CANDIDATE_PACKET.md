@@ -1,6 +1,7 @@
 # v0.2 Release Candidate Human Review Packet
 
-Status: release candidate complete; awaiting final human release decision.
+Status: integrated v0.2 release candidate complete after final human live
+smoke; final human release decision still required.
 
 This packet is release-candidate material only. It does not authorize a public
 release, public `v0.2.0` tag, GitHub release, package publication, or remote
@@ -13,10 +14,10 @@ push.
 - released baseline: annotated tag `v0.1.0` targets
   `905f3133b58b6248fe4d3714c19f8bcdf9dde4cf`
 - current qualification branch: `feature/v0.2-date-native-scheduler-ui`
-- qualified release code commit: `37cc990dd5e793a2ac84d9d2591b34037638ec9c`
-- final campaign bookkeeping commits after the qualified code commit only
-  update campaign state/report/packet records; they do not change package
-  runtime code, tests, README, schema/config logic, or release behavior
+- last locally tagged qualification commit before final RC freeze:
+  `37cc990dd5e793a2ac84d9d2591b34037638ec9c`
+- final local RC commit is identified by local qualification tag
+  `v0.2-rc-qualified`; public release remains blocked pending human decision
 - suggested final public release tag for human review: `v0.2.0`
 
 ## Release Notes
@@ -30,14 +31,26 @@ Major features:
   selected non-contiguous dates
 - retrieval of all eligible arXiv articles for selected source dates, with M2
   preselection/cache controlling new-analysis effort
-- arXiv source-date semantics documented as the UTC calendar date of the
-  official Atom `published` timestamp
+- arXiv source-date semantics documented as America/Chicago calendar dates
+  derived from each article's arXiv publication timestamp
+- arXiv category source identity treats configured categories as a canonical
+  set, so reordering or duplicating equivalent categories does not change
+  coverage/cache scope
+- robust bounded full-analysis batching/retry so one incomplete structured
+  provider response cannot invalidate an entire daily digest
+- partial and analysis-unavailable runs preserve valid analyses and retry only
+  unresolved papers on rerun
 - date-native headless automatic catch-up for missed source dates
+- editable `Catch up from` automation anchor with pending-date visibility
+- profile/source-scoped date-status grids for completed, failed,
+  partial/incomplete, no-submission, pending, and selected dates
 - scheduler management in Settings, including enable/disable, daily time,
   catch-up toggle, status, next run, last scheduled run, last outcome, Run Now,
   and unsupported-environment messaging
 - date-oriented History that shows requested/covered source dates, manual vs
   scheduled origin, counts, run time, and persisted synthesis
+- per-article abstract toggles in current and historical paper cards using the
+  stored original source abstract, not generated summaries
 - Settings polish for General, Analysis, Automation, Data, and Health
 - Backup now and optional JSON export from Settings
 
@@ -54,7 +67,7 @@ Expected upgrade behavior:
 
 - application code remains replaceable and user data/config survives outside
   the source checkout
-- SQLite schema upgrades from v0.1.0 schema 4 to schema 6 with migration
+- SQLite schema upgrades from v0.1.0 schema 4 to schema 8 with migration
   backups
 - JSON config upgrades from v0.1.0 config 1 to config 3 with a config backup
 - legacy historical runs remain historical rolling-lookback runs and are not
@@ -79,7 +92,7 @@ Use Today to choose the source dates:
 
 - Latest available: resolves through the arXiv source adapter to a date with
   eligible material.
-- Single date: digests one explicit UTC arXiv source date.
+- Single date: digests one explicit America/Chicago arXiv source date.
 - Date range: digests every source date in a contiguous range.
 - Selected dates: digests explicit non-contiguous dates.
 
@@ -119,10 +132,50 @@ tokens, or refresh tokens.
   run origin, date selection, requested/covered/empty/incomplete source dates,
   retrieval completeness, and safety-limit metadata.
 - SQLite schema 6 adds source-date coverage scoped by profile semantic
-  fingerprint and source semantic fingerprint.
+  fingerprint and source semantic fingerprint. SQLite schema 7 adds nullable
+  app-run source fingerprints for scoped failed/partial date-status display.
+  SQLite schema 8 adds nullable app-run profile fingerprints for scoped
+  failed/partial/empty date-status display.
+- v0.2 RC source fingerprints canonicalize arXiv categories as a set; the
+  repaired coverage reader also recognizes compatible pre-repair
+  order-sensitive fingerprints for the same category set so existing RC
+  coverage is not orphaned.
 - JSON config 2 adds a default date selection.
 - JSON config 3 adds automatic catch-up settings and a conservative automatic
   coverage start date.
+
+## Integrated RC Repair Qualification
+
+Deterministic checks:
+
+- final freeze `pytest`: 262 passed.
+- `ruff check src tests`: PASS.
+- `mypy --strict src tests`: PASS.
+- `python -m compileall src tests`: PASS.
+- `git diff --check`: PASS.
+
+Fresh integrated RC-repair Auditor: initial audit found two IMPORTANT issues;
+repair round 1 was completed; re-audit found three IMPORTANT issues; repair
+round 2 fixed no-submission date status and all-preselected-out abstract
+display. Human source-date authority then replaced listing-date semantics with
+America/Chicago publication-date conversion. Fresh integrated re-audit passed
+with no BLOCKER or IMPORTANT findings; one MINOR helper-drift finding was
+repaired. Deterministic qualification passes.
+
+Human live-smoke checklist:
+`docs/campaigns/v0.2/RC_REPAIR_LIVE_SMOKE_CHECKLIST.md`.
+
+Final accepted human live smoke:
+
+- `hep-th` plus `gr-qc` showed Aug 12, Aug 13, and Aug 14 completed.
+- Reordering only to `gr-qc` plus `hep-th` preserved completed coverage,
+  pending-date state, source scope, and existing analysis/cache state with no
+  new History run and no analysis rerun.
+- Replacing a category created a distinct source scope.
+- Previously accepted integrated smoke covered America/Chicago source dates,
+  chunked Codex analysis/retry, durable manual coverage, retry status
+  precedence, Catch up from, Run Now feedback, scoped compact calendars,
+  no-submission state, abstract toggles, and History behavior.
 
 ## Backup And Recovery
 

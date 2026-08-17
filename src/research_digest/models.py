@@ -6,15 +6,18 @@ import hashlib
 import json
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
 from typing import Any, Literal, cast
+from zoneinfo import ZoneInfo
 
 ReadingPriority = Literal["LOW", "MEDIUM", "HIGH"]
 FeedbackLabel = Literal["RELEVANT", "NOT_RELEVANT"]
 MAX_ARXIV_LOOKBACK_HOURS = 24 * 30
 MAX_ARXIV_RESULTS = 500
+SOURCE_DATE_TIMEZONE_NAME = "America/Chicago"
+SOURCE_DATE_TIMEZONE = ZoneInfo(SOURCE_DATE_TIMEZONE_NAME)
 
 _WHITESPACE_RE = re.compile(r"\s+")
 _EXPECTED_ANALYSIS_KEYS = {
@@ -76,9 +79,9 @@ def datetime_from_db(value: str) -> datetime:
 
 
 def source_date_from_datetime(value: datetime) -> date:
-    """Return the UTC arXiv source date for a source timestamp."""
+    """Return the Research Digest source date for a source timestamp."""
 
-    return ensure_utc(value).date()
+    return ensure_utc(value).astimezone(SOURCE_DATE_TIMEZONE).date()
 
 
 @dataclass(frozen=True)
@@ -247,7 +250,7 @@ class ArxivSourceConfig:
 
     def __post_init__(self) -> None:
         categories = self.categories if self.categories is not None else ["hep-th", "gr-qc"]
-        normalized = [normalize_whitespace(category) for category in categories if category.strip()]
+        normalized = list(canonical_arxiv_categories(categories))
         if self.enabled and not normalized:
             raise ModelValidationError("at least one arXiv category is required when enabled")
         if self.lookback_hours <= 0:
@@ -261,6 +264,17 @@ class ArxivSourceConfig:
         if self.max_results > MAX_ARXIV_RESULTS:
             raise ModelValidationError(f"max_results must be at most {MAX_ARXIV_RESULTS}")
         object.__setattr__(self, "categories", normalized)
+
+
+def canonical_arxiv_categories(categories: Sequence[str]) -> tuple[str, ...]:
+    """Return the source-semantic arXiv category set in canonical order."""
+
+    normalized = {
+        normalize_whitespace(category)
+        for category in categories
+        if category.strip()
+    }
+    return tuple(sorted(normalized))
 
 
 @dataclass(frozen=True)
@@ -432,6 +446,11 @@ class DigestResult:
     items: list[DigestItem]
     started_at: datetime
     completed_at: datetime | None
+    analysis_complete: bool = True
+    skipped_articles: list[Article] = field(default_factory=list)
+    unresolved_articles: list[Article] = field(default_factory=list)
+    run_status: str = "COMPLETED"
+    error_message: str | None = None
     run_origin: RunOrigin = RunOrigin.LEGACY
     date_selection: DateSelection | None = None
     requested_source_dates: tuple[date, ...] = ()

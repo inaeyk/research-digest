@@ -11,6 +11,7 @@ from pathlib import Path
 
 from research_digest.analysis.fake import FakeAnalyzer
 from research_digest.db import (
+    APP_RUN_ANALYSIS_UNAVAILABLE,
     APP_RUN_COMPLETED,
     APP_RUN_FAILED,
     APP_RUN_RUNNING,
@@ -162,18 +163,18 @@ class RunLifecycleTests(unittest.TestCase):
         self.assertEqual(recovered["status"], APP_RUN_FAILED)
         self.assertIn("stopped before completion", recovered["error_message"])
 
-    def test_failed_run_releases_lock_and_retry_reuses_cache(self) -> None:
-        with self.assertRaises(RuntimeError):
-            run_digest_for_profile(
-                db=self.db,
-                source=StaticSource([article()]),
-                analyzer=FailingAnalyzer(),
-                profile_id=self.profile.id or 0,
-            )
+    def test_analysis_unavailable_run_releases_lock_and_retry_reuses_cache(self) -> None:
+        unavailable = run_digest_for_profile(
+            db=self.db,
+            source=StaticSource([article()]),
+            analyzer=FailingAnalyzer(),
+            profile_id=self.profile.id or 0,
+        )
         failed = self.db.get_app_runs()[0]
-        self.assertEqual(failed["status"], APP_RUN_FAILED)
+        self.assertEqual(unavailable.digest.run_status, APP_RUN_ANALYSIS_UNAVAILABLE)
+        self.assertEqual(failed["status"], APP_RUN_ANALYSIS_UNAVAILABLE)
         self.assertNotIn("/home/" + "inaeyk", failed["error_message"])
-        self.assertIn("[REDACTED_API_KEY]", failed["error_message"])
+        self.assertIn("Analysis unavailable", failed["error_message"])
 
         first = run_digest_for_profile(
             db=self.db,
@@ -194,13 +195,14 @@ class RunLifecycleTests(unittest.TestCase):
         with sqlite3.connect(self.db_path) as conn:
             self.assertEqual(conn.execute("PRAGMA integrity_check").fetchone()[0], "ok")
 
-    def test_batch_run_releases_lock_after_profile_failure(self) -> None:
+    def test_batch_run_releases_lock_after_profile_analysis_unavailable(self) -> None:
         result = run_digest_for_enabled_profiles(
             db=self.db,
             source=StaticSource([article()]),
             analyzer=FailingAnalyzer(),
         )
         self.assertEqual(result.failed_count, 1)
+        self.assertEqual(result.analysis_incomplete_count, 1)
 
         retry = run_digest_for_enabled_profiles(
             db=self.db,

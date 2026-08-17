@@ -7,7 +7,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 
 from research_digest.analysis.fake import FakeAnalyzer
-from research_digest.db import APP_RUN_FAILED, Database
+from research_digest.db import APP_RUN_ANALYSIS_UNAVAILABLE, Database
 from research_digest.history import get_run_snapshot, list_run_history
 from research_digest.models import (
     AnalysisResult,
@@ -125,24 +125,33 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual(snapshot["run_id"], result.digest.run_id)
         self.assertEqual(snapshot["profile_name"], "Gravity")
         self.assertEqual(snapshot["items"][0]["title"], "History paper")
+        self.assertEqual(snapshot["items"][0]["source"], "arxiv")
+        self.assertEqual(snapshot["items"][0]["source_article_id"], "2608.history01")
+        self.assertEqual(
+            snapshot["items"][0]["abstract"],
+            "History paper abstract about higher-dimensional gravity.",
+        )
 
-    def test_failed_run_has_sanitized_history_without_snapshot(self) -> None:
-        with self.assertRaises(RuntimeError):
-            run_digest_for_profile(
-                db=self.db,
-                source=StaticSource([article("2608.history02", "Failure paper")]),
-                analyzer=FailingAnalyzer(),
-                profile_id=self.profile.id or 0,
-            )
+    def test_analysis_unavailable_run_has_sanitized_history_snapshot(self) -> None:
+        result = run_digest_for_profile(
+            db=self.db,
+            source=StaticSource([article("2608.history02", "Failure paper")]),
+            analyzer=FailingAnalyzer(),
+            profile_id=self.profile.id or 0,
+        )
 
         entries = list_run_history(self.db)
-        self.assertEqual(entries[0].status, APP_RUN_FAILED)
-        self.assertFalse(entries[0].has_snapshot)
+        self.assertEqual(result.digest.run_status, APP_RUN_ANALYSIS_UNAVAILABLE)
+        self.assertEqual(entries[0].status, APP_RUN_ANALYSIS_UNAVAILABLE)
+        self.assertTrue(entries[0].has_snapshot)
         self.assertIsNotNone(entries[0].error_message)
         assert entries[0].error_message is not None
         self.assertNotIn("/home/" + "inaeyk", entries[0].error_message)
-        self.assertIn("[REDACTED_API_KEY]", entries[0].error_message)
-        self.assertIsNone(get_run_snapshot(self.db, run_id=entries[0].run_id))
+        self.assertIn("Analysis unavailable", entries[0].error_message)
+        snapshot = get_run_snapshot(self.db, run_id=entries[0].run_id)
+        self.assertIsNotNone(snapshot)
+        assert snapshot is not None
+        self.assertEqual(snapshot["unresolved_articles"][0]["source_article_id"], "2608.history02")
 
     def test_current_profile_changes_do_not_mutate_history_snapshot(self) -> None:
         result = run_digest_for_profile(

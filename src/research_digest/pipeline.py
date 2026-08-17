@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any
 
-from research_digest.analysis.base import AnalyzerError, LLMAnalyzer, article_analysis_key
+from research_digest.analysis.base import LLMAnalyzer, article_analysis_key
+from research_digest.coverage import source_config_semantic_fingerprint
 from research_digest.db import (
     APP_RUN_ANALYSIS_UNAVAILABLE,
     APP_RUN_COMPLETED,
     APP_RUN_FAILED,
+    APP_RUN_PARTIAL,
     SOURCE_ARXIV,
     Database,
 )
@@ -19,6 +22,7 @@ from research_digest.models import (
     AnalysisOrigin,
     AnalysisResult,
     Article,
+    ArxivSourceConfig,
     DateSelection,
     DigestItem,
     DigestResult,
@@ -39,6 +43,22 @@ class DigestPipelineError(RuntimeError):
     """Raised when a digest run cannot be completed."""
 
 
+DEFAULT_FULL_ANALYSIS_CHUNK_SIZE = 5
+
+
+@dataclass(frozen=True)
+class _ChunkAnalysisResult:
+    analyses: dict[str, AnalysisResult]
+    error_messages: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class _BoundedAnalysisResult:
+    analyses: dict[str, AnalysisResult]
+    unresolved_articles: list[Article]
+    error_messages: tuple[str, ...]
+
+
 def run_digest(
     *,
     db: Database,
@@ -50,6 +70,7 @@ def run_digest(
     run_origin: RunOrigin = RunOrigin.LEGACY,
     now: datetime | None = None,
     preselector: AbstractPreselector | None = None,
+    analysis_chunk_size: int = DEFAULT_FULL_ANALYSIS_CHUNK_SIZE,
 ) -> DigestResult:
     """Fetch, store, analyze, filter, rank, and return one digest run."""
 
@@ -68,9 +89,16 @@ def run_digest(
         )
 
     profile_fingerprint = profile_semantic_fingerprint(profile)
+    source_fingerprint = (
+        source_config_semantic_fingerprint(active_source_request.config)
+        if isinstance(active_source_request.config, ArxivSourceConfig)
+        else None
+    )
     run_id = db.create_app_run(
         profile_id=profile.id,
+        profile_fingerprint=profile_fingerprint,
         source_name=active_source_request.source_name,
+        source_fingerprint=source_fingerprint,
         run_origin=run_origin,
         date_selection=date_selection,
     )
@@ -85,6 +113,8 @@ def run_digest(
     reused_analysis_count = 0
     above_threshold_count = 0
     all_items: list[DigestItem] = []
+    skipped_articles: list[Article] = []
+    unresolved_articles: list[Article] = []
     status = APP_RUN_COMPLETED
     error_message: str | None = None
     requested_source_dates: tuple[str, ...] = (
@@ -160,23 +190,27 @@ def run_digest(
             ]
             preselected_count = preselection.selected_count
             skipped_analysis_count = preselection.skipped_count
+            skipped_articles = [
+                article
+                for article in missing_articles
+                if article_analysis_key(article) not in selected_ids
+            ]
 
         if analysis_candidates and analyzer is not None:
-            new_analyses = analyzer.analyze_many(profile=profile, articles=analysis_candidates)
-            _validate_analyzer_results(analysis_candidates, new_analyses)
-            for article in analysis_candidates:
-                if article.id is None or profile.id is None:
-                    raise DigestPipelineError("saved articles and profiles must have ids")
-                key = article_analysis_key(article)
-                analysis = new_analyses[key]
-                db.upsert_analysis(
-                    article_id=article.id,
-                    profile_id=profile.id,
-                    profile_fingerprint=profile_fingerprint,
-                    analysis=analysis,
-                )
+            bounded = _analyze_candidates_with_bounded_retries(
+                db=db,
+                analyzer=analyzer,
+                profile=profile,
+                profile_fingerprint=profile_fingerprint,
+                articles=analysis_candidates,
+                chunk_size=analysis_chunk_size,
+            )
+            for key, analysis in bounded.analyses.items():
                 analyses_by_key[key] = analysis
                 origins_by_key[key] = AnalysisOrigin.NEW_THIS_RUN
+            unresolved_articles = bounded.unresolved_articles
+        elif missing_articles and analyzer is None:
+            unresolved_articles = list(missing_articles)
 
         for article in saved_articles:
             key = article_analysis_key(article)
@@ -201,7 +235,11 @@ def run_digest(
         above_threshold_count = sum(
             is_above_threshold(item, profile.relevance_threshold) for item in all_items
         )
-        if analyzer is None:
+        analysis_complete = not unresolved_articles
+        if unresolved_articles:
+            status = APP_RUN_PARTIAL if analyzed_count else APP_RUN_ANALYSIS_UNAVAILABLE
+            error_message = _unresolved_analysis_message(unresolved_articles)
+        elif analyzer is None and retrieved_count > 0:
             status = APP_RUN_ANALYSIS_UNAVAILABLE
         completed_at = utc_now()
         db.finish_app_run(
@@ -219,6 +257,7 @@ def run_digest(
             incomplete_source_dates=incomplete_source_dates,
             retrieval_complete=retrieval_complete,
             retrieval_safety_limit=retrieval_safety_limit,
+            error_message=error_message,
         )
         return DigestResult(
             run_id=run_id,
@@ -232,10 +271,15 @@ def run_digest(
             new_analysis_count=new_analysis_count,
             reused_analysis_count=reused_analysis_count,
             above_threshold_count=above_threshold_count,
-            analysis_available=analyzer is not None,
+            analysis_available=analyzer is not None or retrieved_count == 0,
             items=all_items,
             started_at=started_at,
             completed_at=completed_at,
+            analysis_complete=analysis_complete,
+            skipped_articles=skipped_articles,
+            unresolved_articles=unresolved_articles,
+            run_status=status,
+            error_message=error_message,
             run_origin=run_origin,
             date_selection=date_selection,
             requested_source_dates=_source_date_tuple(requested_source_dates),
@@ -304,21 +348,117 @@ def _unique_articles(articles: list[Article]) -> list[Article]:
     return unique
 
 
+def _analyze_candidates_with_bounded_retries(
+    *,
+    db: Database,
+    analyzer: LLMAnalyzer,
+    profile: InterestProfile,
+    profile_fingerprint: str,
+    articles: Sequence[Article],
+    chunk_size: int,
+) -> _BoundedAnalysisResult:
+    if chunk_size <= 0:
+        raise DigestPipelineError("analysis chunk size must be positive")
+    if profile.id is None:
+        raise DigestPipelineError("profile id is required for analysis persistence")
+
+    remaining = list(articles)
+    analyses: dict[str, AnalysisResult] = {}
+    error_messages: list[str] = []
+    for active_chunk_size in _analysis_retry_chunk_sizes(chunk_size):
+        if not remaining:
+            break
+        next_remaining: list[Article] = []
+        for chunk in _chunks(remaining, active_chunk_size):
+            chunk_result = _analyze_chunk(analyzer=analyzer, profile=profile, articles=chunk)
+            error_messages.extend(chunk_result.error_messages)
+            for article in chunk:
+                key = article_analysis_key(article)
+                analysis = chunk_result.analyses.get(key)
+                if analysis is None:
+                    next_remaining.append(article)
+                    continue
+                if article.id is None:
+                    raise DigestPipelineError("saved article is missing an id")
+                db.upsert_analysis(
+                    article_id=article.id,
+                    profile_id=profile.id,
+                    profile_fingerprint=profile_fingerprint,
+                    analysis=analysis,
+                )
+                analyses[key] = analysis
+        remaining = next_remaining
+    return _BoundedAnalysisResult(
+        analyses=analyses,
+        unresolved_articles=remaining,
+        error_messages=tuple(error_messages),
+    )
+
+
+def _analysis_retry_chunk_sizes(chunk_size: int) -> tuple[int, ...]:
+    sizes = [chunk_size, max(1, chunk_size // 2), 1]
+    unique: list[int] = []
+    for size in sizes:
+        if size not in unique:
+            unique.append(size)
+    return tuple(unique)
+
+
+def _chunks(values: Sequence[Article], size: int) -> list[list[Article]]:
+    return [list(values[index : index + size]) for index in range(0, len(values), size)]
+
+
+def _analyze_chunk(
+    *,
+    analyzer: LLMAnalyzer,
+    profile: InterestProfile,
+    articles: Sequence[Article],
+) -> _ChunkAnalysisResult:
+    try:
+        results = analyzer.analyze_many(profile=profile, articles=articles)
+    except Exception as exc:
+        return _ChunkAnalysisResult(analyses={}, error_messages=(sanitize_error(exc),))
+    return _validate_analyzer_results(articles, results)
+
+
 def _validate_analyzer_results(
-    articles: list[Article],
+    articles: Sequence[Article],
     results: object,
-) -> None:
+) -> _ChunkAnalysisResult:
     if not isinstance(results, Mapping):
-        raise AnalyzerError("analyzer returned a non-mapping batch result")
+        return _ChunkAnalysisResult(
+            analyses={},
+            error_messages=("analyzer returned a non-mapping batch result",),
+        )
     requested_ids = {article_analysis_key(article) for article in articles}
-    returned_ids = set(results.keys())
-    missing_ids = requested_ids - returned_ids
-    unknown_ids = returned_ids - requested_ids
-    if missing_ids:
-        raise AnalyzerError(
-            "analyzer did not return analysis for: " + ", ".join(sorted(missing_ids))
-        )
-    if unknown_ids:
-        raise AnalyzerError(
-            "analyzer returned analysis for unknown articles: " + ", ".join(sorted(unknown_ids))
-        )
+    seen_ids: set[str] = set()
+    duplicate_ids: set[str] = set()
+    analyses: dict[str, AnalysisResult] = {}
+    errors: list[str] = []
+    for raw_key, raw_analysis in results.items():
+        if not isinstance(raw_key, str) or not raw_key.strip():
+            errors.append("analyzer returned analysis with a missing article id")
+            continue
+        key = raw_key.strip()
+        if key in seen_ids:
+            duplicate_ids.add(key)
+            analyses.pop(key, None)
+            errors.append(f"analyzer returned duplicate analysis for {key}")
+            continue
+        seen_ids.add(key)
+        if key not in requested_ids:
+            errors.append(f"analyzer returned unknown article id {key}")
+            continue
+        if not isinstance(raw_analysis, AnalysisResult):
+            errors.append(f"analyzer returned invalid analysis for {key}")
+            continue
+        analyses[key] = raw_analysis
+    for key in duplicate_ids:
+        analyses.pop(key, None)
+    return _ChunkAnalysisResult(analyses=analyses, error_messages=tuple(errors))
+
+
+def _unresolved_analysis_message(articles: Sequence[Article]) -> str:
+    identifiers = ", ".join(article_analysis_key(article) for article in articles[:10])
+    suffix = "" if len(articles) <= 10 else f", and {len(articles) - 10} more"
+    return f"Analysis unavailable for {len(articles)} paper(s): {identifiers}{suffix}"

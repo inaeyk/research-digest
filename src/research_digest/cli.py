@@ -263,7 +263,7 @@ def _run_digest_command(
 
     command_failed = result.failed_count > 0 or (
         active_analyzer_message is not None and _analysis_was_needed(result)
-    )
+    ) or result.analysis_incomplete_count > 0
     if json_output:
         json.dump(
             _run_to_json(
@@ -748,6 +748,7 @@ def _run_to_json(
         "analyzed_count": result.analyzed_count,
         "relevant_count": result.relevant_count,
         "analysis_unavailable_count": result.analysis_unavailable_count,
+        "analysis_incomplete_count": result.analysis_incomplete_count,
         "date_selection": (
             result.date_selection.to_mapping() if result.date_selection is not None else None
         ),
@@ -773,7 +774,7 @@ def _profile_run_to_json(profile_run: HeadlessProfileRun) -> dict[str, object]:
     synthesis = profile_run.digest.synthesis
     return {
         "profile_id": profile_run.profile_id,
-        "status": "completed",
+        "status": digest.run_status.lower(),
         "run_id": digest.run_id,
         "retrieved_count": digest.retrieved_count,
         "stored_count": digest.stored_count,
@@ -784,6 +785,16 @@ def _profile_run_to_json(profile_run: HeadlessProfileRun) -> dict[str, object]:
         "new_analysis_count": digest.new_analysis_count,
         "reused_analysis_count": digest.reused_analysis_count,
         "analysis_available": digest.analysis_available,
+        "analysis_complete": digest.analysis_complete,
+        "unresolved_article_count": len(digest.unresolved_articles),
+        "unresolved_articles": [
+            {
+                "source": article.source,
+                "source_article_id": article.source_article_id,
+                "title": article.title,
+            }
+            for article in digest.unresolved_articles
+        ],
         "run_origin": digest.run_origin.value,
         "date_selection": (
             digest.date_selection.to_mapping() if digest.date_selection is not None else None

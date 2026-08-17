@@ -28,6 +28,13 @@ class SourcesPageTests(unittest.TestCase):
         self.assertEqual(updated.lookback_hours, 72)
         self.assertEqual(updated.max_results, 125)
 
+    def test_updated_arxiv_config_presents_categories_in_canonical_order(self) -> None:
+        existing = ArxivSourceConfig(categories=["hep-th"])
+
+        updated = updated_arxiv_config(existing, True, "hep-th\n gr-qc \nhep-th")
+
+        self.assertEqual(updated.categories, ["gr-qc", "hep-th"])
+
 
 if __name__ == "__main__":
     unittest.main()

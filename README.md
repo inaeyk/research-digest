@@ -61,8 +61,13 @@ date or dates. The effort control is the qualified preselection/cache system:
 cached analyses are reused, and only cache-miss articles that pass deterministic
 abstract preselection are sent for new LLM analysis.
 
-For this arXiv release, source date means the UTC calendar date of the official
-arXiv Atom `published` timestamp.
+For this arXiv release, source dates use America/Chicago. Papers are assigned
+by their arXiv publication timestamp converted to Chicago local time using IANA
+timezone rules, so CST/CDT transitions follow the timezone database. API
+`submittedDate` ranges are used only to retrieve a conservative superset of
+candidate records; final date membership is decided by the stored publication
+timestamp converted to America/Chicago. Research Digest does not attempt to
+match arXiv mailing or announcement-page cutoffs if those differ.
 
 ## Analyzer providers
 
@@ -232,7 +237,8 @@ research-digest doctor
 
 - arXiv is the only source pool in this release.
 - Analysis is abstract-level; full-paper/PDF deep reading is deferred.
-- Date semantics use arXiv Atom `published` UTC source dates.
+- Source dates use America/Chicago publication-date conversion, not arXiv
+  mailing or announcement-page cutoffs.
 - Lightweight History is not long-term semantic memory or trend analysis.
 - The supported schedule backend is WSL2 through Windows Task Scheduler.
 - This is a local single-user app; it does not provide authentication,

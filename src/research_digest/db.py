@@ -30,12 +30,13 @@ from research_digest.models import (
 SOURCE_ARXIV = "arxiv"
 SCHEMA_VERSION_KEY = "schema_version"
 LAST_MIGRATION_BACKUP_KEY = "last_migration_backup_path"
-CURRENT_SCHEMA_VERSION = 6
+CURRENT_SCHEMA_VERSION = 8
 APP_RUN_STARTING = "STARTING"
 APP_RUN_RUNNING = "RUNNING"
 APP_RUN_COMPLETED = "COMPLETED"
 APP_RUN_FAILED = "FAILED"
 APP_RUN_ANALYSIS_UNAVAILABLE = "ANALYSIS_UNAVAILABLE"
+APP_RUN_PARTIAL = "PARTIAL"
 DIGEST_RUN_LOCK = "digest"
 
 
@@ -387,7 +388,9 @@ class Database:
         self,
         *,
         profile_id: int | None,
+        profile_fingerprint: str | None = None,
         source_name: str,
+        source_fingerprint: str | None = None,
         run_origin: RunOrigin = RunOrigin.LEGACY,
         date_selection: DateSelection | None = None,
     ) -> int:
@@ -395,13 +398,16 @@ class Database:
             cursor = conn.execute(
                 """
                 INSERT INTO app_runs (
-                    profile_id, source_name, started_at, status, run_origin, date_selection_json
+                    profile_id, profile_fingerprint, source_name, source_fingerprint,
+                    started_at, status, run_origin, date_selection_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     profile_id,
+                    profile_fingerprint,
                     source_name,
+                    source_fingerprint,
                     datetime_to_db(utc_now()),
                     APP_RUN_STARTING,
                     run_origin.value,
@@ -478,7 +484,9 @@ class Database:
                     SELECT
                         id,
                         profile_id,
+                        profile_fingerprint,
                         source_name,
+                        source_fingerprint,
                         started_at,
                         completed_at,
                         CASE status
@@ -1004,6 +1012,22 @@ def _migration_source_date_coverage(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migration_app_run_source_fingerprint(conn: sqlite3.Connection) -> None:
+    if not _table_exists(conn, "app_runs"):
+        return
+    columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(app_runs)").fetchall()}
+    if "source_fingerprint" not in columns:
+        conn.execute("ALTER TABLE app_runs ADD COLUMN source_fingerprint TEXT")
+
+
+def _migration_app_run_profile_fingerprint(conn: sqlite3.Connection) -> None:
+    if not _table_exists(conn, "app_runs"):
+        return
+    columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(app_runs)").fetchall()}
+    if "profile_fingerprint" not in columns:
+        conn.execute("ALTER TABLE app_runs ADD COLUMN profile_fingerprint TEXT")
+
+
 MIGRATIONS: Sequence[SchemaMigration] = (
     SchemaMigration(1, "core m1/m2 tables", _migration_core_tables),
     SchemaMigration(2, "profile-fingerprinted relevance analyses", _migration_profile_fingerprints),
@@ -1015,6 +1039,8 @@ MIGRATIONS: Sequence[SchemaMigration] = (
     ),
     SchemaMigration(5, "date-native run metadata", _migration_run_date_metadata),
     SchemaMigration(6, "source date coverage", _migration_source_date_coverage),
+    SchemaMigration(7, "app run source fingerprint", _migration_app_run_source_fingerprint),
+    SchemaMigration(8, "app run profile fingerprint", _migration_app_run_profile_fingerprint),
 )
 
 

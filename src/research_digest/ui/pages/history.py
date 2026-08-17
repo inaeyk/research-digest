@@ -4,8 +4,14 @@ from __future__ import annotations
 
 from datetime import date
 
-from research_digest.db import APP_RUN_ANALYSIS_UNAVAILABLE, APP_RUN_COMPLETED, APP_RUN_FAILED
+from research_digest.db import (
+    APP_RUN_ANALYSIS_UNAVAILABLE,
+    APP_RUN_COMPLETED,
+    APP_RUN_FAILED,
+    APP_RUN_PARTIAL,
+)
 from research_digest.history import RunHistoryEntry, get_run_snapshot, list_run_history
+from research_digest.ui.abstracts import render_abstract_control
 from research_digest.ui.common import get_database
 
 
@@ -91,28 +97,98 @@ def _render_snapshot(snapshot: dict[str, object]) -> None:
     items = snapshot.get("items")
     if not isinstance(items, list) or not items:
         st.info("No analyzed papers were persisted for this run.")
-        return
+    else:
+        st.markdown("**Persisted digest**")
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            with st.container(border=True):
+                st.markdown(f"**{item.get('title', 'Untitled paper')}**")
+                st.caption(
+                    f"Score: {float(item.get('relevance_score', 0.0)):.2f}. "
+                    f"Priority: {item.get('reading_priority', '-')}. "
+                    f"Origin: {item.get('analysis_origin', '-')}."
+                )
+                summary = item.get("summary")
+                if isinstance(summary, str) and summary:
+                    st.write(summary)
+                why_it_matters = item.get("why_it_matters")
+                if isinstance(why_it_matters, str) and why_it_matters:
+                    st.write(why_it_matters)
+                url = item.get("abstract_url")
+                if isinstance(url, str) and url:
+                    st.link_button("Open arXiv", url)
+                source = item.get("source")
+                if not isinstance(source, str) or not source:
+                    source = str(snapshot.get("source", "unknown"))
+                source_article_id = item.get("source_article_id")
+                if not isinstance(source_article_id, str):
+                    source_article_id = str(item.get("title", "unknown"))
+                render_abstract_control(
+                    source=source,
+                    source_article_id=source_article_id,
+                    abstract=item.get("abstract"),
+                    context=(
+                        f"history:{snapshot.get('run_id', 'unknown')}:"
+                        f"{source}:{source_article_id}"
+                    ),
+                )
 
-    st.markdown("**Persisted digest**")
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        with st.container(border=True):
-            st.markdown(f"**{item.get('title', 'Untitled paper')}**")
-            st.caption(
-                f"Score: {float(item.get('relevance_score', 0.0)):.2f}. "
-                f"Priority: {item.get('reading_priority', '-')}. "
-                f"Origin: {item.get('analysis_origin', '-')}."
-            )
-            summary = item.get("summary")
-            if isinstance(summary, str) and summary:
-                st.write(summary)
-            why_it_matters = item.get("why_it_matters")
-            if isinstance(why_it_matters, str) and why_it_matters:
-                st.write(why_it_matters)
-            url = item.get("abstract_url")
-            if isinstance(url, str) and url:
-                st.link_button("Open arXiv", url)
+    skipped_articles = snapshot.get("skipped_articles")
+    if isinstance(skipped_articles, list) and skipped_articles:
+        st.markdown("**Preselected out**")
+        for article in skipped_articles:
+            if not isinstance(article, dict):
+                continue
+            with st.container(border=True):
+                st.markdown(f"**{article.get('title', 'Untitled paper')}**")
+                source = article.get("source")
+                if not isinstance(source, str) or not source:
+                    source = str(snapshot.get("source", "unknown"))
+                source_article_id = article.get("source_article_id")
+                if not isinstance(source_article_id, str):
+                    source_article_id = str(article.get("title", "unknown"))
+                st.caption(f"{source}:{source_article_id}")
+                url = article.get("abstract_url")
+                if isinstance(url, str) and url:
+                    st.link_button("Open arXiv", url)
+                render_abstract_control(
+                    source=source,
+                    source_article_id=source_article_id,
+                    abstract=article.get("abstract"),
+                    context=(
+                        f"history:{snapshot.get('run_id', 'unknown')}:"
+                        f"preselected:{source}:{source_article_id}"
+                    ),
+                )
+
+    unresolved_articles = snapshot.get("unresolved_articles")
+    if isinstance(unresolved_articles, list) and unresolved_articles:
+        st.markdown("**Analysis unavailable**")
+        for article in unresolved_articles:
+            if not isinstance(article, dict):
+                continue
+            with st.container(border=True):
+                st.markdown(f"**{article.get('title', 'Untitled paper')}**")
+                source = article.get("source")
+                if not isinstance(source, str) or not source:
+                    source = str(snapshot.get("source", "unknown"))
+                source_article_id = article.get("source_article_id")
+                if not isinstance(source_article_id, str):
+                    source_article_id = str(article.get("title", "unknown"))
+                st.caption(f"{source}:{source_article_id}")
+                url = article.get("abstract_url")
+                if isinstance(url, str) and url:
+                    st.link_button("Open arXiv", url)
+                render_abstract_control(
+                    source=source,
+                    source_article_id=source_article_id,
+                    abstract=article.get("abstract"),
+                    context=(
+                        f"history:{snapshot.get('run_id', 'unknown')}:"
+                        f"unresolved:{source}:{source_article_id}"
+                    ),
+                )
 
 
 def history_period_label(entry: RunHistoryEntry) -> str:
@@ -142,6 +218,8 @@ def history_status_label(entry: RunHistoryEntry) -> str:
         return "Completed"
     if entry.status == APP_RUN_ANALYSIS_UNAVAILABLE:
         return "Analysis unavailable"
+    if entry.status == APP_RUN_PARTIAL:
+        return "Partial"
     if entry.status == APP_RUN_FAILED:
         return "Failed"
     return entry.status.replace("_", " ").title()

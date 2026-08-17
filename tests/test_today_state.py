@@ -175,6 +175,21 @@ class TodayStateTests(unittest.TestCase):
             source_config_fingerprint(second, selection),
         )
 
+    def test_source_config_fingerprint_uses_category_set_semantics(self) -> None:
+        first = ArxivSourceConfig(categories=["hep-th", "gr-qc"])
+        reordered = ArxivSourceConfig(categories=[" gr-qc ", "hep-th", "hep-th"])
+        changed = ArxivSourceConfig(categories=["hep-th", "astro-ph.CO"])
+        selection = DateSelection.single_date(date(2026, 8, 14))
+
+        self.assertEqual(
+            source_config_fingerprint(first, selection),
+            source_config_fingerprint(reordered, selection),
+        )
+        self.assertNotEqual(
+            source_config_fingerprint(first, selection),
+            source_config_fingerprint(changed, selection),
+        )
+
     def test_profile_fingerprint_is_deterministic_for_semantically_identical_profiles(
         self,
     ) -> None:

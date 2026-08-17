@@ -1,8 +1,8 @@
 # v0.2 Campaign State
 
 - campaign_state: V0_2_RELEASE_CANDIDATE_COMPLETE_AWAITING_HUMAN
-- current_substage: Final v0.2 Release Candidate Gate
-- current_git_head: see `git rev-parse HEAD` for the commit containing this state file
+- current_substage: Final v0.2 Release Candidate Gate complete after integrated RC live-smoke repairs
+- current_git_head: see `git rev-parse HEAD` after the authorized local RC commit
 - qualified_release_code_commit: 37cc990dd5e793a2ac84d9d2591b34037638ec9c
 - current_branch: feature/v0.2-date-native-scheduler-ui
 - released_baseline_tag: v0.1.0
@@ -12,17 +12,17 @@
 - online_remote_verification: attempted `git ls-remote --heads --tags origin`; blocked by DNS resolution failure for `github.com` before and after network escalation.
 - package_version: 0.2.0
 - runtime_version: 0.2.0
-- schema_version: 6
+- schema_version: 8
 - config_version: 3
 - worktree_state_at_campaign_start: clean tracked worktree; ignored runtime files include `.env`, local SQLite, virtualenv, caches, and local agent/runtime directories.
-- qualification_state: final RC audit PASS after repair round 1; release candidate complete awaiting human release decision.
-- audit_round: 0
-- deterministic_checks: baseline `pytest` 149 passed; U2-A post-repair `pytest` 166 passed; U2-B post-repair `pytest` 174 passed; U2-C repair round 1 `pytest` 184 passed; U2-D repair round 1 `pytest` 195 passed; U2-E candidate `pytest` 202 passed; U2-F candidate `pytest` 204 passed; U2-G candidate `pytest` 210 passed; U2-H post-repair `pytest` 212 passed; `ruff check .` PASS; `mypy --strict src tests` PASS; `python -m compileall -q src tests` PASS; `git diff --check` PASS; package wheel build PASS from current source; isolated wheel install plus installed `research-digest --version` and `status --json` smokes PASS with expected fresh-environment warnings only.
-- live_checks: U2-A live arXiv latest-available smoke blocked by DNS resolution failure for `export.arxiv.org` before and after network escalation. U2-C Streamlit serve smoke blocked by local socket `Operation not permitted` before and after escalation. U2-D disposable live arXiv automatic headless smoke blocked by DNS resolution failure for `export.arxiv.org` before and after network escalation. U2-E Streamlit serve smoke blocked by local socket `Operation not permitted` before and after escalation. U2-E Windows Task Scheduler status smoke blocked by WSL `UtilBindVsockAnyPort` socket failure before and after escalation. U2-G Streamlit serve smoke blocked by local socket `Operation not permitted` before and after escalation. U2-H live arXiv latest-available smoke blocked by DNS resolution failure for `export.arxiv.org` before and after network escalation; U2-H Streamlit serve smoke blocked by local socket `Operation not permitted` before and after escalation; U2-H Windows Task Scheduler status smoke blocked by WSL `UtilBindVsockAnyPort` socket failure before and after escalation.
-- schema_config_migration_state: v0.1.0 uses ordered SQLite migrations through schema version 4 and JSON config version 1; U2-A raises JSON config to version 2; U2-B raises SQLite schema to version 5 with additive app-run date metadata defaults that preserve legacy historical run meaning; U2-D candidate raises SQLite schema to version 6 with additive source-date coverage and JSON config to version 3 with automatic catch-up enabled plus a conservative coverage start anchor.
-- qualified_local_commit: 37cc990dd5e793a2ac84d9d2591b34037638ec9c
-- qualified_local_tag: u2h-qualified
-- qualified_local_tag_object: 8f13e93661ac80c43c9b996bbcff859f303bbce0
+- qualification_state: integrated v0.2 RC repair PASS after deterministic qualification, fresh independent closure audit, and final human live smoke; awaiting final human release decision.
+- audit_round: 4
+- deterministic_checks: baseline `pytest` 149 passed; U2-A post-repair `pytest` 166 passed; U2-B post-repair `pytest` 174 passed; U2-C repair round 1 `pytest` 184 passed; U2-D repair round 1 `pytest` 195 passed; U2-E candidate `pytest` 202 passed; U2-F candidate `pytest` 204 passed; U2-G candidate `pytest` 210 passed; U2-H post-repair `pytest` 212 passed; abstract-display repair `pytest` 217 passed, 9 subtests passed plus ruff/mypy/compileall/diff-check PASS and Streamlit AppTest abstract toggle smoke PASS; integrated RC repair candidate `pytest` 228 passed, 9 subtests passed; integrated RC repair round 1 `pytest` 230 passed, 9 subtests passed; integrated RC repair round 2 stopped state `pytest` 231 passed, 9 subtests passed; America/Chicago repair `pytest` 234 passed, 9 subtests passed; America/Chicago audit repair `pytest` 235 passed, 9 subtests passed; live-smoke repair `pytest` 243 passed; closure-audit repair round 1 `pytest` 247 passed; closure-audit repair round 2 `pytest` 248 passed; closure-audit detail repair `pytest` 249 passed; final UI summary repair `pytest` 250 passed; final Run Now failure reporting repair `pytest` 251 passed; category-order repair focused regression `pytest tests/test_models.py tests/test_today_state.py tests/test_sources_page.py tests/test_arxiv.py tests/test_coverage.py tests/test_db.py` 97 passed; category-order repair candidate full gate `pytest` 260 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, `git diff --check` PASS; category-order repair round 1 full gate `pytest` 262 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, `git diff --check` PASS; fresh category-order closure re-auditor independently ran focused tests 157 passed, full `pytest` 262 passed, `ruff check .` PASS, and `mypy --cache-dir /tmp/research-digest-mypy-cache src tests` PASS; final freeze gate `pytest` 262 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, `git diff --check` PASS.
+- live_checks: U2-A live arXiv latest-available smoke blocked by DNS resolution failure for `export.arxiv.org` before and after network escalation. U2-C Streamlit serve smoke blocked by local socket `Operation not permitted` before and after escalation. U2-D disposable live arXiv automatic headless smoke blocked by DNS resolution failure for `export.arxiv.org` before and after network escalation. U2-E Streamlit serve smoke blocked by local socket `Operation not permitted` before and after escalation. U2-E Windows Task Scheduler status smoke blocked by WSL `UtilBindVsockAnyPort` socket failure before and after escalation. U2-G Streamlit serve smoke blocked by local socket `Operation not permitted` before and after escalation. U2-H live arXiv latest-available smoke blocked by DNS resolution failure for `export.arxiv.org` before and after network escalation; U2-H Streamlit serve smoke blocked by local socket `Operation not permitted` before and after escalation; U2-H Windows Task Scheduler status smoke blocked by WSL `UtilBindVsockAnyPort` socket failure before and after escalation. Abstract-display real serve/browser smoke blocked by local socket `[Errno 1] Operation not permitted` before and after escalation; recorded for human live smoke rather than code failure. Human live smoke found date coverage/calendar/Run Now defects, which were repaired and accepted in later human smoke: manual completed source date coverage, pending interval semantics, Run Now zero-pending feedback, and compact calendar presentation. Final human live smoke accepted America/Chicago source-date semantics, robust chunked Codex analysis/retry, durable manual coverage, retry status precedence, Catch up from, Run Now execution/no-op feedback, compact scoped coverage calendar, no-submission state, abstract toggles, History behavior, and order-invariant arXiv category source identity. Final category-order smoke verified `hep-th`/`gr-qc` and reordered `gr-qc`/`hep-th` preserve completed Aug 12-14 coverage, pending-date state, source scope, and analysis/cache state with no new History run or analysis rerun; changing the category set creates a distinct source scope.
+- schema_config_migration_state: v0.1.0 uses ordered SQLite migrations through schema version 4 and JSON config version 1; U2-A raises JSON config to version 2; U2-B raises SQLite schema to version 5 with additive app-run date metadata defaults that preserve legacy historical run meaning; U2-D candidate raises SQLite schema to version 6 with additive source-date coverage and JSON config to version 3 with automatic catch-up enabled plus a conservative coverage start anchor; RC repair raises SQLite schema to version 7 with additive nullable `app_runs.source_fingerprint` for scoped failed/partial calendar status; closure-audit repair round 2 raises SQLite schema to version 8 with additive nullable `app_runs.profile_fingerprint` for scoped failed/partial/empty calendar status.
+- qualified_local_commit: identified by local tag `v0.2-rc-qualified` after the authorized local RC commit; previous U2-H qualified commit was 37cc990dd5e793a2ac84d9d2591b34037638ec9c
+- qualified_local_tag: v0.2-rc-qualified
+- qualified_local_tag_object: to be set by the local `v0.2-rc-qualified` annotated tag
 - u2a_qualified_commit: 616d84209c7295de2884d4ae82df0a5bd222d397
 - u2a_qualified_tag: u2a-qualified
 - u2a_qualified_tag_object: 84e22c2eaa2b67c1dc6000fe4cc42e25a7f32e7c
@@ -48,7 +48,7 @@
 - u2h_qualified_tag: u2h-qualified
 - u2h_qualified_tag_object: 8f13e93661ac80c43c9b996bbcff859f303bbce0
 - deferred_minor_optional_findings: U2-A re-auditor OPTIONAL: future hardening could add a separate raw API-row/page scan ceiling for malformed or inconsistent API responses; not required for U2-A after explicit-date repair. U2-F auditor OPTIONAL: selected-entry partial retrieval warnings are visible, but the selectbox/status label can still say `Completed`; requested/covered detail captions use ISO source-date strings rather than friendly date labels. U2-G auditor OPTIONAL: Settings backup directory display hardcodes the current backup directory name instead of importing `backup.DEFAULT_BACKUP_DIRNAME`; behavior matches the backup service.
-- next_permitted_action: human release decision only; do not create public `v0.2.0` tag, push, publish, or release automatically.
+- next_permitted_action: final human release decision only; do not create public `v0.2.0` tag, push, publish, or release automatically.
 - human_stop_reason: final v0.2.0 release-candidate gate reached
 
 ## Recovered v0.1.0 Baseline
@@ -255,6 +255,15 @@ tag, package publication, or remote push.
      human release decision.
 
 ## Frozen U2-A Plan
+
+Supersession note: this frozen U2-A plan is preserved as historical campaign
+state. The integrated RC repair supersedes the original UTC Atom `published`
+date decision. Human authority later superseded the attempted arXiv
+listing/mail-date repair. Current source-date semantics are America/Chicago
+calendar dates derived from arXiv publication timestamps, documented in
+`ARXIV_SOURCE_DATE_SEMANTICS.md`, and used consistently by manual runs,
+latest-available resolution, catch-up, coverage, History, scheduler semantics,
+and tests.
 
 Goal: replace rolling-lookback semantics in the normal digest retrieval path
 with explicit source-date selection for arXiv while preserving v0.1.0 data and

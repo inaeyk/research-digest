@@ -11,9 +11,10 @@ from research_digest.analysis.base import LLMAnalyzer
 from research_digest.calibration import CalibrationSummary, build_calibration_summary
 from research_digest.coverage import (
     build_automatic_coverage_plan,
+    digest_is_coverage_eligible,
     mark_digest_coverage,
 )
-from research_digest.db import Database
+from research_digest.db import APP_RUN_COMPLETED, SOURCE_ARXIV, Database
 from research_digest.errors import sanitize_error
 from research_digest.history import persist_run_snapshot
 from research_digest.models import (
@@ -97,6 +98,13 @@ class HeadlessDigestRun:
             for profile in self.profiles
         )
 
+    @property
+    def analysis_incomplete_count(self) -> int:
+        return sum(
+            profile.digest is not None and not profile.digest.digest.analysis_complete
+            for profile in self.profiles
+        )
+
 
 def run_digest_for_profile(
     *,
@@ -153,6 +161,11 @@ def run_digest_for_profile(
         threshold=digest.profile.relevance_threshold,
     )
     persist_run_snapshot(db=db, digest=digest, synthesis=synthesis)
+    mark_digest_coverage(
+        db=db,
+        digest=digest,
+        source_name=source_request.source_name if source_request is not None else SOURCE_ARXIV,
+    )
     return ProfileDigestRun(
         digest=digest,
         calibration=_build_calibration(db, digest),
@@ -268,8 +281,8 @@ def _run_automatic_digest_for_enabled_profiles_unlocked(
         coverage_start_date=coverage_start_date,
         catch_up_missed_dates=catch_up_missed_dates,
     )
-    date_selection = plan.date_selection
-    if date_selection is None:
+    aggregate_date_selection = plan.date_selection
+    if aggregate_date_selection is None:
         return HeadlessDigestRun(
             profiles=(),
             date_selection=None,
@@ -281,6 +294,18 @@ def _run_automatic_digest_for_enabled_profiles_unlocked(
     for profile in profiles:
         if profile.id is None:
             raise DigestPipelineError("enabled interest profile is missing an id")
+        profile_plan = build_automatic_coverage_plan(
+            db=db,
+            profiles=(profile,),
+            source_name=active_source_request.source_name,
+            source_config=source_config,
+            latest_resolver=active_source_request.adapter,
+            coverage_start_date=coverage_start_date,
+            catch_up_missed_dates=catch_up_missed_dates,
+        )
+        profile_date_selection = profile_plan.date_selection
+        if profile_date_selection is None:
+            continue
         try:
             digest = run_digest_for_profile(
                 db=db,
@@ -288,7 +313,7 @@ def _run_automatic_digest_for_enabled_profiles_unlocked(
                 analyzer=analyzer,
                 profile_id=profile.id,
                 source_request=active_source_request,
-                date_selection=date_selection,
+                date_selection=profile_date_selection,
                 run_origin=RunOrigin.SCHEDULED,
                 now=now,
                 preselector=preselector,
@@ -305,16 +330,19 @@ def _run_automatic_digest_for_enabled_profiles_unlocked(
                 )
             )
         else:
-            mark_digest_coverage(
-                db=db,
-                digest=digest.digest,
-                source_name=active_source_request.source_name,
+            success = _profile_digest_succeeded(digest)
+            runs.append(
+                HeadlessProfileRun(
+                    profile_id=profile.id,
+                    success=success,
+                    digest=digest,
+                    error_message=None if success else _profile_digest_error_message(digest),
+                )
             )
-            runs.append(HeadlessProfileRun(profile_id=profile.id, success=True, digest=digest))
 
     return HeadlessDigestRun(
         profiles=tuple(runs),
-        date_selection=date_selection,
+        date_selection=aggregate_date_selection,
         pending_source_dates=plan.pending_dates,
         latest_available_source_date=plan.latest_available_date,
     )
@@ -365,9 +393,34 @@ def _run_digest_for_enabled_profiles_unlocked(
                 )
             )
         else:
-            runs.append(HeadlessProfileRun(profile_id=profile.id, success=True, digest=digest))
+            success = _profile_digest_succeeded(digest)
+            runs.append(
+                HeadlessProfileRun(
+                    profile_id=profile.id,
+                    success=success,
+                    digest=digest,
+                    error_message=None if success else _profile_digest_error_message(digest),
+                )
+            )
 
     return HeadlessDigestRun(profiles=tuple(runs))
+
+
+def _profile_digest_succeeded(digest: ProfileDigestRun) -> bool:
+    if digest.digest.date_selection is not None:
+        return digest_is_coverage_eligible(digest.digest)
+    return digest.digest.run_status == APP_RUN_COMPLETED
+
+
+def _profile_digest_error_message(digest: ProfileDigestRun) -> str:
+    if digest.digest.error_message:
+        return digest.digest.error_message
+    if not digest.digest.retrieval_complete or digest.digest.incomplete_source_dates:
+        dates = ", ".join(value.isoformat() for value in digest.digest.incomplete_source_dates)
+        return "Retrieval incomplete" + (f" for source date(s): {dates}" if dates else ".")
+    if not digest.digest.analysis_complete:
+        return f"Analysis incomplete for {len(digest.digest.unresolved_articles)} paper(s)."
+    return "Digest did not reach the required completed state."
 
 
 def _lock_owner() -> str:

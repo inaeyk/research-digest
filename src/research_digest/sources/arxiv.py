@@ -8,11 +8,12 @@ import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Final
 
 from research_digest import __version__
 from research_digest.models import (
+    SOURCE_DATE_TIMEZONE,
     Article,
     ArxivSourceConfig,
     DateSelection,
@@ -37,6 +38,7 @@ DEFAULT_DATE_RETRIEVAL_SAFETY_LIMIT: Final = 2000
 
 ATOM_NS: Final = {"atom": "http://www.w3.org/2005/Atom"}
 _VERSION_SUFFIX_RE = re.compile(r"v\d+$")
+ARXIV_DATE_QUERY_PADDING: Final = timedelta(hours=6)
 
 
 @dataclass(frozen=True)
@@ -104,7 +106,7 @@ class ArxivSource:
         page_size: int = DEFAULT_DATE_PAGE_SIZE,
         safety_limit: int = DEFAULT_DATE_RETRIEVAL_SAFETY_LIMIT,
     ) -> ArxivDateRetrievalResult:
-        """Fetch all eligible arXiv articles for the selected UTC source date(s)."""
+        """Fetch all eligible arXiv articles for selected Chicago source date(s)."""
 
         if not config.enabled:
             return ArxivDateRetrievalResult(
@@ -154,7 +156,7 @@ class ArxivSource:
         )
 
     def resolve_latest_available_date(self, config: ArxivSourceConfig) -> date | None:
-        """Return the latest UTC source date with eligible arXiv material."""
+        """Return the latest Chicago source date with eligible material."""
 
         if not config.enabled:
             return None
@@ -169,7 +171,7 @@ class ArxivSource:
         )
         if not first_page:
             return None
-        return source_date_from_datetime(first_page[0].published_at)
+        return arxiv_source_date_from_datetime(first_page[0].published_at)
 
     def _fetch_latest_available_date(
         self,
@@ -276,7 +278,7 @@ class ArxivSource:
             if not page:
                 break
             for article in page:
-                if source_date_from_datetime(article.published_at) not in requested_dates:
+                if arxiv_source_date_from_datetime(article.published_at) not in requested_dates:
                     continue
                 if article.source_article_id in seen_ids:
                     continue
@@ -331,8 +333,8 @@ def build_arxiv_date_query(
     category_query = build_arxiv_query(categories)
     if selected_dates is None:
         return category_query
-    start, end = min(selected_dates), max(selected_dates)
-    date_query = f"submittedDate:[{_arxiv_day_start(start)} TO {_arxiv_day_end(end)}]"
+    start, end = arxiv_source_date_query_bounds(selected_dates)
+    date_query = f"submittedDate:[{_arxiv_api_timestamp(start)} TO {_arxiv_api_timestamp(end)}]"
     return f"({category_query}) AND {date_query}"
 
 
@@ -371,6 +373,24 @@ def stable_arxiv_id(raw_id: str) -> str:
     path = parsed.path.strip("/")
     candidate = path.removeprefix("abs/") if path else raw_id.strip()
     return _VERSION_SUFFIX_RE.sub("", candidate)
+
+
+def arxiv_source_date_from_datetime(value: datetime) -> date:
+    """Return the Research Digest arXiv source date for a publication timestamp."""
+
+    return source_date_from_datetime(value)
+
+
+def arxiv_source_date_query_bounds(
+    selected_dates: tuple[date, ...],
+) -> tuple[datetime, datetime]:
+    if not selected_dates:
+        raise SourceError("arXiv date query requires at least one source date")
+    start_date = min(selected_dates)
+    end_date = max(selected_dates)
+    start = _chicago_midnight(start_date) - ARXIV_DATE_QUERY_PADDING
+    end = _chicago_midnight(end_date + timedelta(days=1)) + ARXIV_DATE_QUERY_PADDING
+    return ensure_utc(start), ensure_utc(end)
 
 
 def _entry_to_article(entry: ET.Element) -> Article:
@@ -445,12 +465,12 @@ def _validate_date_retrieval_limits(*, page_size: int, safety_limit: int) -> Non
         raise SourceError("arXiv date retrieval safety limit must be positive")
 
 
-def _arxiv_day_start(value: date) -> str:
-    return value.strftime("%Y%m%d") + "0000"
+def _chicago_midnight(value: date) -> datetime:
+    return datetime.combine(value, time.min, SOURCE_DATE_TIMEZONE)
 
 
-def _arxiv_day_end(value: date) -> str:
-    return value.strftime("%Y%m%d") + "2359"
+def _arxiv_api_timestamp(value: datetime) -> str:
+    return ensure_utc(value).strftime("%Y%m%d%H%M")
 
 
 def _build_date_result(
@@ -463,7 +483,7 @@ def _build_date_result(
     safety_limit: int,
     safety_limit_reached: bool,
 ) -> ArxivDateRetrievalResult:
-    article_dates = {source_date_from_datetime(article.published_at) for article in articles}
+    article_dates = {arxiv_source_date_from_datetime(article.published_at) for article in articles}
     requested = tuple(sorted(set(requested_dates)))
     incomplete = tuple(sorted(set(incomplete_dates)))
     covered_dates = tuple(value for value in requested if value not in incomplete)
@@ -486,7 +506,7 @@ def _sort_date_articles(articles: list[Article]) -> list[Article]:
     return sorted(
         articles,
         key=lambda article: (
-            source_date_from_datetime(article.published_at),
+            arxiv_source_date_from_datetime(article.published_at),
             article.published_at,
             article.title,
             article.source_article_id,

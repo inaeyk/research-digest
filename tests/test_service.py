@@ -163,7 +163,7 @@ class ServiceTests(unittest.TestCase):
         assert failure.error_message is not None
         self.assertNotIn("/home/" + "inaeyk", failure.error_message)
         self.assertNotIn("sk-secret", failure.error_message)
-        self.assertIn("[HOME]", failure.error_message)
+        self.assertIn("Analysis unavailable", failure.error_message)
         self.assertEqual(result.profiles[1].profile_id, succeeding.id)
 
     def test_headless_run_requires_enabled_profile(self) -> None:

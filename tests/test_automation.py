@@ -2,21 +2,86 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from dataclasses import replace
+from datetime import UTC, date, datetime
 from pathlib import Path
 from unittest import mock
 
+from research_digest.analysis.fake import FakeAnalyzer
 from research_digest.automation import (
     install_or_update_schedule,
     read_schedule_status,
     remove_schedule,
+    run_automatic_digest_now,
 )
 from research_digest.config import AppConfig
+from research_digest.db import Database
+from research_digest.models import Article, ArxivSourceConfig, DateSelection
 from research_digest.scheduler import (
     WINDOWS_LOCAL_TIME_DESCRIPTION,
     ScheduleOperationResult,
     ScheduleRequest,
     ScheduleStatus,
 )
+from research_digest.sources.arxiv import ArxivDateRetrievalResult
+
+
+class DateSource:
+    def __init__(self, articles: list[Article], *, latest_date: date) -> None:
+        self.articles = articles
+        self.latest_date = latest_date
+        self.selections: list[DateSelection] = []
+
+    def fetch(self, config: ArxivSourceConfig, *, now: datetime | None = None) -> list[Article]:
+        if not config.enabled:
+            return []
+        return list(self.articles)
+
+    def resolve_latest_available_date(self, config: ArxivSourceConfig) -> date | None:
+        return self.latest_date if config.enabled else None
+
+    def fetch_date_selection(
+        self,
+        config: ArxivSourceConfig,
+        selection: DateSelection,
+    ) -> ArxivDateRetrievalResult:
+        self.selections.append(selection)
+        requested = selection.selected_dates()
+        dates = set(requested)
+        articles = tuple(
+            article
+            for article in self.articles
+            if config.enabled and article.published_at.date() in dates
+        )
+        article_dates = {article.published_at.date() for article in articles}
+        return ArxivDateRetrievalResult(
+            selection=selection,
+            articles=articles,
+            requested_dates=requested,
+            covered_dates=requested,
+            empty_dates=tuple(value for value in requested if value not in article_dates),
+            incomplete_dates=(),
+            latest_available_date=self.latest_date,
+            retrieved_count=len(articles),
+            safety_limit=2000,
+            safety_limit_reached=False,
+        )
+
+
+def article(source_article_id: str, source_date: date) -> Article:
+    return Article(
+        id=None,
+        source="arxiv",
+        source_article_id=source_article_id,
+        title=f"Paper {source_article_id}",
+        authors=["Ada Lovelace"],
+        abstract="A paper about higher-dimensional gravity.",
+        categories=["hep-th"],
+        published_at=datetime(source_date.year, source_date.month, source_date.day, 10, tzinfo=UTC),
+        updated_at=datetime(source_date.year, source_date.month, source_date.day, 11, tzinfo=UTC),
+        abstract_url=f"http://arxiv.org/abs/{source_article_id}",
+        pdf_url=None,
+    )
 
 
 class FakeSchedulerBackend:
@@ -119,6 +184,54 @@ class AutomationTests(unittest.TestCase):
         self.assertNotIn("OPENAI_API_KEY", result.arguments or "")
         self.assertEqual(removed.operation, "removed")
         self.assertEqual(backend.removed, ["Research Digest Test"])
+
+    def test_run_now_with_zero_pending_dates_does_not_create_history_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "test.sqlite3")
+            db.create_interest_profile(name="Gravity", description="Higher-dimensional gravity.")
+            source = DateSource([], latest_date=date(2026, 8, 13))
+            app_config = replace(
+                config(Path(tmp) / "test.sqlite3"),
+                automatic_coverage_start_date=date(2026, 8, 14),
+            )
+
+            result = run_automatic_digest_now(
+                config=app_config,
+                db=db,
+                source=source,
+                analyzer=None,
+            )
+
+            self.assertEqual(result.profiles, ())
+            self.assertEqual(result.pending_source_dates, ())
+            self.assertEqual(source.selections, [])
+            self.assertEqual(db.get_app_runs(), [])
+            db.close()
+
+    def test_run_now_with_pending_dates_uses_shared_digest_service(self) -> None:
+        source_date = date(2026, 8, 14)
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "test.sqlite3")
+            db.create_interest_profile(name="Gravity", description="Higher-dimensional gravity.")
+            source = DateSource([article("2608.14001", source_date)], latest_date=source_date)
+            app_config = replace(
+                config(Path(tmp) / "test.sqlite3"),
+                automatic_coverage_start_date=source_date,
+            )
+
+            result = run_automatic_digest_now(
+                config=app_config,
+                db=db,
+                source=source,
+                analyzer=FakeAnalyzer(),
+            )
+
+            self.assertEqual(result.succeeded_count, 1)
+            self.assertEqual(result.pending_source_dates, (source_date,))
+            self.assertEqual(source.selections, [DateSelection.single_date(source_date)])
+            self.assertEqual(len(db.get_app_runs()), 1)
+            self.assertEqual(len(db.list_source_date_coverage()), 1)
+            db.close()
 
 
 if __name__ == "__main__":

@@ -4,11 +4,12 @@ import tempfile
 import unittest
 from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
 
 from research_digest.backup import BackupResult
 from research_digest.db import APP_RUN_COMPLETED, Database
 from research_digest.doctor import DoctorCheck, DoctorReport, DoctorSeverity
-from research_digest.models import RunOrigin
+from research_digest.models import DateSelection, RunOrigin
 from research_digest.scheduler import (
     WINDOWS_LOCAL_TIME_DESCRIPTION,
     ScheduleOperationResult,
@@ -134,6 +135,106 @@ class SettingsPageTests(unittest.TestCase):
 
         self.assertIn("source dates 2026-08-14, 2026-08-15", settings.run_now_summary(result))
         self.assertIn("no uncovered source dates", settings.run_now_summary(empty))
+
+    def test_run_now_summary_includes_run_ids_and_date_outcomes(self) -> None:
+        result = SimpleNamespace(
+            profiles=(
+                SimpleNamespace(
+                    success=True,
+                    digest=SimpleNamespace(
+                        digest=SimpleNamespace(
+                            run_id=30,
+                            run_status=APP_RUN_COMPLETED,
+                            date_selection=DateSelection.date_range(
+                                date(2026, 8, 14),
+                                date(2026, 8, 15),
+                            ),
+                            retrieval_complete=True,
+                            incomplete_source_dates=(),
+                            analysis_complete=True,
+                            retrieved_count=19,
+                            covered_source_dates=(date(2026, 8, 14), date(2026, 8, 15)),
+                            empty_source_dates=(date(2026, 8, 15),),
+                        )
+                    ),
+                ),
+            ),
+            succeeded_count=1,
+            failed_count=0,
+            retrieved_count=19,
+            analyzed_count=17,
+            relevant_count=2,
+            pending_source_dates=(date(2026, 8, 14), date(2026, 8, 15)),
+        )
+
+        summary = settings.run_now_summary(result)
+
+        self.assertIn("runs #30", summary)
+        self.assertIn("completed 1", summary)
+        self.assertIn("empty 1", summary)
+        self.assertIn("partial 0", summary)
+        self.assertIn("failed 0", summary)
+
+    def test_run_now_summary_reports_incomplete_completed_status_as_partial(self) -> None:
+        result = SimpleNamespace(
+            profiles=(
+                SimpleNamespace(
+                    profile_id=7,
+                    success=False,
+                    error_message="Retrieval failed with OPENAI_API_KEY=sk-secret123456789",
+                    digest=SimpleNamespace(
+                        digest=SimpleNamespace(
+                            run_id=31,
+                            run_status=APP_RUN_COMPLETED,
+                            date_selection=DateSelection.single_date(date(2026, 8, 14)),
+                            retrieval_complete=False,
+                            incomplete_source_dates=(date(2026, 8, 14),),
+                            analysis_complete=True,
+                            retrieved_count=19,
+                            requested_source_dates=(date(2026, 8, 14),),
+                            covered_source_dates=(date(2026, 8, 14),),
+                            empty_source_dates=(),
+                        )
+                    ),
+                ),
+            ),
+            succeeded_count=0,
+            failed_count=1,
+            retrieved_count=19,
+            analyzed_count=17,
+            relevant_count=2,
+            pending_source_dates=(date(2026, 8, 14),),
+        )
+
+        summary = settings.run_now_summary(result)
+
+        self.assertIn("runs #31", summary)
+        self.assertIn("completed 0", summary)
+        self.assertIn("empty 0", summary)
+        self.assertIn("partial 1", summary)
+        self.assertIn("failed 0", summary)
+        self.assertIn("profile 7", summary)
+        self.assertIn("[REDACTED_API_KEY]", summary)
+        self.assertNotIn("sk-secret", summary)
+
+    def test_run_now_notice_level_reflects_profile_failures(self) -> None:
+        all_failed = SimpleNamespace(succeeded_count=0, failed_count=1)
+        mixed = SimpleNamespace(succeeded_count=1, failed_count=1)
+        passed = SimpleNamespace(succeeded_count=1, failed_count=0)
+
+        self.assertEqual(settings.run_now_notice_level(all_failed), "error")
+        self.assertEqual(settings.run_now_notice_level(mixed), "warning")
+        self.assertEqual(settings.run_now_notice_level(passed), "success")
+
+    def test_run_now_noop_message_explains_anchor_after_latest(self) -> None:
+        message = settings.run_now_noop_message(
+            coverage_start_date=date(2026, 8, 17),
+            latest_available_source_date=date(2026, 8, 14),
+        )
+
+        self.assertIn("No pending source dates", message)
+        self.assertIn("Catch-up starts 2026-08-17", message)
+        self.assertIn("Latest available source date is 2026-08-14", message)
 
     def test_last_scheduled_digest_outcome_prefers_scheduled_run(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

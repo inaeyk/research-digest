@@ -10,6 +10,8 @@ from research_digest.models import Article, ArxivSourceConfig, DateSelection
 from research_digest.sources.arxiv import (
     DEFAULT_USER_AGENT,
     ArxivSource,
+    arxiv_source_date_from_datetime,
+    arxiv_source_date_query_bounds,
     build_arxiv_date_url,
     build_arxiv_url,
     parse_arxiv_atom,
@@ -62,7 +64,7 @@ class ArxivTests(unittest.TestCase):
         parsed = urllib.parse.urlparse(url)
         params = urllib.parse.parse_qs(parsed.query)
 
-        self.assertEqual(params["search_query"], ["cat:hep-th OR cat:gr-qc"])
+        self.assertEqual(params["search_query"], ["cat:gr-qc OR cat:hep-th"])
         self.assertEqual(params["max_results"], ["25"])
         self.assertEqual(params["sortBy"], ["submittedDate"])
         self.assertEqual(params["sortOrder"], ["descending"])
@@ -97,13 +99,13 @@ class ArxivTests(unittest.TestCase):
         self.assertEqual(stable_arxiv_id("http://arxiv.org/abs/hep-th/9901001v3"), "hep-th/9901001")
         self.assertEqual(stable_arxiv_id("http://arxiv.org/abs/2608.00001v2"), "2608.00001")
 
-    def test_date_url_uses_submitted_date_range_in_gmt(self) -> None:
+    def test_date_url_uses_chicago_source_date_superset_window_in_gmt(self) -> None:
         config = ArxivSourceConfig(categories=["hep-th", "gr-qc"])
         url = build_arxiv_date_url(
             config,
             start=500,
             max_results=250,
-            selected_dates=(date(2026, 8, 14), date(2026, 8, 16)),
+            selected_dates=(date(2026, 8, 14),),
         )
         params = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
 
@@ -113,16 +115,68 @@ class ArxivTests(unittest.TestCase):
         self.assertEqual(params["sortOrder"], ["descending"])
         self.assertEqual(
             params["search_query"],
-            ["(cat:hep-th OR cat:gr-qc) AND submittedDate:[202608140000 TO 202608162359]"],
+            ["(cat:gr-qc OR cat:hep-th) AND submittedDate:[202608132300 TO 202608151100]"],
         )
 
-    def test_fetch_single_date_covers_exact_utc_boundaries(self) -> None:
+    def test_source_date_maps_timestamps_to_chicago_calendar_dates(self) -> None:
+        self.assertEqual(
+            arxiv_source_date_from_datetime(datetime(2026, 8, 14, 4, 59, tzinfo=UTC)),
+            date(2026, 8, 13),
+        )
+        self.assertEqual(
+            arxiv_source_date_from_datetime(datetime(2026, 8, 14, 5, 0, tzinfo=UTC)),
+            date(2026, 8, 14),
+        )
+        self.assertEqual(
+            arxiv_source_date_from_datetime(datetime(2026, 1, 15, 5, 59, tzinfo=UTC)),
+            date(2026, 1, 14),
+        )
+        self.assertEqual(
+            arxiv_source_date_from_datetime(datetime(2026, 1, 15, 6, 0, tzinfo=UTC)),
+            date(2026, 1, 15),
+        )
+
+    def test_chicago_source_date_uses_timezone_database_for_dst_transitions(self) -> None:
+        self.assertEqual(
+            arxiv_source_date_from_datetime(datetime(2026, 3, 8, 5, 59, tzinfo=UTC)),
+            date(2026, 3, 7),
+        )
+        self.assertEqual(
+            arxiv_source_date_from_datetime(datetime(2026, 3, 8, 6, 0, tzinfo=UTC)),
+            date(2026, 3, 8),
+        )
+        self.assertEqual(
+            arxiv_source_date_from_datetime(datetime(2026, 11, 2, 5, 59, tzinfo=UTC)),
+            date(2026, 11, 1),
+        )
+        self.assertEqual(
+            arxiv_source_date_from_datetime(datetime(2026, 11, 2, 6, 0, tzinfo=UTC)),
+            date(2026, 11, 2),
+        )
+
+    def test_query_bounds_are_conservative_across_dst_days(self) -> None:
+        spring_start, spring_end = arxiv_source_date_query_bounds((date(2026, 3, 8),))
+        fall_start, fall_end = arxiv_source_date_query_bounds((date(2026, 11, 1),))
+
+        self.assertEqual(spring_start, datetime(2026, 3, 8, 0, 0, tzinfo=UTC))
+        self.assertEqual(spring_end, datetime(2026, 3, 9, 11, 0, tzinfo=UTC))
+        self.assertEqual(fall_start, datetime(2026, 10, 31, 23, 0, tzinfo=UTC))
+        self.assertEqual(fall_end, datetime(2026, 11, 2, 12, 0, tzinfo=UTC))
+
+    def test_utc_calendar_date_can_differ_from_chicago_source_date(self) -> None:
+        self.assertEqual(
+            arxiv_source_date_from_datetime(datetime(2026, 8, 14, 1, 30, tzinfo=UTC)),
+            date(2026, 8, 13),
+        )
+
+    def test_fetch_single_date_filters_by_chicago_midnight_boundaries(self) -> None:
         source = PagingArxivSource(
             [
                 [
-                    article("2608.boundary2", datetime(2026, 8, 14, 23, 59, tzinfo=UTC)),
-                    article("2608.boundary1", datetime(2026, 8, 14, 0, 0, tzinfo=UTC)),
-                    article("2608.outside", datetime(2026, 8, 13, 23, 59, tzinfo=UTC)),
+                    article("2608.inside2", datetime(2026, 8, 15, 4, 59, tzinfo=UTC)),
+                    article("2608.inside1", datetime(2026, 8, 14, 5, 0, tzinfo=UTC)),
+                    article("2608.prev", datetime(2026, 8, 14, 4, 59, tzinfo=UTC)),
+                    article("2608.next", datetime(2026, 8, 15, 5, 0, tzinfo=UTC)),
                 ]
             ]
         )
@@ -141,35 +195,35 @@ class ArxivTests(unittest.TestCase):
         self.assertEqual(result.incomplete_dates, ())
         self.assertEqual(
             [item.source_article_id for item in result.articles],
-            ["2608.boundary2", "2608.boundary1"],
+            ["2608.inside2", "2608.inside1"],
         )
 
     def test_fetch_multiple_explicit_dates_normalizes_and_orders_results(self) -> None:
         source = PagingArxivSource(
             [
-                [article("2608.15001", datetime(2026, 8, 15, 12, 0, tzinfo=UTC))],
-                [article("2608.17001", datetime(2026, 8, 17, 12, 0, tzinfo=UTC))],
+                [article("2608.14001", datetime(2026, 8, 14, 17, 0, tzinfo=UTC))],
+                [article("2608.17001", datetime(2026, 8, 17, 17, 0, tzinfo=UTC))],
             ]
         )
 
         result = source.fetch_date_selection(
             ArxivSourceConfig(categories=["hep-th"]),
             DateSelection.explicit_dates(
-                [date(2026, 8, 15), date(2026, 8, 17), date(2026, 8, 15)]
+                [date(2026, 8, 14), date(2026, 8, 17), date(2026, 8, 14)]
             ),
             page_size=10,
             safety_limit=10,
         )
 
-        self.assertEqual(result.requested_dates, (date(2026, 8, 15), date(2026, 8, 17)))
+        self.assertEqual(result.requested_dates, (date(2026, 8, 14), date(2026, 8, 17)))
         self.assertEqual(
             [item.source_article_id for item in result.articles],
-            ["2608.17001", "2608.15001"],
+            ["2608.17001", "2608.14001"],
         )
 
     def test_fetch_date_range_marks_no_submission_dates_empty(self) -> None:
         source = PagingArxivSource(
-            [[article("2608.14001", datetime(2026, 8, 14, 12, 0, tzinfo=UTC))]]
+            [[article("2608.14001", datetime(2026, 8, 14, 17, 0, tzinfo=UTC))]]
         )
 
         result = source.fetch_date_selection(
@@ -186,7 +240,7 @@ class ArxivTests(unittest.TestCase):
         self.assertEqual(result.empty_dates, (date(2026, 8, 15), date(2026, 8, 16)))
 
     def test_fetch_latest_available_resolves_to_date_with_source_material(self) -> None:
-        latest = article("2608.latest", datetime(2026, 8, 17, 9, 0, tzinfo=UTC))
+        latest = article("2608.latest", datetime(2026, 8, 17, 4, 30, tzinfo=UTC))
         source = PagingArxivSource([[latest], [latest]])
 
         result = source.fetch_date_selection(
@@ -196,13 +250,13 @@ class ArxivTests(unittest.TestCase):
             safety_limit=10,
         )
 
-        self.assertEqual(result.latest_available_date, date(2026, 8, 17))
-        self.assertEqual(result.requested_dates, (date(2026, 8, 17),))
-        self.assertEqual(result.covered_dates, (date(2026, 8, 17),))
+        self.assertEqual(result.latest_available_date, date(2026, 8, 16))
+        self.assertEqual(result.requested_dates, (date(2026, 8, 16),))
+        self.assertEqual(result.covered_dates, (date(2026, 8, 16),))
         self.assertEqual(result.retrieved_count, 1)
 
     def test_resolve_latest_available_date_uses_source_material(self) -> None:
-        latest = article("2608.latest", datetime(2026, 8, 16, 23, 30, tzinfo=UTC))
+        latest = article("2608.latest", datetime(2026, 8, 17, 4, 30, tzinfo=UTC))
         source = PagingArxivSource([[latest]])
 
         resolved = source.resolve_latest_available_date(ArxivSourceConfig(categories=["hep-th"]))
@@ -222,10 +276,10 @@ class ArxivTests(unittest.TestCase):
         source = PagingArxivSource(
             [
                 [
-                    article("2608.page3", datetime(2026, 8, 14, 12, 0, tzinfo=UTC)),
-                    article("2608.page2", datetime(2026, 8, 14, 11, 0, tzinfo=UTC)),
+                    article("2608.page3", datetime(2026, 8, 14, 17, 0, tzinfo=UTC)),
+                    article("2608.page2", datetime(2026, 8, 14, 16, 0, tzinfo=UTC)),
                 ],
-                [article("2608.page1", datetime(2026, 8, 14, 10, 0, tzinfo=UTC))],
+                [article("2608.page1", datetime(2026, 8, 14, 15, 0, tzinfo=UTC))],
             ]
         )
 
@@ -238,7 +292,6 @@ class ArxivTests(unittest.TestCase):
 
         self.assertTrue(result.complete)
         self.assertEqual(result.retrieved_count, 3)
-        self.assertEqual(len(source.urls), 2)
         starts = [
             urllib.parse.parse_qs(urllib.parse.urlparse(url).query)["start"][0]
             for url in source.urls
@@ -249,8 +302,8 @@ class ArxivTests(unittest.TestCase):
         source = PagingArxivSource(
             [
                 [
-                    article("2608.cap2", datetime(2026, 8, 14, 12, 0, tzinfo=UTC)),
-                    article("2608.cap1", datetime(2026, 8, 14, 11, 0, tzinfo=UTC)),
+                    article("2608.cap2", datetime(2026, 8, 14, 17, 0, tzinfo=UTC)),
+                    article("2608.cap1", datetime(2026, 8, 14, 16, 0, tzinfo=UTC)),
                 ]
             ]
         )
@@ -270,11 +323,11 @@ class ArxivTests(unittest.TestCase):
         self.assertEqual(result.incomplete_dates, (date(2026, 8, 14),))
 
     def test_duplicate_arxiv_entries_across_pages_are_deduplicated(self) -> None:
-        duplicate = article("2608.duplicate", datetime(2026, 8, 14, 12, 0, tzinfo=UTC))
+        duplicate = article("2608.duplicate", datetime(2026, 8, 14, 17, 0, tzinfo=UTC))
         source = PagingArxivSource(
             [
-                [duplicate, article("2608.unique2", datetime(2026, 8, 14, 11, 0, tzinfo=UTC))],
-                [duplicate, article("2608.unique1", datetime(2026, 8, 14, 10, 0, tzinfo=UTC))],
+                [duplicate, article("2608.unique2", datetime(2026, 8, 14, 16, 0, tzinfo=UTC))],
+                [duplicate, article("2608.unique1", datetime(2026, 8, 14, 15, 0, tzinfo=UTC))],
             ]
         )
 
@@ -294,8 +347,8 @@ class ArxivTests(unittest.TestCase):
     def test_sparse_explicit_dates_do_not_scan_intervening_off_dates(self) -> None:
         source = PagingArxivSource(
             [
-                [article("2608.start", datetime(2026, 8, 14, 12, 0, tzinfo=UTC))],
-                [article("2608.end", datetime(2026, 8, 17, 12, 0, tzinfo=UTC))],
+                [article("2608.start", datetime(2026, 8, 14, 17, 0, tzinfo=UTC))],
+                [article("2608.end", datetime(2026, 8, 17, 17, 0, tzinfo=UTC))],
             ]
         )
 
@@ -315,8 +368,8 @@ class ArxivTests(unittest.TestCase):
         self.assertEqual(
             queries,
             [
-                "(cat:hep-th) AND submittedDate:[202608140000 TO 202608142359]",
-                "(cat:hep-th) AND submittedDate:[202608170000 TO 202608172359]",
+                "(cat:hep-th) AND submittedDate:[202608132300 TO 202608151100]",
+                "(cat:hep-th) AND submittedDate:[202608162300 TO 202608181100]",
             ],
         )
         self.assertEqual(
@@ -328,8 +381,8 @@ class ArxivTests(unittest.TestCase):
         source = PagingArxivSource(
             [
                 [
-                    article("2608.cap2", datetime(2026, 8, 14, 12, 0, tzinfo=UTC)),
-                    article("2608.cap1", datetime(2026, 8, 14, 11, 0, tzinfo=UTC)),
+                    article("2608.cap2", datetime(2026, 8, 14, 17, 0, tzinfo=UTC)),
+                    article("2608.cap1", datetime(2026, 8, 14, 16, 0, tzinfo=UTC)),
                 ]
             ]
         )
@@ -351,7 +404,7 @@ class ArxivTests(unittest.TestCase):
     def test_duplicate_arxiv_entries_across_category_queries_are_deduplicated(self) -> None:
         first = article(
             "2608.crosscat",
-            datetime(2026, 8, 14, 12, 0, tzinfo=UTC),
+            datetime(2026, 8, 14, 17, 0, tzinfo=UTC),
             title="Cross category paper",
         )
         duplicate = Article(

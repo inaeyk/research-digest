@@ -13,6 +13,7 @@ from research_digest.models import (
     DateSelectionKind,
     InterestProfile,
     ModelValidationError,
+    canonical_arxiv_categories,
     normalize_whitespace,
     source_date_from_datetime,
 )
@@ -65,6 +66,15 @@ class ModelTests(unittest.TestCase):
                 max_results=MAX_ARXIV_RESULTS,
             )
 
+    def test_arxiv_categories_are_canonicalized_as_semantic_set(self) -> None:
+        config = ArxivSourceConfig(categories=[" hep-th ", "gr-qc", "hep-th"])
+
+        self.assertEqual(config.categories, ["gr-qc", "hep-th"])
+        self.assertEqual(
+            canonical_arxiv_categories(["hep-th", "gr-qc", "hep-th"]),
+            ("gr-qc", "hep-th"),
+        )
+
         with self.assertRaises(ModelValidationError):
             ArxivSourceConfig(
                 categories=["hep-th"],
@@ -113,8 +123,8 @@ class ModelTests(unittest.TestCase):
         with self.assertRaises(ModelValidationError):
             DateSelection.from_mapping({"kind": "UNKNOWN", "dates": []})
 
-    def test_source_date_from_datetime_uses_utc_calendar_date(self) -> None:
-        timestamp = datetime.fromisoformat("2026-08-17T01:15:00+02:00")
+    def test_source_date_from_datetime_uses_chicago_calendar_date(self) -> None:
+        timestamp = datetime.fromisoformat("2026-08-17T04:59:00+00:00")
 
         self.assertEqual(source_date_from_datetime(timestamp), date(2026, 8, 16))
 

@@ -12,7 +12,7 @@ from unittest import mock
 
 from research_digest.analysis.base import AnalyzerError, AnalyzerUnavailable, article_analysis_key
 from research_digest.analysis.codex_cli import CodexCLIAnalyzer
-from research_digest.models import Article, InterestProfile, ModelValidationError
+from research_digest.models import Article, InterestProfile
 
 
 @dataclass(frozen=True)
@@ -209,38 +209,53 @@ class CodexCLIAnalyzerTests(unittest.TestCase):
         with self.assertRaisesRegex(AnalyzerError, "malformed JSON"):
             analyzer.analyze_many(profile=sample_profile(), articles=[sample_article()])
 
-    def test_invalid_analysis_values_are_rejected(self) -> None:
+    def test_invalid_analysis_values_are_omitted_for_pipeline_retry(self) -> None:
         article = sample_article()
         payload = json.loads(valid_output(article))
         payload["results"][0]["relevance_score"] = 2
         runner = FakeRunner(stdout=json.dumps(payload))
         analyzer = CodexCLIAnalyzer(timeout_seconds=1, runner=runner)
 
-        with self.assertRaises(ModelValidationError):
-            analyzer.analyze_many(profile=sample_profile(), articles=[article])
+        self.assertEqual(analyzer.analyze_many(profile=sample_profile(), articles=[article]), {})
 
-    def test_missing_duplicate_and_unknown_article_ids_are_rejected(self) -> None:
+    def test_missing_duplicate_and_unknown_article_ids_are_omitted_for_pipeline_retry(
+        self,
+    ) -> None:
         first = sample_article("2608.00001")
         second = sample_article("2608.00002")
 
         missing_runner = FakeRunner(stdout=valid_output(first))
         missing_analyzer = CodexCLIAnalyzer(timeout_seconds=1, runner=missing_runner)
-        with self.assertRaisesRegex(AnalyzerError, "did not return analysis"):
-            missing_analyzer.analyze_many(profile=sample_profile(), articles=[first, second])
+        self.assertEqual(
+            set(missing_analyzer.analyze_many(profile=sample_profile(), articles=[first, second])),
+            {article_analysis_key(first)},
+        )
 
         duplicate_payload = json.loads(valid_output(first))
         duplicate_payload["results"].append(dict(duplicate_payload["results"][0]))
         duplicate_runner = FakeRunner(stdout=json.dumps(duplicate_payload))
         duplicate_analyzer = CodexCLIAnalyzer(timeout_seconds=1, runner=duplicate_runner)
-        with self.assertRaisesRegex(AnalyzerError, "duplicate analysis"):
-            duplicate_analyzer.analyze_many(profile=sample_profile(), articles=[first])
+        self.assertEqual(
+            duplicate_analyzer.analyze_many(profile=sample_profile(), articles=[first]),
+            {},
+        )
 
         unknown = sample_article("9999.00001")
         unknown_payload = json.loads(valid_output(unknown))
         unknown_runner = FakeRunner(stdout=json.dumps(unknown_payload))
         unknown_analyzer = CodexCLIAnalyzer(timeout_seconds=1, runner=unknown_runner)
-        with self.assertRaisesRegex(AnalyzerError, "unknown article_id"):
-            unknown_analyzer.analyze_many(profile=sample_profile(), articles=[first])
+        self.assertEqual(
+            unknown_analyzer.analyze_many(profile=sample_profile(), articles=[first]),
+            {},
+        )
+
+    def test_single_article_analyze_raises_when_result_is_missing(self) -> None:
+        article = sample_article()
+        runner = FakeRunner(stdout=json.dumps({"results": []}))
+        analyzer = CodexCLIAnalyzer(timeout_seconds=1, runner=runner)
+
+        with self.assertRaisesRegex(AnalyzerError, "usable analysis"):
+            analyzer.analyze(profile=sample_profile(), article=article)
 
 
 if __name__ == "__main__":

@@ -9,10 +9,12 @@ from typing import Literal, TypeAlias, TypeGuard
 
 from research_digest.calibration import CalibrationSummary, build_calibration_summary
 from research_digest.config import ConfigError, load_config
-from research_digest.db import Database
+from research_digest.coverage import build_date_coverage_statuses
+from research_digest.db import SOURCE_ARXIV, Database
 from research_digest.errors import sanitize_error
 from research_digest.models import (
     AnalysisOrigin,
+    Article,
     ArticleFeedback,
     ArxivSourceConfig,
     DateSelection,
@@ -25,6 +27,7 @@ from research_digest.models import (
     RunOrigin,
     above_threshold_digest_items,
     below_threshold_digest_items,
+    canonical_arxiv_categories,
     is_above_threshold,
     profile_semantic_fingerprint,
     profile_semantic_signature,
@@ -35,7 +38,9 @@ from research_digest.service import run_digest_for_profile
 from research_digest.sources.arxiv import ArxivSource
 from research_digest.sources.base import LatestAvailableDateResolver, SourceError
 from research_digest.synthesis import CrossPaperSynthesis, build_cross_paper_synthesis
+from research_digest.ui.abstracts import render_abstract_control
 from research_digest.ui.common import get_analyzer, get_database
+from research_digest.ui.date_status import month_bounds, render_date_status_grid
 
 DigestInputSignature: TypeAlias = tuple[str, str]
 DigestView: TypeAlias = Literal["relevant", "all_analyzed", "below_threshold"]
@@ -96,7 +101,10 @@ def render() -> None:
 
     categories = ", ".join(source_config.categories or [])
     state = "enabled" if source_config.enabled else "disabled"
-    st.caption(f"arXiv is {state}. Categories: {categories}. Source dates use UTC.")
+    st.caption(
+        f"arXiv is {state}. Categories: {categories}. "
+        "Source dates use America/Chicago."
+    )
 
     if not profiles:
         st.info(
@@ -121,6 +129,22 @@ def render() -> None:
         source_config=source_config,
     )
     st.info(f"Digest period: {date_control.period_label}", icon=":material/event:")
+    if date_control.selection is not None and profile.id is not None:
+        selected_dates = date_control.selection.selected_dates()
+        anchor = selected_dates[0] if selected_dates else date.today()
+        start_date, end_date = month_bounds(anchor)
+        render_date_status_grid(
+            statuses=build_date_coverage_statuses(
+                db=db,
+                profile=profile,
+                source_name=SOURCE_ARXIV,
+                source_config=source_config,
+                start_date=start_date,
+                end_date=end_date,
+                selected_dates=selected_dates,
+            ),
+            title=f"Digest status for {anchor:%B %Y}",
+        )
     if date_control.disabled_reason is not None:
         st.warning(date_control.disabled_reason, icon=":material/warning:")
     date_selection = date_control.selection
@@ -166,6 +190,7 @@ def render() -> None:
             else:
                 st.session_state[_LAST_DIGEST_RESULT_KEY] = result
                 st.session_state[_LAST_DIGEST_SIGNATURE_KEY] = current_signature
+                st.rerun()
 
     result = st.session_state.get(_LAST_DIGEST_RESULT_KEY)
     result_signature = st.session_state.get(_LAST_DIGEST_SIGNATURE_KEY)
@@ -206,7 +231,7 @@ def source_config_fingerprint(
     return json.dumps(
         {
             "enabled": source_config.enabled,
-            "categories": source_config.categories,
+            "categories": list(canonical_arxiv_categories(source_config.categories or ())),
             "date_selection": (
                 date_selection.to_mapping() if date_selection is not None else None
             ),
@@ -462,6 +487,16 @@ def _render_run_confirmation(result: DigestResult) -> None:
             ),
             icon=":material/warning:",
         )
+    if not result.analysis_complete:
+        st.warning(
+            "Analysis is incomplete for "
+            f"{len(result.unresolved_articles)} paper(s): "
+            + ", ".join(
+                f"{article.source}:{article.source_article_id}"
+                for article in result.unresolved_articles[:10]
+            ),
+            icon=":material/warning:",
+        )
 
 
 def _render_empty_metrics() -> None:
@@ -522,23 +557,25 @@ def _render_items(result: DigestResult, db: Database) -> None:
 
     if not items:
         st.info(_empty_view_message(view))
-        return
-
-    fingerprint = profile_semantic_fingerprint(result.profile)
-    for item in items:
-        current_feedback = (
-            feedback_by_article_id.get(item.article.id)
-            if item.article.id is not None
-            else None
-        )
-        _render_item(
-            item,
-            threshold,
-            db,
-            result.profile,
-            fingerprint,
-            current_feedback,
-        )
+    else:
+        fingerprint = profile_semantic_fingerprint(result.profile)
+        for item in items:
+            current_feedback = (
+                feedback_by_article_id.get(item.article.id)
+                if item.article.id is not None
+                else None
+            )
+            _render_item(
+                item,
+                threshold,
+                db,
+                result.profile,
+                fingerprint,
+                current_feedback,
+                context=f"today:{result.run_id}:{view}",
+            )
+    _render_preselected_out_articles(result)
+    _render_unresolved_articles(result)
 
 
 def load_feedback_by_article_id(
@@ -622,6 +659,8 @@ def _render_item(
     profile: InterestProfile,
     profile_fingerprint_value: str,
     current_feedback: ArticleFeedback | None,
+    *,
+    context: str,
 ) -> None:
     import streamlit as st
 
@@ -658,6 +697,12 @@ def _render_item(
         link_col.link_button("arXiv", article.abstract_url)
         if article.pdf_url:
             pdf_col.link_button("PDF", article.pdf_url)
+        render_abstract_control(
+            source=article.source,
+            source_article_id=article.source_article_id,
+            abstract=article.abstract,
+            context=f"{context}:{article.source}:{article.source_article_id}",
+        )
         _render_feedback_control(
             item,
             db,
@@ -665,6 +710,60 @@ def _render_item(
             profile_fingerprint_value,
             current_feedback,
         )
+
+
+def _render_preselected_out_articles(result: DigestResult) -> None:
+    import streamlit as st
+
+    if not result.skipped_articles:
+        return
+    st.markdown("**Preselected out**")
+    st.caption(
+        "These papers were retrieved and stored, then skipped by deterministic preselection."
+    )
+    for article in sorted(result.skipped_articles, key=_article_sort_key):
+        with st.container(border=True):
+            st.subheader(article.title)
+            authors = ", ".join(article.authors) if article.authors else "Unknown authors"
+            categories = ", ".join(article.categories) if article.categories else "Uncategorized"
+            st.caption(
+                f"{article.source}:{article.source_article_id} | {authors} | "
+                f"Published {article.published_at:%Y-%m-%d %H:%M UTC} | "
+                f"Categories: {categories}"
+            )
+            if article.abstract_url:
+                st.link_button("arXiv", article.abstract_url)
+            render_abstract_control(
+                source=article.source,
+                source_article_id=article.source_article_id,
+                abstract=article.abstract,
+                context=f"today:{result.run_id}:preselected:{article.source}:{article.source_article_id}",
+            )
+
+
+def _article_sort_key(article: Article) -> tuple[str, str, str]:
+    return (article.title.lower(), article.source, article.source_article_id)
+
+
+def _render_unresolved_articles(result: DigestResult) -> None:
+    import streamlit as st
+
+    if not result.unresolved_articles:
+        return
+    st.markdown("**Analysis unavailable**")
+    st.caption("These papers were retrieved but did not receive a valid analysis yet.")
+    for article in sorted(result.unresolved_articles, key=_article_sort_key):
+        with st.container(border=True):
+            st.subheader(article.title)
+            st.caption(f"{article.source}:{article.source_article_id}")
+            if article.abstract_url:
+                st.link_button("arXiv", article.abstract_url)
+            render_abstract_control(
+                source=article.source,
+                source_article_id=article.source_article_id,
+                abstract=article.abstract,
+                context=f"today:{result.run_id}:unresolved:{article.source}:{article.source_article_id}",
+            )
 
 
 def _render_feedback_control(

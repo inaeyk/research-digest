@@ -2,13 +2,19 @@ from __future__ import annotations
 
 import tempfile
 import unittest
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from datetime import UTC, date, datetime
 from pathlib import Path
+from typing import cast
 
 from research_digest.analysis.base import article_analysis_key
 from research_digest.analysis.fake import FakeAnalyzer
-from research_digest.db import APP_RUN_FAILED, Database
+from research_digest.db import (
+    APP_RUN_ANALYSIS_UNAVAILABLE,
+    APP_RUN_FAILED,
+    APP_RUN_PARTIAL,
+    Database,
+)
 from research_digest.models import (
     AnalysisOrigin,
     AnalysisResult,
@@ -16,7 +22,6 @@ from research_digest.models import (
     ArxivSourceConfig,
     DateSelection,
     InterestProfile,
-    ModelValidationError,
     RunOrigin,
     above_threshold_digest_items,
     below_threshold_digest_items,
@@ -147,6 +152,62 @@ class ProfileEchoAnalyzer:
         }
 
 
+class MappingLikeWithDuplicateKeys(Mapping[str, AnalysisResult]):
+    def __init__(self, pairs: list[tuple[str, AnalysisResult]]) -> None:
+        self.pairs = pairs
+
+    def __getitem__(self, key: str) -> AnalysisResult:
+        for candidate, value in self.pairs:
+            if candidate == key:
+                return value
+        raise KeyError(key)
+
+    def __iter__(self) -> Iterator[str]:
+        return (key for key, _ in self.pairs)
+
+    def __len__(self) -> int:
+        return len(self.pairs)
+
+class ScriptedBatchAnalyzer:
+    def __init__(self, scripts: list[object]) -> None:
+        self.scripts = scripts
+        self.calls: list[tuple[str, ...]] = []
+
+    def analyze(self, *, profile: InterestProfile, article: Article) -> AnalysisResult:
+        result = self.analyze_many(profile=profile, articles=[article])
+        return result[article_analysis_key(article)]
+
+    def analyze_many(
+        self,
+        *,
+        profile: InterestProfile,
+        articles: Sequence[Article],
+    ) -> Mapping[str, AnalysisResult]:
+        del profile
+        self.calls.append(tuple(article.source_article_id for article in articles))
+        script = self.scripts.pop(0) if self.scripts else "all"
+        if isinstance(script, BaseException):
+            raise script
+        if script == "all":
+            return {
+                article_analysis_key(article): _scripted_analysis(article)
+                for article in articles
+            }
+        if script == "none":
+            return {}
+        if script == "non_mapping":
+            return cast(Mapping[str, AnalysisResult], object())
+        if isinstance(script, set):
+            return {
+                article_analysis_key(article): _scripted_analysis(article)
+                for article in articles
+                if article.source_article_id in script
+            }
+        if isinstance(script, Mapping):
+            return script
+        raise AssertionError(f"unknown script: {script!r}")
+
+
 def article(source_article_id: str, title: str, published_hour: int) -> Article:
     return Article(
         id=None,
@@ -160,6 +221,17 @@ def article(source_article_id: str, title: str, published_hour: int) -> Article:
         updated_at=datetime(2026, 8, 14, published_hour, 10, tzinfo=UTC),
         abstract_url=f"http://arxiv.org/abs/{source_article_id}",
         pdf_url=None,
+    )
+
+
+def _scripted_analysis(article: Article) -> AnalysisResult:
+    return AnalysisResult(
+        relevance_score=0.7,
+        relevance_reason=f"Scripted analysis for {article.source_article_id}.",
+        matched_topics=["gravity"],
+        summary=f"Summary for {article.source_article_id}.",
+        why_it_matters=f"Reason for {article.source_article_id}.",
+        reading_priority="MEDIUM",
     )
 
 
@@ -522,6 +594,10 @@ class PipelineTests(unittest.TestCase):
             [item.article.source_article_id for item in result.items],
             ["2608.00001"],
         )
+        self.assertEqual(
+            [article.source_article_id for article in result.skipped_articles],
+            ["2608.00999"],
+        )
 
     def test_preselection_preserves_reused_analysis_for_later_obvious_non_candidate(
         self,
@@ -587,7 +663,208 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(second.items[0].analysis_origin, AnalysisOrigin.REUSED)
         self.assertEqual(analyzer.calls, [])
 
-    def test_malformed_analysis_rejected_and_run_marked_failed(self) -> None:
+    def test_full_analysis_uses_bounded_chunks_with_final_short_chunk(self) -> None:
+        articles = [
+            article(f"2608.batch{i}", f"Batch gravity paper {i}", 10 - i)
+            for i in range(5)
+        ]
+        analyzer = ScriptedBatchAnalyzer(["all", "all", "all"])
+
+        result = run_digest(
+            db=self.db,
+            source=StaticSource(articles),
+            analyzer=analyzer,
+            profile_id=self.profile.id,
+            analysis_chunk_size=2,
+        )
+
+        self.assertEqual(result.run_status, "COMPLETED")
+        self.assertTrue(result.analysis_complete)
+        self.assertEqual(result.analyzed_count, 5)
+        self.assertEqual(
+            analyzer.calls,
+            [
+                ("2608.batch0", "2608.batch1"),
+                ("2608.batch2", "2608.batch3"),
+                ("2608.batch4",),
+            ],
+        )
+
+    def test_missing_chunk_id_is_retried_without_rerunning_successes(self) -> None:
+        articles = [
+            article("2608.retry1", "Retry gravity one", 10),
+            article("2608.retry2", "Retry gravity two", 9),
+            article("2608.retry3", "Retry gravity three", 8),
+        ]
+        analyzer = ScriptedBatchAnalyzer([{"2608.retry1", "2608.retry2"}, "all"])
+
+        result = run_digest(
+            db=self.db,
+            source=StaticSource(articles),
+            analyzer=analyzer,
+            profile_id=self.profile.id,
+            analysis_chunk_size=3,
+        )
+
+        self.assertEqual(result.run_status, "COMPLETED")
+        self.assertEqual(result.new_analysis_count, 3)
+        self.assertEqual(
+            analyzer.calls,
+            [("2608.retry1", "2608.retry2", "2608.retry3"), ("2608.retry3",)],
+        )
+
+    def test_smaller_batch_retry_can_recover_missing_ids(self) -> None:
+        articles = [
+            article("2608.small1", "Small retry gravity one", 10),
+            article("2608.small2", "Small retry gravity two", 9),
+            article("2608.small3", "Small retry gravity three", 8),
+            article("2608.small4", "Small retry gravity four", 7),
+        ]
+        analyzer = ScriptedBatchAnalyzer([{"2608.small1", "2608.small2"}, "all"])
+
+        result = run_digest(
+            db=self.db,
+            source=StaticSource(articles),
+            analyzer=analyzer,
+            profile_id=self.profile.id,
+            analysis_chunk_size=4,
+        )
+
+        self.assertTrue(result.analysis_complete)
+        self.assertEqual(result.new_analysis_count, 4)
+        self.assertEqual(
+            analyzer.calls,
+            [
+                ("2608.small1", "2608.small2", "2608.small3", "2608.small4"),
+                ("2608.small3", "2608.small4"),
+            ],
+        )
+
+    def test_single_item_fallback_recovers_after_batch_failures(self) -> None:
+        articles = [
+            article("2608.single1", "Single fallback gravity one", 10),
+            article("2608.single2", "Single fallback gravity two", 9),
+        ]
+        analyzer = ScriptedBatchAnalyzer(["none", "all"])
+
+        result = run_digest(
+            db=self.db,
+            source=StaticSource(articles),
+            analyzer=analyzer,
+            profile_id=self.profile.id,
+            analysis_chunk_size=2,
+        )
+
+        self.assertTrue(result.analysis_complete)
+        self.assertEqual(result.new_analysis_count, 2)
+        self.assertEqual(
+            analyzer.calls,
+            [("2608.single1", "2608.single2"), ("2608.single1",), ("2608.single2",)],
+        )
+
+    def test_permanent_single_paper_failure_preserves_other_successes_as_partial(self) -> None:
+        articles = [
+            article("2608.partial1", "Partial gravity one", 10),
+            article("2608.partial2", "Partial gravity two", 9),
+            article("2608.partial3", "Partial gravity three", 8),
+        ]
+        analyzer = ScriptedBatchAnalyzer([{"2608.partial1", "2608.partial2"}, "none", "none"])
+
+        result = run_digest(
+            db=self.db,
+            source=StaticSource(articles),
+            analyzer=analyzer,
+            profile_id=self.profile.id,
+            analysis_chunk_size=3,
+        )
+
+        self.assertEqual(result.run_status, APP_RUN_PARTIAL)
+        self.assertFalse(result.analysis_complete)
+        self.assertEqual(result.analyzed_count, 2)
+        self.assertEqual(result.new_analysis_count, 2)
+        self.assertEqual(
+            [article.source_article_id for article in result.unresolved_articles],
+            ["2608.partial3"],
+        )
+        self.assertEqual(self.db.get_app_runs()[0]["status"], APP_RUN_PARTIAL)
+
+    def test_duplicate_and_unknown_ids_are_rejected_and_retried(self) -> None:
+        articles = [
+            article("2608.badid1", "Bad ID gravity one", 10),
+            article("2608.badid2", "Bad ID gravity two", 9),
+        ]
+        duplicate = MappingLikeWithDuplicateKeys(
+            [
+                ("arxiv:2608.badid1", _scripted_analysis(articles[0])),
+                ("arxiv:2608.badid1", _scripted_analysis(articles[0])),
+                ("arxiv:2608.badid2", _scripted_analysis(articles[1])),
+                ("arxiv:unknown", _scripted_analysis(articles[1])),
+            ]
+        )
+        analyzer = ScriptedBatchAnalyzer([duplicate, "all"])
+
+        result = run_digest(
+            db=self.db,
+            source=StaticSource(articles),
+            analyzer=analyzer,
+            profile_id=self.profile.id,
+            analysis_chunk_size=2,
+        )
+
+        self.assertTrue(result.analysis_complete)
+        self.assertEqual(result.new_analysis_count, 2)
+        self.assertEqual(analyzer.calls, [("2608.badid1", "2608.badid2"), ("2608.badid1",)])
+
+    def test_malformed_chunk_response_exhausts_bounded_retries(self) -> None:
+        analyzer = ScriptedBatchAnalyzer(["non_mapping", "non_mapping"])
+
+        result = run_digest(
+            db=self.db,
+            source=StaticSource(self.articles[:1]),
+            analyzer=analyzer,
+            profile_id=self.profile.id,
+            analysis_chunk_size=1,
+        )
+
+        self.assertEqual(result.run_status, APP_RUN_ANALYSIS_UNAVAILABLE)
+        self.assertFalse(result.analysis_complete)
+        self.assertEqual(result.analyzed_count, 0)
+        self.assertEqual(result.new_analysis_count, 0)
+        self.assertEqual(
+            [article.source_article_id for article in result.unresolved_articles],
+            ["2608.00001"],
+        )
+
+    def test_rerun_only_retries_unresolved_papers(self) -> None:
+        articles = [
+            article("2608.rerun1", "Rerun gravity one", 10),
+            article("2608.rerun2", "Rerun gravity two", 9),
+        ]
+        first_analyzer = ScriptedBatchAnalyzer([{"2608.rerun1"}, "none", "none"])
+        first = run_digest(
+            db=self.db,
+            source=StaticSource(articles),
+            analyzer=first_analyzer,
+            profile_id=self.profile.id,
+            analysis_chunk_size=2,
+        )
+        second_analyzer = ScriptedBatchAnalyzer(["all"])
+        second = run_digest(
+            db=self.db,
+            source=StaticSource(articles),
+            analyzer=second_analyzer,
+            profile_id=self.profile.id,
+            analysis_chunk_size=2,
+        )
+
+        self.assertEqual(first.run_status, APP_RUN_PARTIAL)
+        self.assertEqual(second.reused_analysis_count, 1)
+        self.assertEqual(second.new_analysis_count, 1)
+        self.assertEqual(second_analyzer.calls, [("2608.rerun2",)])
+
+    def test_malformed_analysis_becomes_analysis_unavailable_without_raw_provider_data(
+        self,
+    ) -> None:
         analyzer = FakeAnalyzer(
             {
                 "2608.00001": {
@@ -601,35 +878,34 @@ class PipelineTests(unittest.TestCase):
             }
         )
 
-        with self.assertRaises(ModelValidationError):
-            run_digest(
-                db=self.db,
-                source=StaticSource(self.articles[:1]),
-                analyzer=analyzer,
-                profile_id=self.profile.id,
-            )
+        result = run_digest(
+            db=self.db,
+            source=StaticSource(self.articles[:1]),
+            analyzer=analyzer,
+            profile_id=self.profile.id,
+        )
 
         runs = self.db.get_app_runs()
-        self.assertEqual(runs[0]["status"], APP_RUN_FAILED)
-        self.assertIn("relevance_score", runs[0]["error_message"])
+        self.assertEqual(result.run_status, APP_RUN_ANALYSIS_UNAVAILABLE)
+        self.assertEqual(runs[0]["status"], APP_RUN_ANALYSIS_UNAVAILABLE)
+        self.assertIn("Analysis unavailable for 1 paper", runs[0]["error_message"])
 
-    def test_pipeline_persists_sanitized_error_message(self) -> None:
-        with self.assertRaises(RuntimeError):
-            run_digest(
-                db=self.db,
-                source=StaticSource(self.articles[:1]),
-                analyzer=FailingAnalyzer(),
-                profile_id=self.profile.id,
-            )
+    def test_provider_failure_persists_generic_unresolved_error_message(self) -> None:
+        result = run_digest(
+            db=self.db,
+            source=StaticSource(self.articles[:1]),
+            analyzer=FailingAnalyzer(),
+            profile_id=self.profile.id,
+        )
 
         runs = self.db.get_app_runs()
         error_message = runs[0]["error_message"]
+        self.assertEqual(result.run_status, APP_RUN_ANALYSIS_UNAVAILABLE)
+        self.assertEqual(runs[0]["status"], APP_RUN_ANALYSIS_UNAVAILABLE)
         self.assertNotIn("/home/" + "inaeyk", error_message)
         self.assertNotIn("sk-secret", error_message)
         self.assertNotIn("token.secret.value", error_message)
-        self.assertIn("[HOME]", error_message)
-        self.assertIn("[REDACTED_API_KEY]", error_message)
-        self.assertIn("Bearer [REDACTED]", error_message)
+        self.assertIn("Analysis unavailable for 1 paper", error_message)
 
     def test_date_selection_run_persists_metadata_and_reuses_identical_rerun_cache(self) -> None:
         selection = DateSelection.single_date(date(2026, 8, 14))
@@ -740,15 +1016,14 @@ class PipelineTests(unittest.TestCase):
 
     def test_date_selection_failure_records_retrieval_metadata_and_retry_succeeds(self) -> None:
         selection = DateSelection.single_date(date(2026, 8, 14))
-        with self.assertRaises(RuntimeError):
-            run_digest(
-                db=self.db,
-                source=DateStaticSource(self.articles[:1]),
-                analyzer=FailingAnalyzer(),
-                profile_id=self.profile.id,
-                date_selection=selection,
-                run_origin=RunOrigin.MANUAL,
-            )
+        first = run_digest(
+            db=self.db,
+            source=DateStaticSource(self.articles[:1]),
+            analyzer=FailingAnalyzer(),
+            profile_id=self.profile.id,
+            date_selection=selection,
+            run_origin=RunOrigin.MANUAL,
+        )
         failed = self.db.get_app_runs()[0]
 
         retry = run_digest(
@@ -760,7 +1035,8 @@ class PipelineTests(unittest.TestCase):
             run_origin=RunOrigin.MANUAL,
         )
 
-        self.assertEqual(failed["status"], APP_RUN_FAILED)
+        self.assertEqual(first.run_status, APP_RUN_ANALYSIS_UNAVAILABLE)
+        self.assertEqual(failed["status"], APP_RUN_ANALYSIS_UNAVAILABLE)
         self.assertEqual(failed["requested_source_dates_json"], '["2026-08-14"]')
         self.assertEqual(failed["covered_source_dates_json"], '["2026-08-14"]')
         self.assertEqual(failed["retrieval_complete"], 1)

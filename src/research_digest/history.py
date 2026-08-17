@@ -54,6 +54,8 @@ def build_run_snapshot(
         "analyzed_count": digest.analyzed_count,
         "relevant_count": digest.relevant_count,
         "analysis_available": digest.analysis_available,
+        "analysis_complete": digest.analysis_complete,
+        "run_status": digest.run_status,
         "run_origin": digest.run_origin.value,
         "date_selection": (
             digest.date_selection.to_mapping() if digest.date_selection is not None else None
@@ -85,7 +87,9 @@ def build_run_snapshot(
         "items": [
             {
                 "source_article_id": item.article.source_article_id,
+                "source": item.article.source,
                 "title": item.article.title,
+                "abstract": item.article.abstract,
                 "abstract_url": item.article.abstract_url,
                 "published_at": item.article.published_at.isoformat(),
                 "relevance_score": item.analysis.relevance_score,
@@ -95,6 +99,28 @@ def build_run_snapshot(
                 "analysis_origin": item.analysis_origin.value,
             }
             for item in digest.items
+        ],
+        "skipped_articles": [
+            {
+                "source": article.source,
+                "source_article_id": article.source_article_id,
+                "title": article.title,
+                "abstract": article.abstract,
+                "abstract_url": article.abstract_url,
+                "published_at": article.published_at.isoformat(),
+            }
+            for article in digest.skipped_articles
+        ],
+        "unresolved_articles": [
+            {
+                "source": article.source,
+                "source_article_id": article.source_article_id,
+                "title": article.title,
+                "abstract": article.abstract,
+                "abstract_url": article.abstract_url,
+                "published_at": article.published_at.isoformat(),
+            }
+            for article in digest.unresolved_articles
         ],
     }
 
