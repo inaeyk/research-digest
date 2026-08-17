@@ -1,7 +1,7 @@
 # M6 Campaign State
 
-- campaign_state: M6_B_QUALIFIED_FROZEN
-- current_substage: M6-B AI tags and user tags qualified and frozen locally
+- campaign_state: M6_C_PLAN_FROZEN
+- current_substage: M6-C notes and collections/projects plan frozen; implementation not started
 - current_branch: feature/m6-scientific-library-memory
 - baseline_branch: master
 - baseline_commit: fe92e77a3fce4037c0bf4ecbb0a7ce964763eb8b
@@ -21,15 +21,15 @@
 - candidate_schema_version: 10
 - config_version: 3
 - codegraph_state: no `.codegraph/` directory exists at repository root.
-- current_qualification_state: M6-B deterministic qualification and fresh repair Auditor PASS; local commit/tag freeze complete.
+- current_qualification_state: M6-B deterministic qualification and fresh repair Auditor PASS; M6-C plan frozen.
 - audit_round: M6-B audit repair round 1 PASS. M6-A initial candidate PASS; no M6-A audit-driven repair rounds used.
 - deterministic_checks: final v0.2 freeze gate recorded `pytest` 262 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-A final gate recorded `pytest` 268 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-B candidate recorded `pytest` 283 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-B repair round 1 recorded `pytest` 284 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS.
 - live_checks: v0.2 live smoke was accepted by the human before the M6 branch. M6-B synthetic live Codex tag smoke reached the Codex CLI but exited non-zero with the sanitized authentication/usage-limits message; record as environment/provider limitation for later human live smoke, not deterministic code failure.
-- schema_config_migration_state: v0.2 baseline uses ordered SQLite migrations through schema 8 and JSON config 3. M6-A adds additive SQLite schema 9 with `library_articles`; JSON config is unchanged. M6-B candidate adds additive SQLite schema 10 for Library tags, tag assignments, and AI tag suppressions; JSON config is unchanged.
+- schema_config_migration_state: v0.2 baseline uses ordered SQLite migrations through schema 8 and JSON config 3. M6-A adds additive SQLite schema 9 with `library_articles`; JSON config is unchanged. M6-B adds additive SQLite schema 10 for Library tags, tag assignments, and AI tag suppressions; JSON config is unchanged. M6-C is expected to add additive SQLite schema 11 for article notes, collections/projects, and collection memberships; JSON config changes are not expected.
 - qualified_local_commit: 104780a0ba9c98cd9663ef8d1088cb9472d53e09
 - qualified_local_tag: annotated local tag `m6b-qualified`; tag object `6d4836113b38ed348a7a0d36527473f1321c0de9`; target `104780a0ba9c98cd9663ef8d1088cb9472d53e09`. Prior local tag `m6a-qualified` targets `17e047c325bb61008cf39b9a135bea02bb63a968`.
 - deferred_minor_optional_findings: M6-A Auditor noted Library save/remove UI lacks a dedicated Streamlit click smoke; deterministic service/helper coverage passed and this was classified MINOR/OPTIONAL. M6-B repair Auditor noted regeneration replacement is not a single DB transaction after provider success; current supported paths are covered, but a future atomic replace helper would be safer if the persistence path broadens.
-- next_permitted_action: freeze detailed M6-C notes and collections/projects plan before implementation.
+- next_permitted_action: implement M6-C notes and collections/projects according to the frozen plan below.
 - human_stop_reason: none active
 
 ## Recovered v0.2 Baseline
@@ -420,3 +420,122 @@ Repair audit:
 - Audit repair rounds used for M6-B: 1.
 - MINOR/OPTIONAL: future broader replacement flows would benefit from a single
   atomic DB helper; current supported paths are covered by deterministic tests.
+
+## Frozen M6-C Plan
+
+Goal: turn saved Library papers into working material through personal notes and
+lightweight collections/projects.
+
+Data model:
+
+- Add additive SQLite schema version 11.
+- Add `library_article_notes`:
+  - `article_id` primary key
+  - `note_text`
+  - `created_at`
+  - `updated_at`
+  - foreign key to `articles`
+- Add `library_collections`:
+  - `id`
+  - `name`
+  - `description`
+  - `created_at`
+  - `updated_at`
+  - unique normalized name or equivalent deterministic duplicate prevention
+- Add `library_collection_memberships`:
+  - `collection_id`
+  - `article_id`
+  - `added_at`
+  - unique `(collection_id, article_id)`
+  - foreign keys to collections and articles
+- Notes and collections attach to Article identity, not run snapshots.
+- Notes and memberships may remain attached to an Article when it is unsaved,
+  so re-saving does not destroy user work. The Library view may hide unsaved
+  papers by default, but data must survive ordinary unsave/resave.
+
+Note semantics:
+
+- One editable personal note per Article for M6-C.
+- Notes are local/private user-authored text.
+- No Codex/analyzer call when viewing, editing, saving, or deleting notes.
+- Notes must only mutate when the user explicitly saves/removes them.
+- Notes must survive digest reruns, analysis reruns, tag generation, and
+  unsave/resave.
+- Empty note save should remove/clear the note row or store an empty note
+  consistently; choose one behavior and test it. Preferred: empty/whitespace
+  save deletes the note row.
+
+Collection semantics:
+
+- Collections/projects are lightweight named groupings, not a project
+  management system.
+- Collection names normalize with whitespace collapse and case-insensitive
+  duplicate detection while preserving readable display text.
+- A saved Article may belong to zero or more collections.
+- Deleting a collection deletes memberships only, not Articles, analyses,
+  notes, tags, history, or Library saved state.
+- Renaming a collection preserves collection identity and memberships.
+- Membership add/remove must be idempotent.
+
+Service boundary:
+
+- Add focused service helpers, likely `research_digest.collections`, for:
+  - collection create/list/get/rename/delete
+  - add/remove article membership
+  - list article collections
+  - list collection memberships
+  - note get/save/delete
+- Viewing/listing notes or collections must not call Codex/analyzers and must
+  not mutate data.
+- Search/filter integration should reuse local DB/service data.
+
+UI integration:
+
+- Extend the Library page with:
+  - personal note editor per saved article, saved explicitly through a form
+  - collection chips/list per article
+  - add article to collection
+  - remove article from collection
+  - create collection with optional description
+  - rename collection
+  - delete collection with clear “papers are not deleted” copy
+  - filters by collection and by existing Library tags
+- Keep controls compact and native Streamlit-first.
+- Do not invoke Codex from note or collection controls.
+- Do not build a complex project-management UI.
+
+Backup/export:
+
+- JSON backup export must include notes, collections, and memberships.
+- Do not export secrets or runtime paths.
+
+Tests required:
+
+- note save/update/delete.
+- empty note clears note.
+- notes survive digest reruns and analysis/tag operations.
+- unsave/resave preserves notes.
+- collection create/list/rename/delete.
+- duplicate collection name normalization.
+- membership add/remove idempotency.
+- article in multiple collections.
+- collection deletion preserves Articles, Library state, notes, tags, analyses,
+  feedback, and history.
+- Library filtering by collection.
+- Library filtering by user/AI tags where available.
+- viewing/listing notes/collections does not call analyzer/Codex and does not
+  mutate DB.
+- schema 10 to 11 upgrade is deterministic and idempotent.
+- backup JSON export includes notes/collections/memberships.
+- UI helper tests for collection/action keys and note form state where useful.
+
+Qualification:
+
+- Focused M6-C tests.
+- Full `pytest`.
+- `ruff check src tests`.
+- `mypy --strict src tests`.
+- `python -m compileall src tests`.
+- `git diff --check`.
+- Fresh independent read-only M6-C Auditor.
+- After PASS, commit locally and create annotated local tag `m6c-qualified`.

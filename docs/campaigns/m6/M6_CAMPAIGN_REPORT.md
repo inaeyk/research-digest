@@ -211,3 +211,20 @@ Freeze state:
 - Qualified local annotated tag: `m6b-qualified`.
 - Tag object: `6d4836113b38ed348a7a0d36527473f1321c0de9`.
 - Tag target: `104780a0ba9c98cd9663ef8d1088cb9472d53e09`.
+
+## M6-C Plan Freeze
+
+The detailed M6-C plan is recorded in `CAMPAIGN_STATE.md`.
+
+Key frozen decisions:
+
+- Notes and collections attach to stable Article identity, not run snapshots.
+- One user-authored note per Article in M6-C; empty/whitespace save clears the
+  note.
+- Notes are local/private and no Codex/analyzer call is made when viewing or
+  editing them.
+- Collections/projects are lightweight named groupings; deleting a collection
+  deletes memberships only, not papers or other scientific state.
+- Notes and memberships survive ordinary unsave/resave so user work is not
+  lost.
+- M6-C uses additive SQLite schema version `11`; JSON config is unchanged.
