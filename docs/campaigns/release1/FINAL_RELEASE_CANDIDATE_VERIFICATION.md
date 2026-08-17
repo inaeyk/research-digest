@@ -1,17 +1,17 @@
 # Final Release-Candidate Verification
 
-Status: scheduler environment repair active; human live scheduler smoke required
-before final release-candidate acceptance.
+Status: release candidate complete; awaiting final human release/tag/push decision.
 
 Verification workspace: `/tmp/research-digest-rc.Q4O1FA`.
 
 Prior release-candidate commit after final-audit MINOR documentation follow-up:
 `eadedb71b7a64302edb6ac6b7d1fbfe1d6bfbe95`. This candidate was superseded
 when a human live scheduler smoke found the non-login WSL Codex PATH defect
-recorded below. The next exact release-candidate commit remains pending the
-human live scheduler smoke after the committed scheduler repair.
+recorded below. That defect is repaired and the required human live scheduler
+smoke passed. The exact final release-candidate commit will be recorded by
+follow-up bookkeeping after this live-smoke evidence commit.
 
-Scheduler repair commit awaiting that human live smoke:
+Scheduler repair commit tested by the passing human live smoke:
 `6570aa37dc7c055828977cd490063fb160d08445`.
 
 Release-candidate packet commit before final-audit MINOR documentation follow-up: `f8d87eda5048c111d5d754c2e089ef3a33254508`.
@@ -99,7 +99,7 @@ Scheduler:
 - deterministic scheduler tests cover stable installed CLI invocation, idempotency, status, no Streamlit dependency, and no secrets in scheduled command lines.
 - human live RC scheduler smoke later found a real non-login WSL PATH defect: scheduled Codex-backed runs could not discover an NVM-installed `codex`, producing `ANALYSIS_UNAVAILABLE` and `LastTaskResult: 1` while manual installed-CLI Codex runs completed.
 - repair records the interactive Codex executable directory in scheduled `PATH` for Codex-backed schedules and adds doctor warnings for stale installed schedule PATH.
-- final release acceptance requires the human live scheduler smoke in `docs/campaigns/release1/RC_SCHEDULER_LIVE_SMOKE.md` to pass.
+- human live RC scheduler smoke after reinstalling the repaired schedule passed: interactive Codex resolved to `/home/inaeyk/.nvm/versions/node/v22.22.2/bin/codex` and reported ChatGPT login; installed task action included `PATH=/home/inaeyk/.nvm/versions/node/v22.22.2/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`, `RESEARCH_DIGEST_ANALYZER=codex`, and installed `research-digest run`; action contained no API key, Codex API key, auth.json path, access token, or refresh token; manual trigger returned `LastTaskResult: 0`; run `#26` completed with retrieved 2, analyzed 2, relevant 0; `research-digest doctor` reported failures 0 with scheduler PASS and last_run PASS.
 
 Serve:
 
@@ -145,6 +145,6 @@ MINOR follow-up applied after audit:
 
 The previous final human-stop state recorded
 `eadedb71b7a64302edb6ac6b7d1fbfe1d6bfbe95` as the exact release-candidate
-commit. That state is reopened only for the scheduler environment repair; final
-release-candidate acceptance must wait for the human live scheduler smoke in
-`docs/campaigns/release1/RC_SCHEDULER_LIVE_SMOKE.md`.
+commit. That state was reopened only for the scheduler environment repair. The
+repair audit passed and the required human live scheduler smoke passed. The
+campaign is again stopped for the final human release/tag/push decision.

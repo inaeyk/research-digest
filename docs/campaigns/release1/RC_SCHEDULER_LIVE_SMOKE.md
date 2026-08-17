@@ -1,6 +1,7 @@
 # Release Candidate Scheduler Live Smoke
 
-Status: required before final release acceptance.
+Status: PASS; completed by human in the real WSL2/Windows environment after
+reinstalling the repaired schedule.
 
 This smoke validates the repaired WSL2/Windows Task Scheduler environment for a
 Codex-backed digest run. Do not put API keys, Codex tokens, OAuth material, or
@@ -94,3 +95,14 @@ Expected:
 If the task reports `ANALYSIS_UNAVAILABLE` and `codex: not found`, reinstall the
 schedule from an interactive shell where `command -v codex` works, then inspect
 the generated `PATH` again.
+
+## Recorded Result
+
+- Interactive Codex: `/home/inaeyk/.nvm/versions/node/v22.22.2/bin/codex`.
+- `codex login status`: Logged in using ChatGPT.
+- Installed task action includes `PATH=/home/inaeyk/.nvm/versions/node/v22.22.2/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`, `RESEARCH_DIGEST_ANALYZER=codex`, and installed `research-digest run`.
+- Installed task action contains no API key, Codex API key, auth.json path, access token, or refresh token.
+- Manual Windows Task Scheduler trigger: `LastTaskResult: 0`.
+- Research Digest run `#26`: `COMPLETED`; retrieved 2; analyzed 2; relevant 0.
+- `research-digest doctor`: failures 0; scheduler PASS; last_run PASS; only remaining warning is intentionally skipped network checks.
+- If confirmed from History later, run `#26` contained new analyses, proving scheduled subscription-backed Codex execution rather than cached-result reuse.

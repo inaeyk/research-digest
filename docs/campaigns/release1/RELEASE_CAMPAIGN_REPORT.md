@@ -839,7 +839,7 @@ Final-audit MINOR follow-up:
 - clarified README and release-candidate packet upgrade instructions: back up an already-current active DB with `research-digest backup --export-json`; for an older repo-local M2 database, first keep a separate copy of the SQLite file, let startup adopt/migrate the copied legacy DB and create the pre-migration backup, then use `research-digest backup --export-json` against the current active DB after migration.
 - final release-candidate commit after MINOR follow-up: `eadedb71b7a64302edb6ac6b7d1fbfe1d6bfbe95`.
 - final campaign state set to `RELEASE_CANDIDATE_COMPLETE_AWAITING_HUMAN`; no public release tag, push, GitHub release, package publication, or public release operation was performed.
-- that prior human-stop state was later reopened only for the live scheduler environment repair below; the prior RC commit is superseded pending human live scheduler smoke after the committed repair.
+- that prior human-stop state was later reopened only for the live scheduler environment repair below; the prior RC commit is superseded by the committed repair and passing human live scheduler smoke.
 
 ## Release-Candidate Scheduler Environment Repair
 
@@ -869,10 +869,21 @@ Repair qualification:
 - `git diff --check`: PASS.
 - fresh independent read-only scheduler repair Auditor: PASS with no BLOCKER or IMPORTANT findings.
 
-Current stop:
+Live scheduler smoke:
 
-- The repair is not final release acceptance.
-- Final release-candidate acceptance remains blocked until the human live scheduler smoke verifies the reinstalled/updated Windows task action, a new `COMPLETED` scheduled run, `LastTaskResult == 0`, and no secrets in the task action.
+- PASS after reinstalling the repaired schedule in the real WSL2/Windows environment.
+- interactive Codex resolved at `/home/inaeyk/.nvm/versions/node/v22.22.2/bin/codex` and reported ChatGPT login.
+- installed task action includes `PATH=/home/inaeyk/.nvm/versions/node/v22.22.2/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`, `RESEARCH_DIGEST_ANALYZER=codex`, and installed `research-digest run`.
+- task action contains no API key, Codex API key, auth.json path, access token, or refresh token.
+- manual Windows Task Scheduler trigger completed with `LastTaskResult: 0`.
+- Research Digest run `#26`: `COMPLETED`; retrieved 2; analyzed 2; relevant 0.
+- `research-digest doctor`: failures 0; scheduler PASS; last_run PASS; only remaining warning is intentionally skipped network checks.
+- optional History confirmation may further show run `#26` contained new analyses, proving scheduled subscription-backed Codex execution rather than cached-result reuse.
+
+Final stop:
+
+- Release candidate is complete and awaiting final human release/tag/push decision.
+- No final public release tag, remote push, GitHub release, package publication, or public release operation was performed.
 
 Data-safety note:
 

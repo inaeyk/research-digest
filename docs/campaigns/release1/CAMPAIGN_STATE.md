@@ -1,14 +1,14 @@
 # Release 1 Campaign State
 
-- current_substage: release-candidate scheduler live smoke
-- status: RC_SCHEDULER_LIVE_SMOKE_AWAITING_HUMAN
-- current_git_head: scheduler repair live-smoke bookkeeping commit containing this state; verify with `git rev-parse HEAD`
+- current_substage: RELEASE_CANDIDATE_COMPLETE_AWAITING_HUMAN
+- status: RELEASE_CANDIDATE_COMPLETE_AWAITING_HUMAN
+- current_git_head: final live-smoke evidence commit; exact hash to be recorded by follow-up bookkeeping commit
 - prior_release_candidate_commit: eadedb71b7a64302edb6ac6b7d1fbfe1d6bfbe95
 - scheduler_environment_repair_commit: 6570aa37dc7c055828977cd490063fb160d08445
-- release_candidate_commit: pending human live scheduler smoke after committed scheduler repair
+- release_candidate_commit: final live-smoke evidence commit; exact hash to be recorded by follow-up bookkeeping commit
 - current_tags_at_head: none
 - current_branch: master
-- local_remote_tracking: `master` tracks `origin/master`; local branch will be 18 commits ahead after scheduler repair live-smoke bookkeeping
+- local_remote_tracking: `master` tracks `origin/master`; local branch will be 19 commits ahead after final live-smoke evidence commit
 - online_remote_verification: attempted `git ls-remote --heads --tags origin`; blocked by DNS resolution failure for `github.com` even after network escalation
 - baseline_m1_qualified_commit: 36bd1cbe60f95d588e8ccdd41bfce914e9b1d7da
 - baseline_m1_qualified_tag: m1-qualified
@@ -61,14 +61,14 @@
 - m7i_qualified_tag_object: ec016b565fe84857b8053c51822290025b50c0db
 - skipped_campaigns: M3 additional source types; M5 full-paper reading; M6 long-term research memory
 - active_campaign_scope: M4 automatic daily operation; M7 release engineering, upgradeability, and productization; first release candidate
-- qualification_status: RC_SCHEDULER_CODEX_PATH_REPAIR_AUDIT_PASS_AWAITING_HUMAN_LIVE_SMOKE
+- qualification_status: RELEASE_CANDIDATE_COMPLETE_AWAITING_HUMAN
 - audit_repair_round: 2
 - last_deterministic_verification: RC scheduler PATH repair gate after audit documentation updates: full `pytest` 149 passed; `ruff check .` PASS; strict `mypy --strict src tests` PASS; `python -m compileall -q src tests` PASS; `git diff --check` PASS.
-- last_live_verification: Final RC package/install/CLI/backup smokes PASS from `/tmp/research-digest-rc.Q4O1FA`; live arXiv digest, Codex model transport, WSL scheduler, and serve listener remain environment-blocked with sanitized bounded failures even after escalation where applicable.
+- last_live_verification: Human RC scheduler live smoke PASS after repaired schedule reinstall: interactive Codex resolved at `/home/inaeyk/.nvm/versions/node/v22.22.2/bin/codex` and reported ChatGPT login; installed task action includes `PATH=/home/inaeyk/.nvm/versions/node/v22.22.2/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`, `RESEARCH_DIGEST_ANALYZER=codex`, and installed `research-digest run`; action contains no API key, Codex API key, auth.json path, access token, or refresh token; manual Task Scheduler trigger returned `LastTaskResult: 0`; Research Digest run `#26` completed with retrieved 2, analyzed 2, relevant 0; `research-digest doctor` reports failures 0 with scheduler PASS and last_run PASS, with only intentionally skipped network-check warning.
 - migration_data_safety_status: M7-B candidate adds explicit schema version metadata, ordered migrations, backup before schema-changing upgrades of existing DBs, rollback on failed migration, and visible migration backup path. Repo-local `research_digest.sqlite3` remains ignored and was not used for upgrade testing.
 - deferred_minor_optional_findings: none; final release Auditor reported two MINOR documentation/bookkeeping findings and both were repaired before the earlier human stop.
-- next_permitted_action: stop for the human live scheduler smoke in `docs/campaigns/release1/RC_SCHEDULER_LIVE_SMOKE.md`; do not declare final release candidate accepted until that smoke passes.
-- human_stop_reason: human live Windows Task Scheduler smoke is required to verify `LastTaskResult == 0`, a new `COMPLETED` run, and no secrets in the generated task action.
+- next_permitted_action: final human release decision only; do not push, create public release/version tag, publish a GitHub release, publish a package, start M3/M5/M6, or perform any final public release automatically.
+- human_stop_reason: final release-candidate gate reached after scheduler live-smoke PASS.
 
 ## Restored Release Campaign Charter Authority
 
@@ -1132,15 +1132,15 @@ Final audit:
 Final release-candidate closeout:
 
 - prior exact RC commit before the live scheduler defect was found: `eadedb71b7a64302edb6ac6b7d1fbfe1d6bfbe95`.
-- that prior candidate is superseded by the committed scheduler environment repair; the next exact release-candidate commit remains pending human live scheduler smoke.
-- scheduler environment repair commit awaiting human live smoke: `6570aa37dc7c055828977cd490063fb160d08445`.
+- that prior candidate is superseded by the committed scheduler environment repair and the final live-smoke evidence commit; exact final RC commit will be recorded by follow-up bookkeeping.
+- scheduler environment repair commit tested by passing human live smoke: `6570aa37dc7c055828977cd490063fb160d08445`.
 - suggested release version/tag: `0.1.0` / `v0.1.0`.
 - qualification summary: M4-A through M4-D and M7-A through M7-I are locally qualified and tagged; M3, M5, and M6 were not started.
 - final audit result: PASS WITH MINOR FINDINGS; both MINOR findings repaired before final human stop.
 - fresh-install evidence: package wheel and editable installs pass in isolated venvs; installed CLI `status --json` initializes schema 4/config 1 under isolated data/config paths.
 - M2-upgrade evidence: M7-I representative M2-qualified SQL fixture verifies adoption/migration, pre-migration backup, semantic counts, fingerprint preservation, repeated startup, and backup/export.
 - live Codex evidence: Codex CLI exists and reports `codex-cli 0.147.0`, but final model probe is environment-blocked by OpenAI websocket/HTTPS transport errors even after escalation.
-- scheduler evidence before live human smoke: deterministic scheduler tests pass; automated WSL Task Scheduler status was environment-blocked by `UtilBindVsockAnyPort ... socket failed 1`; later human live scheduler smoke found the Codex PATH defect recorded below.
+- scheduler evidence: deterministic scheduler tests pass; automated WSL Task Scheduler status was initially environment-blocked by `UtilBindVsockAnyPort ... socket failed 1`; later human live scheduler smoke found the Codex PATH defect recorded below; repaired schedule reinstall then passed live with `LastTaskResult: 0`, run `#26 COMPLETED`, scheduler doctor PASS, last_run PASS, and no secrets in the task action.
 - migration/backup evidence: deterministic migration failure/recovery tests pass; final installed backup/export smoke passes with SQLite integrity `ok` and valid JSON export.
 - known limitations: arXiv-only source pool; abstract-level analysis; no M6 long-term semantic memory; local single-user app; WSL2/Windows scheduler backend; live arXiv/Codex/scheduler/serve probes environment-blocked in this session.
 - deferred MINOR/OPTIONAL findings: none.
@@ -1200,9 +1200,15 @@ Closure audit:
 
 Human live-smoke gate:
 
-- Required before final release-candidate acceptance.
+- PASS before final release-candidate acceptance.
 - Scheduler repair commit under test: `6570aa37dc7c055828977cd490063fb160d08445`.
-- Follow `docs/campaigns/release1/RC_SCHEDULER_LIVE_SMOKE.md` to reinstall/update the task, inspect the generated action, trigger the task, verify `LastTaskResult == 0`, verify a new run is `COMPLETED` rather than `ANALYSIS_UNAVAILABLE`, and verify no secrets appear in the task action.
+- Interactive Codex: `/home/inaeyk/.nvm/versions/node/v22.22.2/bin/codex`; `codex login status` reported ChatGPT login.
+- Installed task action includes `PATH=/home/inaeyk/.nvm/versions/node/v22.22.2/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`, `RESEARCH_DIGEST_ANALYZER=codex`, and installed `research-digest run`.
+- Installed task action contains no API key, Codex API key, auth.json path, access token, or refresh token.
+- Manual Windows Task Scheduler trigger completed with `LastTaskResult: 0`.
+- Research Digest run `#26`: `COMPLETED`; retrieved 2; analyzed 2; relevant 0.
+- `research-digest doctor`: failures 0; scheduler PASS; last_run PASS; only remaining warning is intentionally skipped network checks.
+- If confirmed from History later, run `#26` contained new analyses, proving scheduled Codex execution rather than cached-result reuse.
 
 Historical M7-G freeze record:
 

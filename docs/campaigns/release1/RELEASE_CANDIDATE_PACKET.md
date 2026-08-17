@@ -1,7 +1,6 @@
 # Release Candidate Human Review Packet
 
-Status: scheduler environment repair active; human live scheduler smoke required
-before final release-candidate acceptance.
+Status: release candidate complete; awaiting final human release/tag/push decision.
 
 This packet is release-candidate material only. It does not authorize a public release, public version tag, GitHub release, package publication, or remote push.
 
@@ -11,8 +10,8 @@ This packet is release-candidate material only. It does not authorize a public r
 - runtime version in `src/research_digest/__init__.py`: `0.1.0`
 - existing public-style version tags: none found by `git tag --list 'v*'`
 - prior release-candidate commit before scheduler repair: `eadedb71b7a64302edb6ac6b7d1fbfe1d6bfbe95`
-- scheduler repair commit awaiting human live smoke: `6570aa37dc7c055828977cd490063fb160d08445`
-- next release-candidate commit: pending human live scheduler smoke after committed scheduler repair
+- scheduler repair commit tested by passing human live smoke: `6570aa37dc7c055828977cd490063fb160d08445`
+- release-candidate commit: final live-smoke evidence commit; exact hash to be recorded by follow-up bookkeeping
 - suggested final public release tag for human review: `v0.1.0`
 
 The release campaign has local qualification tags through `m7i-qualified`; the final public version tag has not been created.
@@ -121,11 +120,15 @@ Codex and its Node runtime. Reinstalling/updating the schedule refreshes this
 path after Node/Codex upgrades. `research-digest doctor` warns when the
 installed task action does not include the current Codex executable directory.
 
-Live Task Scheduler probing in the automated environment is blocked by WSL
-socket errors; deterministic scheduler command construction, idempotency,
-status, Codex PATH capture, stale-path warning, and secret-exclusion behavior
-are covered by tests. A human live scheduler smoke must pass before final
-release acceptance.
+Live Task Scheduler probing in the automated environment was blocked by WSL
+socket errors, so the final scheduler smoke was performed by the human in the
+real WSL2/Windows environment after reinstalling the repaired schedule. The
+installed action includes the Codex executable directory in `PATH`, uses
+`RESEARCH_DIGEST_ANALYZER=codex`, invokes installed `research-digest run`, and
+contains no API key, Codex API key, auth.json path, access token, or refresh
+token. Manual trigger returned `LastTaskResult: 0`; Research Digest run `#26`
+completed with retrieved 2, analyzed 2, relevant 0; `research-digest doctor`
+reported failures 0 with scheduler PASS and last_run PASS.
 
 ## Backup And Recovery
 
@@ -178,12 +181,12 @@ Do not persist API keys in the repository, SQLite database, or JSON config.
 - no M6-style long-term semantic research memory or trend analysis
 - local single-user application with no authentication, multi-user access, cloud deployment, or public web service
 - supported schedule backend is WSL2 through Windows Task Scheduler
-- live arXiv/Codex/scheduler/serve smoke tests were environment-blocked in this campaign session where noted
+- live arXiv/Codex/serve smoke tests were environment-blocked in this campaign session where noted; live scheduler smoke passed in the real human WSL2/Windows environment after repair
 
 ## Deferred Findings
 
-- No BLOCKER, IMPORTANT, MINOR, or OPTIONAL findings remained after M7-I second closure audit.
-- Final release audit may add new findings that must be resolved or carried into this packet before human decision.
+- No BLOCKER, IMPORTANT, MINOR, or OPTIONAL findings remain open for the release candidate.
+- Final release audit returned PASS WITH MINOR FINDINGS; both MINOR documentation/bookkeeping findings were repaired. The later scheduler environment repair audit passed with no BLOCKER or IMPORTANT findings, and the required human live scheduler smoke passed.
 
 ## Post-Release Roadmap
 
@@ -193,7 +196,7 @@ Do not persist API keys in the repository, SQLite database, or JSON config.
 
 ## Proposed Human Release Commands
 
-After final release-candidate PASS and human acceptance, proposed commands are:
+After human acceptance, proposed commands are:
 
 ```bash
 git status
