@@ -14,7 +14,7 @@ push.
 - released baseline: annotated tag `v0.1.0` targets
   `905f3133b58b6248fe4d3714c19f8bcdf9dde4cf`
 - current qualification branch: `feature/v0.2-date-native-scheduler-ui`
-- release-candidate commit: `56472ce94ee65c70c7700ceb5dbd9fe20d4f1038`
+- release-candidate commit: `29d3f6b9d5ef0a83155f79f405b6244d67786766`
 - suggested final public release tag for human review: `v0.2.0`
 
 ## Release Notes
