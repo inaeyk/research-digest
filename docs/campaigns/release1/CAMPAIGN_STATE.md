@@ -2,12 +2,13 @@
 
 - current_substage: release-candidate scheduler live smoke
 - status: RC_SCHEDULER_LIVE_SMOKE_AWAITING_HUMAN
-- current_git_head: uncommitted scheduler repair candidate; after local repair commit, verify with `git rev-parse HEAD`
+- current_git_head: scheduler repair live-smoke bookkeeping commit containing this state; verify with `git rev-parse HEAD`
 - prior_release_candidate_commit: eadedb71b7a64302edb6ac6b7d1fbfe1d6bfbe95
-- release_candidate_commit: pending scheduler repair closure audit, local repair commit, and human live scheduler smoke
+- scheduler_environment_repair_commit: 6570aa37dc7c055828977cd490063fb160d08445
+- release_candidate_commit: pending human live scheduler smoke after committed scheduler repair
 - current_tags_at_head: none
 - current_branch: master
-- local_remote_tracking: `master` tracks `origin/master`; local branch is 16 commits ahead after final human-stop bookkeeping
+- local_remote_tracking: `master` tracks `origin/master`; local branch will be 18 commits ahead after scheduler repair live-smoke bookkeeping
 - online_remote_verification: attempted `git ls-remote --heads --tags origin`; blocked by DNS resolution failure for `github.com` even after network escalation
 - baseline_m1_qualified_commit: 36bd1cbe60f95d588e8ccdd41bfce914e9b1d7da
 - baseline_m1_qualified_tag: m1-qualified
@@ -66,7 +67,7 @@
 - last_live_verification: Final RC package/install/CLI/backup smokes PASS from `/tmp/research-digest-rc.Q4O1FA`; live arXiv digest, Codex model transport, WSL scheduler, and serve listener remain environment-blocked with sanitized bounded failures even after escalation where applicable.
 - migration_data_safety_status: M7-B candidate adds explicit schema version metadata, ordered migrations, backup before schema-changing upgrades of existing DBs, rollback on failed migration, and visible migration backup path. Repo-local `research_digest.sqlite3` remains ignored and was not used for upgrade testing.
 - deferred_minor_optional_findings: none; final release Auditor reported two MINOR documentation/bookkeeping findings and both were repaired before the earlier human stop.
-- next_permitted_action: commit the scheduler repair and durable evidence locally, then stop for the human live scheduler smoke in `docs/campaigns/release1/RC_SCHEDULER_LIVE_SMOKE.md`; do not declare final release candidate accepted until that smoke passes.
+- next_permitted_action: stop for the human live scheduler smoke in `docs/campaigns/release1/RC_SCHEDULER_LIVE_SMOKE.md`; do not declare final release candidate accepted until that smoke passes.
 - human_stop_reason: human live Windows Task Scheduler smoke is required to verify `LastTaskResult == 0`, a new `COMPLETED` run, and no secrets in the generated task action.
 
 ## Restored Release Campaign Charter Authority
@@ -1131,7 +1132,8 @@ Final audit:
 Final release-candidate closeout:
 
 - prior exact RC commit before the live scheduler defect was found: `eadedb71b7a64302edb6ac6b7d1fbfe1d6bfbe95`.
-- that prior candidate is superseded by the active scheduler environment repair; the next exact release-candidate commit remains pending repair audit, local repair commit, and human live scheduler smoke.
+- that prior candidate is superseded by the committed scheduler environment repair; the next exact release-candidate commit remains pending human live scheduler smoke.
+- scheduler environment repair commit awaiting human live smoke: `6570aa37dc7c055828977cd490063fb160d08445`.
 - suggested release version/tag: `0.1.0` / `v0.1.0`.
 - qualification summary: M4-A through M4-D and M7-A through M7-I are locally qualified and tagged; M3, M5, and M6 were not started.
 - final audit result: PASS WITH MINOR FINDINGS; both MINOR findings repaired before final human stop.
@@ -1199,6 +1201,7 @@ Closure audit:
 Human live-smoke gate:
 
 - Required before final release-candidate acceptance.
+- Scheduler repair commit under test: `6570aa37dc7c055828977cd490063fb160d08445`.
 - Follow `docs/campaigns/release1/RC_SCHEDULER_LIVE_SMOKE.md` to reinstall/update the task, inspect the generated action, trigger the task, verify `LastTaskResult == 0`, verify a new run is `COMPLETED` rather than `ANALYSIS_UNAVAILABLE`, and verify no secrets appear in the task action.
 
 Historical M7-G freeze record:

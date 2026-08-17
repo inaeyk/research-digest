@@ -839,7 +839,7 @@ Final-audit MINOR follow-up:
 - clarified README and release-candidate packet upgrade instructions: back up an already-current active DB with `research-digest backup --export-json`; for an older repo-local M2 database, first keep a separate copy of the SQLite file, let startup adopt/migrate the copied legacy DB and create the pre-migration backup, then use `research-digest backup --export-json` against the current active DB after migration.
 - final release-candidate commit after MINOR follow-up: `eadedb71b7a64302edb6ac6b7d1fbfe1d6bfbe95`.
 - final campaign state set to `RELEASE_CANDIDATE_COMPLETE_AWAITING_HUMAN`; no public release tag, push, GitHub release, package publication, or public release operation was performed.
-- that prior human-stop state was later reopened only for the live scheduler environment repair below; the prior RC commit is superseded pending repair audit, local repair commit, and human live scheduler smoke.
+- that prior human-stop state was later reopened only for the live scheduler environment repair below; the prior RC commit is superseded pending human live scheduler smoke after the committed repair.
 
 ## Release-Candidate Scheduler Environment Repair
 
@@ -861,6 +861,7 @@ Repair:
 
 Repair qualification:
 
+- local scheduler repair commit: `6570aa37dc7c055828977cd490063fb160d08445`.
 - full `pytest`: 149 passed.
 - `ruff check .`: PASS.
 - strict `mypy --strict src tests`: PASS.

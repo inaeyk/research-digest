@@ -11,7 +11,8 @@ This packet is release-candidate material only. It does not authorize a public r
 - runtime version in `src/research_digest/__init__.py`: `0.1.0`
 - existing public-style version tags: none found by `git tag --list 'v*'`
 - prior release-candidate commit before scheduler repair: `eadedb71b7a64302edb6ac6b7d1fbfe1d6bfbe95`
-- next release-candidate commit: pending scheduler repair closure audit, local repair commit, and human live scheduler smoke
+- scheduler repair commit awaiting human live smoke: `6570aa37dc7c055828977cd490063fb160d08445`
+- next release-candidate commit: pending human live scheduler smoke after committed scheduler repair
 - suggested final public release tag for human review: `v0.1.0`
 
 The release campaign has local qualification tags through `m7i-qualified`; the final public version tag has not been created.
