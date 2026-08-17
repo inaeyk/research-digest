@@ -410,6 +410,6 @@ Fresh U2-E audit:
 
 U2-E freeze:
 
-- qualified commit: pending local freeze commit.
-- qualified tag: pending `u2e-qualified`.
-- qualified tag object: pending.
+- qualified commit: `536859eb87034dc55740f3b96b2d78d579d79622`.
+- qualified tag: `u2e-qualified`.
+- qualified tag object: `0dc19ab9b7b0937c32a0fd7feaf2afe0f20e8f57`.

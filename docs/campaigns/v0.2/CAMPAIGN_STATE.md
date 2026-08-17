@@ -1,8 +1,8 @@
 # v0.2 Campaign State
 
-- campaign_state: U2_E_QUALIFIED_AWAITING_FREEZE
-- current_substage: U2-E Scheduler management in UI
-- current_git_head: 4f98ef637891141f1716d5c017e3e1be4fba3d32
+- campaign_state: U2_F_IN_PROGRESS
+- current_substage: U2-F Date-oriented History
+- current_git_head: 536859eb87034dc55740f3b96b2d78d579d79622
 - current_branch: feature/v0.2-date-native-scheduler-ui
 - released_baseline_tag: v0.1.0
 - released_baseline_commit: 905f3133b58b6248fe4d3714c19f8bcdf9dde4cf
@@ -14,14 +14,14 @@
 - schema_version: 6
 - config_version: 3
 - worktree_state_at_campaign_start: clean tracked worktree; ignored runtime files include `.env`, local SQLite, virtualenv, caches, and local agent/runtime directories.
-- qualification_state: U2-E candidate passed fresh independent audit; local freeze pending.
+- qualification_state: U2-E qualified and frozen locally; U2-F implementation may begin.
 - audit_round: 1
 - deterministic_checks: baseline `pytest` 149 passed; U2-A post-repair `pytest` 166 passed; U2-B post-repair `pytest` 174 passed; U2-C repair round 1 `pytest` 184 passed; U2-D repair round 1 `pytest` 195 passed; U2-E candidate `pytest` 202 passed; `ruff check .` PASS; `mypy --strict src tests` PASS; `python -m compileall -q src tests` PASS; `git diff --check` PASS.
 - live_checks: U2-A live arXiv latest-available smoke blocked by DNS resolution failure for `export.arxiv.org` before and after network escalation. U2-C Streamlit serve smoke blocked by local socket `Operation not permitted` before and after escalation. U2-D disposable live arXiv automatic headless smoke blocked by DNS resolution failure for `export.arxiv.org` before and after network escalation. U2-E Streamlit serve smoke blocked by local socket `Operation not permitted` before and after escalation. U2-E Windows Task Scheduler status smoke blocked by WSL `UtilBindVsockAnyPort` socket failure before and after escalation.
 - schema_config_migration_state: v0.1.0 uses ordered SQLite migrations through schema version 4 and JSON config version 1; U2-A raises JSON config to version 2; U2-B raises SQLite schema to version 5 with additive app-run date metadata defaults that preserve legacy historical run meaning; U2-D candidate raises SQLite schema to version 6 with additive source-date coverage and JSON config to version 3 with automatic catch-up enabled plus a conservative coverage start anchor.
-- qualified_local_commit: pending U2-E freeze commit
-- qualified_local_tag: pending `u2e-qualified`
-- qualified_local_tag_object: pending
+- qualified_local_commit: 536859eb87034dc55740f3b96b2d78d579d79622
+- qualified_local_tag: u2e-qualified
+- qualified_local_tag_object: 0dc19ab9b7b0937c32a0fd7feaf2afe0f20e8f57
 - u2a_qualified_commit: 616d84209c7295de2884d4ae82df0a5bd222d397
 - u2a_qualified_tag: u2a-qualified
 - u2a_qualified_tag_object: 84e22c2eaa2b67c1dc6000fe4cc42e25a7f32e7c
@@ -34,8 +34,11 @@
 - u2d_qualified_commit: 4f98ef637891141f1716d5c017e3e1be4fba3d32
 - u2d_qualified_tag: u2d-qualified
 - u2d_qualified_tag_object: d0866476699fde8067102ea4d9d9643b6cb3d422
+- u2e_qualified_commit: 536859eb87034dc55740f3b96b2d78d579d79622
+- u2e_qualified_tag: u2e-qualified
+- u2e_qualified_tag_object: 0dc19ab9b7b0937c32a0fd7feaf2afe0f20e8f57
 - deferred_minor_optional_findings: U2-A re-auditor OPTIONAL: future hardening could add a separate raw API-row/page scan ceiling for malformed or inconsistent API responses; not required for U2-A after explicit-date repair. U2-C initial auditor OPTIONAL: Sources page still exposes legacy `Lookback hours` and `Max results`; defer demotion/removal to U2-G unless later substages require it earlier.
-- next_permitted_action: create local U2-E qualification commit and annotated tag `u2e-qualified`; then record freeze metadata and proceed to U2-F.
+- next_permitted_action: implement U2-F date-oriented History; run deterministic checks; then launch fresh U2-F Auditor.
 - human_stop_reason: none
 
 ## Recovered v0.1.0 Baseline
@@ -405,3 +408,6 @@ admin compatibility.
   escalation. No schedule was installed or modified in this environment.
 - auditor: `01a00fbe-173c-77c3-9a90-61612617af44`.
 - auditor result: PASS with no BLOCKER/IMPORTANT findings.
+- U2-E freeze commit: `536859eb87034dc55740f3b96b2d78d579d79622`.
+- U2-E freeze tag: `u2e-qualified`.
+- U2-E freeze tag object: `0dc19ab9b7b0937c32a0fd7feaf2afe0f20e8f57`.
