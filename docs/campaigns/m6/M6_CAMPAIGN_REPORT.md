@@ -267,3 +267,11 @@ Audit state:
 - Deferred MINOR/OPTIONAL: Library tag filter options may include tags retained
   only for AI suppression/tombstone history, which can yield no-result filter
   options.
+
+Freeze state:
+
+- Qualified local commit:
+  `7208191b3aa66c21863ec63d21e7d1f60ebe82b0`.
+- Qualified local annotated tag: `m6c-qualified`.
+- Tag object: `bef7ae04a957e539c5a977fc569621eee8d38311`.
+- Tag target: `7208191b3aa66c21863ec63d21e7d1f60ebe82b0`.
