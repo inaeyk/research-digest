@@ -1,8 +1,8 @@
 # v0.2 Campaign State
 
-- campaign_state: U2_B_QUALIFIED_READY_TO_FREEZE
-- current_substage: U2-B date-native pipeline and run semantics
-- current_git_head: 066da8d4e58586dbc25e582afe4ff55a9abc2e54
+- campaign_state: U2_B_QUALIFIED_FROZEN
+- current_substage: U2-C Today date-selection UI
+- current_git_head: b258c9be0ba1bfe67a9b5fac1ddad96429ac64a1
 - current_branch: feature/v0.2-date-native-scheduler-ui
 - released_baseline_tag: v0.1.0
 - released_baseline_commit: 905f3133b58b6248fe4d3714c19f8bcdf9dde4cf
@@ -14,16 +14,19 @@
 - schema_version: 5
 - config_version: 2
 - worktree_state_at_campaign_start: clean tracked worktree; ignored runtime files include `.env`, local SQLite, virtualenv, caches, and local agent/runtime directories.
-- qualification_state: U2-B PASS after repair round 1 and fresh re-audit.
+- qualification_state: U2-B PASS after repair round 1 and fresh re-audit; U2-B frozen locally.
 - audit_round: 1
 - deterministic_checks: baseline `pytest` 149 passed; U2-A post-repair `pytest` 166 passed; U2-B post-repair `pytest` 174 passed; `ruff check .` PASS; `mypy --strict src tests` PASS; `python -m compileall -q src tests` PASS; `git diff --check` PASS. Fresh re-auditor independently ran equivalent deterministic checks with PASS.
 - live_checks: U2-A live arXiv latest-available smoke attempted with bounded timeout; blocked by DNS resolution failure for `export.arxiv.org` before and after network escalation.
 - schema_config_migration_state: v0.1.0 uses ordered SQLite migrations through schema version 4 and JSON config version 1; U2-A raises JSON config to version 2; U2-B candidate raises SQLite schema to version 5 with additive app-run date metadata defaults that preserve legacy historical run meaning.
-- qualified_local_commit: 616d84209c7295de2884d4ae82df0a5bd222d397
-- qualified_local_tag: u2a-qualified
-- qualified_local_tag_object: 84e22c2eaa2b67c1dc6000fe4cc42e25a7f32e7c
+- qualified_local_commit: b258c9be0ba1bfe67a9b5fac1ddad96429ac64a1
+- qualified_local_tag: u2b-qualified
+- qualified_local_tag_object: 1c7ab3dbf0ef187a6214c5106034731294abd058
+- u2a_qualified_commit: 616d84209c7295de2884d4ae82df0a5bd222d397
+- u2a_qualified_tag: u2a-qualified
+- u2a_qualified_tag_object: 84e22c2eaa2b67c1dc6000fe4cc42e25a7f32e7c
 - deferred_minor_optional_findings: U2-A re-auditor OPTIONAL: future hardening could add a separate raw API-row/page scan ceiling for malformed or inconsistent API responses; not required for U2-A after explicit-date repair.
-- next_permitted_action: locally commit U2-B and create annotated tag `u2b-qualified`, then begin U2-C planning/implementation.
+- next_permitted_action: begin U2-C planning/implementation.
 - human_stop_reason: none
 
 ## Recovered v0.1.0 Baseline

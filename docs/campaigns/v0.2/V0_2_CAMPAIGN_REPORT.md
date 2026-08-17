@@ -196,3 +196,9 @@ Fresh U2-B re-audit:
   propagation, schema v5 migration, legacy defaults, immutable snapshots,
   History/status/export metadata, cache reuse, partial retrieval,
   failure/retry, profile semantic invalidation, and run locking.
+
+U2-B freeze:
+
+- qualified commit: `b258c9be0ba1bfe67a9b5fac1ddad96429ac64a1`.
+- qualified tag: `u2b-qualified`.
+- qualified tag object: `1c7ab3dbf0ef187a6214c5106034731294abd058`.
