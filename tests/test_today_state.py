@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 from research_digest.calibration import build_calibration_summary
@@ -12,14 +12,19 @@ from research_digest.models import (
     AnalysisResult,
     Article,
     ArxivSourceConfig,
+    DateSelection,
     DigestItem,
     DigestResult,
     InterestProfile,
+    RunOrigin,
     profile_semantic_fingerprint,
 )
 from research_digest.ui.pages.today import (
+    _coerce_date_range_input,
+    coerce_date_selection_mode,
     coerce_digest_view,
     digest_input_signature,
+    digest_period_label,
     digest_view_counts,
     digest_view_items,
     digest_view_label,
@@ -27,6 +32,8 @@ from research_digest.ui.pages.today import (
     load_feedback_by_article_id,
     persist_feedback_selection,
     profile_fingerprint,
+    resolve_latest_available_source_date,
+    result_period_label,
     source_config_fingerprint,
 )
 
@@ -73,6 +80,16 @@ def _profile(
     )
 
 
+class LatestDateSource:
+    def __init__(self, latest_date: date | None) -> None:
+        self.latest_date = latest_date
+        self.configs: list[ArxivSourceConfig] = []
+
+    def resolve_latest_available_date(self, config: ArxivSourceConfig) -> date | None:
+        self.configs.append(config)
+        return self.latest_date
+
+
 def _digest_result() -> DigestResult:
     profile = _profile()
     source_config = ArxivSourceConfig(categories=["hep-th"], lookback_hours=24, max_results=10)
@@ -109,6 +126,10 @@ def _digest_result() -> DigestResult:
         items=items,
         started_at=datetime(2026, 8, 14, 11, 40, tzinfo=UTC),
         completed_at=datetime(2026, 8, 14, 11, 42, tzinfo=UTC),
+        run_origin=RunOrigin.MANUAL,
+        date_selection=DateSelection.single_date(date(2026, 8, 14)),
+        requested_source_dates=(date(2026, 8, 14),),
+        covered_source_dates=(date(2026, 8, 14),),
     )
 
 
@@ -127,7 +148,32 @@ class TodayStateTests(unittest.TestCase):
             max_results=50,
         )
 
-        self.assertEqual(source_config_fingerprint(first), source_config_fingerprint(second))
+        selection = DateSelection.latest_available()
+
+        self.assertEqual(
+            source_config_fingerprint(first, selection),
+            source_config_fingerprint(second, selection),
+        )
+
+    def test_source_config_fingerprint_ignores_legacy_lookback_and_max_results(self) -> None:
+        first = ArxivSourceConfig(
+            enabled=True,
+            categories=["hep-th"],
+            lookback_hours=24,
+            max_results=10,
+        )
+        second = ArxivSourceConfig(
+            enabled=True,
+            categories=["hep-th"],
+            lookback_hours=72,
+            max_results=100,
+        )
+        selection = DateSelection.single_date(date(2026, 8, 14))
+
+        self.assertEqual(
+            source_config_fingerprint(first, selection),
+            source_config_fingerprint(second, selection),
+        )
 
     def test_profile_fingerprint_is_deterministic_for_semantically_identical_profiles(
         self,
@@ -147,10 +193,11 @@ class TodayStateTests(unittest.TestCase):
         same = ArxivSourceConfig(categories=["hep-th"], lookback_hours=24, max_results=10)
         first = _profile()
         second = _profile()
+        selection = DateSelection.latest_available()
 
         self.assertEqual(
-            digest_input_signature(first, source),
-            digest_input_signature(second, same),
+            digest_input_signature(first, source, selection),
+            digest_input_signature(second, same, selection),
         )
 
     def test_digest_input_signature_changes_when_threshold_is_edited_in_place(self) -> None:
@@ -159,8 +206,16 @@ class TodayStateTests(unittest.TestCase):
         changed = _profile(threshold=0.7)
 
         self.assertNotEqual(
-            digest_input_signature(original, source),
-            digest_input_signature(changed, source),
+            digest_input_signature(
+                original,
+                source,
+                DateSelection.single_date(date(2026, 8, 14)),
+            ),
+            digest_input_signature(
+                changed,
+                source,
+                DateSelection.single_date(date(2026, 8, 14)),
+            ),
         )
 
     def test_digest_input_signature_changes_when_description_is_edited_in_place(self) -> None:
@@ -169,8 +224,8 @@ class TodayStateTests(unittest.TestCase):
         changed = _profile(description="Condensed matter dualities.")
 
         self.assertNotEqual(
-            digest_input_signature(original, source),
-            digest_input_signature(changed, source),
+            digest_input_signature(original, source, DateSelection.latest_available()),
+            digest_input_signature(changed, source, DateSelection.latest_available()),
         )
 
     def test_digest_input_signature_changes_when_prompt_visible_name_changes(self) -> None:
@@ -179,8 +234,8 @@ class TodayStateTests(unittest.TestCase):
         changed = _profile(name="Quantum gravity")
 
         self.assertNotEqual(
-            digest_input_signature(original, source),
-            digest_input_signature(changed, source),
+            digest_input_signature(original, source, DateSelection.latest_available()),
+            digest_input_signature(changed, source, DateSelection.latest_available()),
         )
 
     def test_digest_input_signature_changes_with_profile_id_or_source_config(self) -> None:
@@ -194,36 +249,51 @@ class TodayStateTests(unittest.TestCase):
         changed_profile_id = _profile(profile_id=2)
 
         self.assertNotEqual(
-            digest_input_signature(profile, source),
-            digest_input_signature(changed_profile_id, source),
+            digest_input_signature(profile, source, DateSelection.latest_available()),
+            digest_input_signature(changed_profile_id, source, DateSelection.latest_available()),
         )
         self.assertNotEqual(
-            digest_input_signature(profile, source),
-            digest_input_signature(profile, changed_source),
+            digest_input_signature(profile, source, DateSelection.latest_available()),
+            digest_input_signature(profile, changed_source, DateSelection.latest_available()),
+        )
+        self.assertNotEqual(
+            digest_input_signature(profile, source, DateSelection.single_date(date(2026, 8, 14))),
+            digest_input_signature(profile, source, DateSelection.single_date(date(2026, 8, 15))),
         )
 
     def test_digest_result_current_check_rejects_stale_signature(self) -> None:
         result = _digest_result()
-        current = digest_input_signature(result.profile, result.source_config)
+        selection = result.date_selection or DateSelection.latest_available()
+        current = digest_input_signature(result.profile, result.source_config, selection)
         changed_profile_id = digest_input_signature(
             _profile(profile_id=2),
             result.source_config,
+            selection,
         )
         changed_threshold = digest_input_signature(
             _profile(threshold=0.7),
             result.source_config,
+            selection,
         )
         changed_description = digest_input_signature(
             _profile(description="Condensed matter dualities."),
             result.source_config,
+            selection,
         )
         changed_name = digest_input_signature(
             _profile(name="Quantum gravity"),
             result.source_config,
+            selection,
         )
         changed_source = digest_input_signature(
             result.profile,
             ArxivSourceConfig(categories=["gr-qc"], lookback_hours=24, max_results=10),
+            selection,
+        )
+        changed_selection = digest_input_signature(
+            result.profile,
+            result.source_config,
+            DateSelection.single_date(date(2026, 8, 15)),
         )
 
         self.assertTrue(is_current_digest_result(result, current, current))
@@ -232,7 +302,82 @@ class TodayStateTests(unittest.TestCase):
         self.assertFalse(is_current_digest_result(result, changed_description, current))
         self.assertFalse(is_current_digest_result(result, changed_name, current))
         self.assertFalse(is_current_digest_result(result, changed_source, current))
+        self.assertFalse(is_current_digest_result(result, changed_selection, current))
         self.assertFalse(is_current_digest_result(object(), current, current))
+
+    def test_digest_period_labels_are_date_oriented(self) -> None:
+        self.assertEqual(
+            digest_period_label(DateSelection.latest_available()),
+            "Latest available source date",
+        )
+        self.assertEqual(
+            digest_period_label(DateSelection.single_date(date(2026, 8, 17))),
+            "Aug 17, 2026",
+        )
+        self.assertEqual(
+            digest_period_label(DateSelection.date_range(date(2026, 8, 14), date(2026, 8, 17))),
+            "Aug 14, 2026 to Aug 17, 2026",
+        )
+        self.assertEqual(
+            digest_period_label(
+                DateSelection.explicit_dates([date(2026, 8, 12), date(2026, 8, 17)])
+            ),
+            "Aug 12, 2026, Aug 17, 2026",
+        )
+
+    def test_result_period_label_resolves_latest_available_run_dates(self) -> None:
+        result = DigestResult(
+            run_id=24,
+            profile=_profile(),
+            source_config=ArxivSourceConfig(categories=["hep-th"]),
+            retrieved_count=0,
+            stored_count=0,
+            preselected_count=0,
+            skipped_analysis_count=0,
+            analyzed_count=0,
+            new_analysis_count=0,
+            reused_analysis_count=0,
+            above_threshold_count=0,
+            analysis_available=True,
+            items=[],
+            started_at=datetime(2026, 8, 17, tzinfo=UTC),
+            completed_at=datetime(2026, 8, 17, tzinfo=UTC),
+            run_origin=RunOrigin.MANUAL,
+            date_selection=DateSelection.latest_available(),
+            requested_source_dates=(date(2026, 8, 17),),
+            covered_source_dates=(date(2026, 8, 17),),
+        )
+
+        self.assertEqual(result_period_label(result), "Aug 17, 2026")
+
+    def test_latest_available_source_date_uses_source_resolver(self) -> None:
+        config = ArxivSourceConfig(categories=["hep-th"])
+        source = LatestDateSource(date(2026, 8, 16))
+
+        self.assertEqual(resolve_latest_available_source_date(source, config), date(2026, 8, 16))
+        self.assertEqual(source.configs, [config])
+
+    def test_latest_available_source_date_allows_no_available_material(self) -> None:
+        config = ArxivSourceConfig(categories=["hep-th"])
+
+        self.assertIsNone(resolve_latest_available_source_date(LatestDateSource(None), config))
+
+    def test_incomplete_date_range_input_is_pending_not_an_exception(self) -> None:
+        self.assertIsNone(_coerce_date_range_input(()))
+        self.assertIsNone(_coerce_date_range_input((date(2026, 8, 14),)))
+        self.assertIsNone(_coerce_date_range_input([]))
+        self.assertIsNone(_coerce_date_range_input([date(2026, 8, 14)]))
+
+    def test_complete_date_range_input_accepts_tuple_or_list(self) -> None:
+        start = date(2026, 8, 14)
+        end = date(2026, 8, 17)
+
+        self.assertEqual(_coerce_date_range_input((start, end)), (start, end))
+        self.assertEqual(_coerce_date_range_input([start, end]), (start, end))
+
+    def test_coerce_date_selection_mode_defaults_to_latest(self) -> None:
+        self.assertEqual(coerce_date_selection_mode("date_range"), "date_range")
+        self.assertEqual(coerce_date_selection_mode("other"), "latest_available")
 
     def test_digest_view_counts_labels_and_sorted_items(self) -> None:
         result = _digest_result()

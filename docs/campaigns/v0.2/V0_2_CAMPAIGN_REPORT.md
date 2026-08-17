@@ -202,3 +202,83 @@ U2-B freeze:
 - qualified commit: `b258c9be0ba1bfe67a9b5fac1ddad96429ac64a1`.
 - qualified tag: `u2b-qualified`.
 - qualified tag object: `1c7ab3dbf0ef187a6214c5106034731294abd058`.
+
+## U2-C Candidate
+
+Implementation summary:
+
+- Replaced the Today workflow caption centered on lookback/max-results with
+  UTC source-date wording.
+- Added Today date-selection modes: latest available, single date, date range,
+  and selected dates.
+- Added visible digest-period labels before starting a run and after a run
+  completes.
+- Today manual runs now call the shared service with `DateSelection` and
+  `RunOrigin.MANUAL`.
+- Added incomplete retrieval warning support for safety-capped/partial date
+  retrievals.
+- Updated Today state tests so date selection, not legacy lookback/max-results,
+  drives normal run signatures.
+
+Candidate deterministic verification:
+
+- `pytest`: 178 passed.
+- `ruff check .`: PASS.
+- `mypy --strict src tests`: PASS.
+- `python -m compileall -q src tests`: PASS.
+- `git diff --check`: PASS.
+
+Live UI smoke:
+
+- `python -m research_digest.cli serve --port 18611`: failed with local socket
+  `[Errno 1] Operation not permitted`.
+- Same command after escalation: same result.
+
+Audit status: fresh independent U2-C Auditor pending.
+
+Initial independent U2-C Auditor:
+
+- Auditor `01a00f9f-f81e-72f3-b9d6-13b5a4389290` returned FAIL with two
+  IMPORTANT findings.
+- Finding: latest-available mode did not show the concrete source date before
+  starting a run.
+- Finding: incomplete Streamlit date-range input state could raise during
+  normal UI interaction.
+- MINOR/OPTIONAL: the Sources page still exposes legacy `Lookback hours` and
+  `Max results`; defer ordinary-user demotion/removal to U2-G unless a later
+  substage requires earlier cleanup.
+
+Repair round 1:
+
+- Added a source-level `LatestAvailableDateResolver` protocol.
+- Added `ArxivSource.resolve_latest_available_date()` using the same official
+  arXiv API sort/source-date semantics as date-native retrieval.
+- Today resolves latest available to a concrete single-date selection before
+  enabling Run digest and displays that resolved date in the digest period.
+- Incomplete date ranges now produce a pending state with a disabled Run digest
+  button instead of a render exception.
+- Date formatting no longer depends on GNU-only `strftime` day flags.
+
+Post-repair verification:
+
+- `pytest`: 184 passed.
+- `ruff check .`: PASS.
+- `mypy --strict src tests`: PASS.
+- `python -m compileall -q src tests`: PASS.
+- `git diff --check`: PASS.
+
+Fresh U2-C re-audit:
+
+- Auditor `01a00fa5-7be2-7203-a7cf-ec19a8981f2c` returned PASS.
+- No BLOCKER or IMPORTANT findings remain.
+- The auditor confirmed date modes, exact pre-run date visibility for latest
+  available, source-level latest-date resolution, pending/disabled incomplete
+  range behavior, shared service use with `DateSelection` and
+  `RunOrigin.MANUAL`, result period/incomplete warnings, and preservation of
+  existing result/feedback controls.
+
+U2-C freeze:
+
+- qualified commit: pending local freeze commit.
+- qualified tag: pending `u2c-qualified`.
+- qualified tag object: pending.

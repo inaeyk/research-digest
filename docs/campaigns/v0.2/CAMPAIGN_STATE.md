@@ -1,8 +1,8 @@
 # v0.2 Campaign State
 
-- campaign_state: U2_B_QUALIFIED_FROZEN
+- campaign_state: U2_C_QUALIFIED_AWAITING_FREEZE
 - current_substage: U2-C Today date-selection UI
-- current_git_head: b258c9be0ba1bfe67a9b5fac1ddad96429ac64a1
+- current_git_head: 7c408b2028de1c66c6627454273d2725a33dab16
 - current_branch: feature/v0.2-date-native-scheduler-ui
 - released_baseline_tag: v0.1.0
 - released_baseline_commit: 905f3133b58b6248fe4d3714c19f8bcdf9dde4cf
@@ -14,19 +14,19 @@
 - schema_version: 5
 - config_version: 2
 - worktree_state_at_campaign_start: clean tracked worktree; ignored runtime files include `.env`, local SQLite, virtualenv, caches, and local agent/runtime directories.
-- qualification_state: U2-B PASS after repair round 1 and fresh re-audit; U2-B frozen locally.
-- audit_round: 1
-- deterministic_checks: baseline `pytest` 149 passed; U2-A post-repair `pytest` 166 passed; U2-B post-repair `pytest` 174 passed; `ruff check .` PASS; `mypy --strict src tests` PASS; `python -m compileall -q src tests` PASS; `git diff --check` PASS. Fresh re-auditor independently ran equivalent deterministic checks with PASS.
-- live_checks: U2-A live arXiv latest-available smoke attempted with bounded timeout; blocked by DNS resolution failure for `export.arxiv.org` before and after network escalation.
+- qualification_state: U2-C repair round 1 passed fresh independent re-audit; local freeze pending.
+- audit_round: 2
+- deterministic_checks: baseline `pytest` 149 passed; U2-A post-repair `pytest` 166 passed; U2-B post-repair `pytest` 174 passed; U2-C repair round 1 `pytest` 184 passed; `ruff check .` PASS; `mypy --strict src tests` PASS; `python -m compileall -q src tests` PASS; `git diff --check` PASS.
+- live_checks: U2-A live arXiv latest-available smoke blocked by DNS resolution failure for `export.arxiv.org` before and after network escalation. U2-C Streamlit serve smoke blocked by local socket `Operation not permitted` before and after escalation.
 - schema_config_migration_state: v0.1.0 uses ordered SQLite migrations through schema version 4 and JSON config version 1; U2-A raises JSON config to version 2; U2-B candidate raises SQLite schema to version 5 with additive app-run date metadata defaults that preserve legacy historical run meaning.
-- qualified_local_commit: b258c9be0ba1bfe67a9b5fac1ddad96429ac64a1
-- qualified_local_tag: u2b-qualified
-- qualified_local_tag_object: 1c7ab3dbf0ef187a6214c5106034731294abd058
+- qualified_local_commit: pending U2-C freeze commit
+- qualified_local_tag: pending `u2c-qualified`
+- qualified_local_tag_object: pending
 - u2a_qualified_commit: 616d84209c7295de2884d4ae82df0a5bd222d397
 - u2a_qualified_tag: u2a-qualified
 - u2a_qualified_tag_object: 84e22c2eaa2b67c1dc6000fe4cc42e25a7f32e7c
-- deferred_minor_optional_findings: U2-A re-auditor OPTIONAL: future hardening could add a separate raw API-row/page scan ceiling for malformed or inconsistent API responses; not required for U2-A after explicit-date repair.
-- next_permitted_action: begin U2-C planning/implementation.
+- deferred_minor_optional_findings: U2-A re-auditor OPTIONAL: future hardening could add a separate raw API-row/page scan ceiling for malformed or inconsistent API responses; not required for U2-A after explicit-date repair. U2-C initial auditor OPTIONAL: Sources page still exposes legacy `Lookback hours` and `Max results`; defer demotion/removal to U2-G unless later substages require it earlier.
+- next_permitted_action: create local U2-C qualification commit and annotated tag `u2c-qualified`; then record freeze metadata and proceed to U2-D.
 - human_stop_reason: none
 
 ## Recovered v0.1.0 Baseline
@@ -250,3 +250,46 @@ admin compatibility.
 - re-auditor result: PASS with no BLOCKER/IMPORTANT findings.
 - re-auditor checks: `pytest` 174 passed; `ruff check .` PASS; strict
   `mypy` PASS; `compileall` PASS; `git diff --check` PASS.
+
+## U2-C Candidate Log
+
+- implementation: Today page now uses date-oriented manual run controls:
+  latest available, single date, date range, and selected dates.
+- normal UI no longer presents arXiv lookback/max-results as primary digest
+  controls on Today.
+- selected date periods are shown before the run and in the completed-run
+  confirmation.
+- manual Today runs call the shared service with `DateSelection` and
+  `RunOrigin.MANUAL`.
+- incomplete retrieval warning displays the incomplete dates, retrieved count,
+  and safety limit when available.
+- source dates are labeled as UTC in Today source status.
+- deterministic verification: `pytest` 178 passed; `ruff check .` PASS;
+  `mypy --strict src tests` PASS; `python -m compileall -q src tests` PASS;
+  `git diff --check` PASS.
+- live UI smoke: `python -m research_digest.cli serve --port 18611` failed with
+  `[Errno 1] Operation not permitted` before and after escalation.
+- initial auditor: `01a00f9f-f81e-72f3-b9d6-13b5a4389290`.
+- initial result: FAIL with two IMPORTANT findings.
+- IMPORTANT: Latest available mode displayed only the generic phrase "Latest
+  available source date" before run start, while the concrete latest source
+  date was resolved inside retrieval.
+- IMPORTANT: Streamlit date-range input can transiently return zero or one
+  selected dates; the candidate raised during render instead of treating that
+  as pending UI state.
+- repair round 1: added a `LatestAvailableDateResolver` source protocol,
+  exposed arXiv `resolve_latest_available_date()` using the same official API
+  ordering/source-date semantics, and Today now resolves latest to a concrete
+  single-date selection before enabling Run digest.
+- repair round 1: incomplete range selections now render a pending period
+  label, show a warning, and disable Run digest until both dates are selected.
+- repair round 1: added deterministic tests for latest resolver use, no
+  available latest material, tuple/list range inputs, and incomplete range
+  inputs.
+- repair round 1 deterministic verification: `pytest` 184 passed; `ruff check .`
+  PASS; `mypy --strict src tests` PASS; `python -m compileall -q src tests`
+  PASS; `git diff --check` PASS.
+- re-auditor: `01a00fa5-7be2-7203-a7cf-ec19a8981f2c`.
+- re-auditor result: PASS with no BLOCKER/IMPORTANT findings.
+- re-auditor checks: `pytest` 184 passed; `ruff check .` PASS; strict
+  `mypy` PASS; `git diff --check` PASS.

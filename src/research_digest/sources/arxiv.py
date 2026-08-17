@@ -152,14 +152,11 @@ class ArxivSource:
             safety_limit_reached=safety_limit_reached,
         )
 
-    def _fetch_latest_available_date(
-        self,
-        config: ArxivSourceConfig,
-        selection: DateSelection,
-        *,
-        page_size: int,
-        safety_limit: int,
-    ) -> ArxivDateRetrievalResult:
+    def resolve_latest_available_date(self, config: ArxivSourceConfig) -> date | None:
+        """Return the latest UTC source date with eligible arXiv material."""
+
+        if not config.enabled:
+            return None
         first_page = self._fetch_page(
             build_arxiv_date_url(
                 config,
@@ -170,6 +167,19 @@ class ArxivSource:
             )
         )
         if not first_page:
+            return None
+        return source_date_from_datetime(first_page[0].published_at)
+
+    def _fetch_latest_available_date(
+        self,
+        config: ArxivSourceConfig,
+        selection: DateSelection,
+        *,
+        page_size: int,
+        safety_limit: int,
+    ) -> ArxivDateRetrievalResult:
+        latest_date = self.resolve_latest_available_date(config)
+        if latest_date is None:
             return ArxivDateRetrievalResult(
                 selection=selection,
                 articles=(),
@@ -182,7 +192,6 @@ class ArxivSource:
                 safety_limit=safety_limit,
                 safety_limit_reached=False,
             )
-        latest_date = source_date_from_datetime(first_page[0].published_at)
         articles, safety_limit_reached = self._fetch_dates(
             config,
             requested_dates=(latest_date,),

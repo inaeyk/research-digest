@@ -196,6 +196,23 @@ class ArxivTests(unittest.TestCase):
         self.assertEqual(result.covered_dates, (date(2026, 8, 17),))
         self.assertEqual(result.retrieved_count, 1)
 
+    def test_resolve_latest_available_date_uses_source_material(self) -> None:
+        latest = article("2608.latest", datetime(2026, 8, 16, 23, 30, tzinfo=UTC))
+        source = PagingArxivSource([[latest]])
+
+        resolved = source.resolve_latest_available_date(ArxivSourceConfig(categories=["hep-th"]))
+
+        self.assertEqual(resolved, date(2026, 8, 16))
+        params = urllib.parse.parse_qs(urllib.parse.urlparse(source.urls[0]).query)
+        self.assertEqual(params["max_results"], ["1"])
+        self.assertEqual(params["sortBy"], ["submittedDate"])
+        self.assertEqual(params["sortOrder"], ["descending"])
+
+    def test_resolve_latest_available_date_returns_none_when_no_material_exists(self) -> None:
+        source = PagingArxivSource([[]])
+
+        self.assertIsNone(source.resolve_latest_available_date(ArxivSourceConfig(categories=["hep-th"])))
+
     def test_pagination_fetches_until_exhausted(self) -> None:
         source = PagingArxivSource(
             [
