@@ -18,14 +18,17 @@ from research_digest.models import (
     Article,
     ArticleFeedback,
     ArxivSourceConfig,
+    ConnectionOrigin,
     DateSelection,
     FeedbackLabel,
     InterestProfile,
     LibraryCollection,
     LibraryCollectionMembership,
+    LibraryConnection,
     LibraryEntry,
     LibraryNote,
     LibraryRelevanceContext,
+    LibrarySearchDocument,
     LibraryTag,
     LibraryTagAssignment,
     ReadingPriority,
@@ -39,7 +42,7 @@ from research_digest.models import (
 SOURCE_ARXIV = "arxiv"
 SCHEMA_VERSION_KEY = "schema_version"
 LAST_MIGRATION_BACKUP_KEY = "last_migration_backup_path"
-CURRENT_SCHEMA_VERSION = 11
+CURRENT_SCHEMA_VERSION = 12
 APP_RUN_STARTING = "STARTING"
 APP_RUN_RUNNING = "RUNNING"
 APP_RUN_COMPLETED = "COMPLETED"
@@ -805,6 +808,208 @@ class Database:
                 params,
             ).fetchall()
         return [_library_collection_membership_from_row(row) for row in rows]
+
+    def upsert_library_search_document(
+        self,
+        *,
+        article_id: int,
+        document_text: str,
+    ) -> LibrarySearchDocument:
+        if article_id <= 0:
+            raise ValueError("article id must be positive")
+        text = document_text.strip()
+        now = datetime_to_db(utc_now())
+        with self._connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO library_search_documents (article_id, document_text, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(article_id) DO UPDATE SET
+                    document_text = excluded.document_text,
+                    updated_at = excluded.updated_at
+                """,
+                (article_id, text, now),
+            )
+            document = _get_library_search_document(conn, article_id)
+        if document is None:
+            raise RuntimeError("failed to load library search document")
+        return document
+
+    def get_library_search_document(self, article_id: int) -> LibrarySearchDocument | None:
+        if article_id <= 0:
+            raise ValueError("article id must be positive")
+        with self._connection() as conn:
+            return _get_library_search_document(conn, article_id)
+
+    def delete_library_search_document(self, article_id: int) -> None:
+        if article_id <= 0:
+            raise ValueError("article id must be positive")
+        with self._connection() as conn:
+            conn.execute(
+                "DELETE FROM library_search_documents WHERE article_id = ?",
+                (article_id,),
+            )
+
+    def prune_library_search_documents(self, saved_article_ids: Iterable[int]) -> None:
+        ids = sorted({int(article_id) for article_id in saved_article_ids if int(article_id) > 0})
+        with self._connection() as conn:
+            if not ids:
+                conn.execute("DELETE FROM library_search_documents")
+                return
+            placeholders = ", ".join("?" for _ in ids)
+            conn.execute(
+                f"""
+                DELETE FROM library_search_documents
+                WHERE article_id NOT IN ({placeholders})
+                """,
+                tuple(ids),
+            )
+
+    def search_library_document_article_ids(self, query: str) -> list[int]:
+        needle = query.strip().casefold()
+        if not needle:
+            return []
+        pattern = f"%{_escape_like(needle)}%"
+        with self._connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT docs.article_id
+                FROM library_search_documents AS docs
+                JOIN library_articles ON library_articles.article_id = docs.article_id
+                WHERE library_articles.saved = 1
+                    AND docs.document_text LIKE ? ESCAPE '\\'
+                ORDER BY library_articles.saved_at DESC, docs.article_id ASC
+                """,
+                (pattern,),
+            ).fetchall()
+        return [int(row["article_id"]) for row in rows]
+
+    def upsert_library_connection(
+        self,
+        *,
+        article_id_a: int,
+        article_id_b: int,
+        relation_label: str,
+        rationale: str,
+        provenance: dict[str, object],
+        confidence: float | None = None,
+        origin: ConnectionOrigin = ConnectionOrigin.AI,
+        revive: bool = False,
+    ) -> LibraryConnection:
+        first, second = _canonical_article_pair(article_id_a, article_id_b)
+        label = relation_label.strip()
+        reason = rationale.strip()
+        if not label:
+            raise ValueError("connection relation label is required")
+        if not reason:
+            raise ValueError("connection rationale is required")
+        if confidence is not None and not 0 <= confidence <= 1:
+            raise ValueError("connection confidence must be between 0 and 1")
+        generated_at = datetime_to_db(utc_now())
+        provenance_json = json.dumps(provenance, sort_keys=True)
+        with self._connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO library_article_connections (
+                    article_id_a, article_id_b, relation_label, rationale, origin,
+                    provenance_json, confidence, generated_at, dismissed_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                ON CONFLICT(article_id_a, article_id_b) DO UPDATE SET
+                    relation_label = excluded.relation_label,
+                    rationale = excluded.rationale,
+                    origin = excluded.origin,
+                    provenance_json = excluded.provenance_json,
+                    confidence = excluded.confidence,
+                    generated_at = excluded.generated_at,
+                    dismissed_at = CASE
+                        WHEN ? THEN NULL
+                        ELSE library_article_connections.dismissed_at
+                    END
+                """,
+                (
+                    first,
+                    second,
+                    label,
+                    reason,
+                    ConnectionOrigin(origin).value,
+                    provenance_json,
+                    confidence,
+                    generated_at,
+                    int(revive),
+                ),
+            )
+            connection = _get_library_connection_by_pair(conn, first, second)
+        if connection is None:
+            raise RuntimeError("failed to load library connection")
+        return connection
+
+    def dismiss_library_connection(
+        self,
+        *,
+        article_id_a: int,
+        article_id_b: int,
+    ) -> None:
+        first, second = _canonical_article_pair(article_id_a, article_id_b)
+        with self._connection() as conn:
+            conn.execute(
+                """
+                UPDATE library_article_connections
+                SET dismissed_at = ?
+                WHERE article_id_a = ? AND article_id_b = ?
+                """,
+                (datetime_to_db(utc_now()), first, second),
+            )
+
+    def get_library_connection_by_pair(
+        self,
+        article_id_a: int,
+        article_id_b: int,
+    ) -> LibraryConnection | None:
+        first, second = _canonical_article_pair(article_id_a, article_id_b)
+        with self._connection() as conn:
+            return _get_library_connection_by_pair(conn, first, second)
+
+    def list_library_connections_for_article(
+        self,
+        article_id: int,
+        *,
+        include_dismissed: bool = False,
+    ) -> list[LibraryConnection]:
+        if article_id <= 0:
+            raise ValueError("article id must be positive")
+        where = "(article_id_a = ? OR article_id_b = ?)"
+        params: list[object] = [article_id, article_id]
+        if not include_dismissed:
+            where += " AND dismissed_at IS NULL"
+        with self._connection() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT *
+                FROM library_article_connections
+                WHERE {where}
+                ORDER BY generated_at DESC, id DESC
+                """,
+                tuple(params),
+            ).fetchall()
+        return [_library_connection_from_row(row) for row in rows]
+
+    def list_library_connections(
+        self,
+        *,
+        include_dismissed: bool = True,
+    ) -> list[LibraryConnection]:
+        where = "" if include_dismissed else "WHERE dismissed_at IS NULL"
+        with self._connection() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT *
+                FROM library_article_connections
+                {where}
+                ORDER BY article_id_a ASC, article_id_b ASC
+                """
+            ).fetchall()
+        return [_library_connection_from_row(row) for row in rows]
 
     def count_articles(self) -> int:
         with self._connection() as conn:
@@ -1689,6 +1894,48 @@ def _migration_library_notes_collections(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migration_library_search_connections(conn: sqlite3.Connection) -> None:
+    _execute_schema_statements(
+        conn,
+        (
+            """
+            CREATE TABLE IF NOT EXISTS library_search_documents (
+                article_id INTEGER PRIMARY KEY,
+                document_text TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(article_id) REFERENCES articles(id) ON DELETE CASCADE
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS library_article_connections (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                article_id_a INTEGER NOT NULL,
+                article_id_b INTEGER NOT NULL,
+                relation_label TEXT NOT NULL,
+                rationale TEXT NOT NULL,
+                origin TEXT NOT NULL,
+                provenance_json TEXT NOT NULL,
+                confidence REAL,
+                generated_at TEXT NOT NULL,
+                dismissed_at TEXT,
+                CHECK(article_id_a < article_id_b),
+                UNIQUE(article_id_a, article_id_b),
+                FOREIGN KEY(article_id_a) REFERENCES articles(id) ON DELETE CASCADE,
+                FOREIGN KEY(article_id_b) REFERENCES articles(id) ON DELETE CASCADE
+            )
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_library_connections_article_a
+            ON library_article_connections(article_id_a, dismissed_at)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_library_connections_article_b
+            ON library_article_connections(article_id_b, dismissed_at)
+            """,
+        ),
+    )
+
+
 MIGRATIONS: Sequence[SchemaMigration] = (
     SchemaMigration(1, "core m1/m2 tables", _migration_core_tables),
     SchemaMigration(2, "profile-fingerprinted relevance analyses", _migration_profile_fingerprints),
@@ -1708,6 +1955,11 @@ MIGRATIONS: Sequence[SchemaMigration] = (
         11,
         "library notes and collections",
         _migration_library_notes_collections,
+    ),
+    SchemaMigration(
+        12,
+        "library search and connections",
+        _migration_library_search_connections,
     ),
 )
 
@@ -2070,6 +2322,33 @@ def _get_library_collection_membership(
     return _library_collection_membership_from_row(row) if row is not None else None
 
 
+def _get_library_search_document(
+    conn: sqlite3.Connection,
+    article_id: int,
+) -> LibrarySearchDocument | None:
+    row = conn.execute(
+        "SELECT * FROM library_search_documents WHERE article_id = ?",
+        (article_id,),
+    ).fetchone()
+    return _library_search_document_from_row(row) if row is not None else None
+
+
+def _get_library_connection_by_pair(
+    conn: sqlite3.Connection,
+    article_id_a: int,
+    article_id_b: int,
+) -> LibraryConnection | None:
+    row = conn.execute(
+        """
+        SELECT *
+        FROM library_article_connections
+        WHERE article_id_a = ? AND article_id_b = ?
+        """,
+        (article_id_a, article_id_b),
+    ).fetchone()
+    return _library_connection_from_row(row) if row is not None else None
+
+
 def _get_article_feedback(
     conn: sqlite3.Connection,
     *,
@@ -2102,6 +2381,20 @@ def _lastrowid(cursor: sqlite3.Cursor) -> int:
     if rowid is None:
         raise RuntimeError("sqlite insert did not return a row id")
     return rowid
+
+
+def _canonical_article_pair(article_id_a: int, article_id_b: int) -> tuple[int, int]:
+    if article_id_a <= 0 or article_id_b <= 0:
+        raise ValueError("article ids must be positive")
+    if article_id_a == article_id_b:
+        raise ValueError("library connection cannot link an article to itself")
+    if article_id_a < article_id_b:
+        return article_id_a, article_id_b
+    return article_id_b, article_id_a
+
+
+def _escape_like(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def _article_values(article: Article) -> tuple[Any, ...]:
@@ -2239,6 +2532,34 @@ def _library_collection_membership_from_row(
         collection_id=int(row["collection_id"]),
         article_id=int(row["article_id"]),
         added_at=datetime_from_db(str(row["added_at"])),
+    )
+
+
+def _library_search_document_from_row(row: sqlite3.Row) -> LibrarySearchDocument:
+    return LibrarySearchDocument(
+        article_id=int(row["article_id"]),
+        document_text=str(row["document_text"]),
+        updated_at=datetime_from_db(str(row["updated_at"])),
+    )
+
+
+def _library_connection_from_row(row: sqlite3.Row) -> LibraryConnection:
+    provenance = json.loads(str(row["provenance_json"]))
+    if not isinstance(provenance, dict):
+        provenance = {"invalid_provenance": True}
+    confidence = row["confidence"]
+    dismissed_at = row["dismissed_at"]
+    return LibraryConnection(
+        id=int(row["id"]),
+        article_id_a=int(row["article_id_a"]),
+        article_id_b=int(row["article_id_b"]),
+        relation_label=str(row["relation_label"]),
+        rationale=str(row["rationale"]),
+        origin=ConnectionOrigin(str(row["origin"])),
+        provenance=cast(dict[str, object], provenance),
+        confidence=float(confidence) if confidence is not None else None,
+        generated_at=datetime_from_db(str(row["generated_at"])),
+        dismissed_at=datetime_from_db(str(dismissed_at)) if dismissed_at is not None else None,
     )
 
 

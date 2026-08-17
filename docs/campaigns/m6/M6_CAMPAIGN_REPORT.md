@@ -296,3 +296,68 @@ Key frozen decisions:
   regeneration.
 - M6-D is expected to use additive SQLite schema version `12`; JSON config is
   unchanged.
+
+## M6-D Candidate
+
+Implemented:
+
+- Additive SQLite schema version `12` with rebuildable
+  `library_search_documents` and durable `library_article_connections`.
+- Derived local Library search documents built from saved article metadata,
+  tags, collections, abstracts, notes, and latest relevance context.
+- Library search backed by the derived SQLite-local search service while
+  preserving tag and collection filters.
+- Deterministic bounded candidate selection for saved-paper relationships using
+  shared tags, categories, collections, and title/abstract token overlap.
+- Canonical unordered connection pairs with provenance, optional confidence,
+  generated timestamp, and soft dismissal.
+- Explicit Codex connection provider boundary with prompt version
+  `library_connections_v1`, bounded JSON schema, untrusted-source-text rules,
+  and child-environment API-key redaction.
+- Library UI section for related saved-paper suggestions, dismissal, and
+  explicit per-article connection generation.
+- JSON backup export of durable relationship suggestions.
+
+Preserved:
+
+- Search documents are derived/rebuildable, not authoritative user state.
+- Viewing/searching Library data and existing connections does not call Codex.
+- Connection generation is explicit and bounded to selected candidates.
+- Connection suggestions do not mutate relevance analysis, feedback, history,
+  tags, notes, collections, or article identity.
+- Dismissed suggestions remain durable and hidden from routine display.
+
+Deterministic candidate checks:
+
+- `pytest`: PASS, 300 passed.
+- `ruff check src tests`: PASS.
+- `mypy --strict src tests`: PASS.
+- `python -m compileall src tests`: PASS.
+- `git diff --check`: PASS.
+
+Live smoke:
+
+- Synthetic live Codex connection smoke reached the Codex CLI but failed before
+  model work because the CLI could not initialize in the read-only runtime.
+  This is recorded as an environment/provider limitation for later human live
+  smoke, not as a deterministic code failure.
+
+Audit state:
+
+- First fresh read-only M6-D Auditor found one IMPORTANT issue: unsaved related
+  articles could still appear in the UI as related saved papers.
+- Repair round 1 filters related-connection display to currently saved target
+  and related endpoints while preserving the durable connection row for a
+  future re-save.
+- Repair round 1 also resolved the Auditor's MINOR/OPTIONAL privacy concern by
+  excluding personal note text from Codex-facing connection candidate evidence
+  while retaining local note search.
+- M6-D repair round 1 deterministic checks: `pytest` PASS, 302 passed;
+  `ruff check src tests` PASS; `mypy --strict src tests` PASS;
+  `python -m compileall src tests` PASS; `git diff --check` PASS.
+- Fresh read-only M6-D repair Auditor PASS.
+- BLOCKER/IMPORTANT findings: none remaining.
+- Audit repair rounds used: 1.
+- Deferred MINOR/OPTIONAL: none active after repair; personal note text remains
+  searchable locally but is excluded from Codex-facing connection candidate
+  evidence.

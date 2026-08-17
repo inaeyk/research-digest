@@ -155,7 +155,24 @@ class BackupTests(unittest.TestCase):
         )
         article, _ = self.db.upsert_article(sample_article())
         assert article.id is not None
+        related, _ = self.db.upsert_article(
+            Article(
+                id=None,
+                source="arxiv",
+                source_article_id="2608.70002",
+                title="Related backup export title",
+                authors=["Ada Lovelace"],
+                abstract="Related abstract.",
+                categories=["hep-th"],
+                published_at=datetime(2026, 8, 14, 12, 0, tzinfo=UTC),
+                updated_at=datetime(2026, 8, 14, 12, 30, tzinfo=UTC),
+                abstract_url="http://arxiv.org/abs/2608.70002",
+                pdf_url=None,
+            )
+        )
+        assert related.id is not None
         self.db.save_library_article(article.id)
+        self.db.save_library_article(related.id)
         add_user_tag(self.db, article_id=article.id, tag="Black branes")
         assign_ai_tags(
             self.db,
@@ -212,6 +229,14 @@ class BackupTests(unittest.TestCase):
                 }
             ),
         )
+        self.db.upsert_library_connection(
+            article_id_a=article.id,
+            article_id_b=related.id,
+            relation_label="shared system",
+            rationale="Both are backup export fixtures.",
+            provenance={"prompt_version": "library_connections_v1", "provider": "fake"},
+            confidence=0.5,
+        )
 
         with mock.patch.dict(
             "os.environ",
@@ -249,6 +274,10 @@ class BackupTests(unittest.TestCase):
         self.assertEqual(
             payload["library_collection_memberships"][0]["collection"]["name"],
             "GL project",
+        )
+        self.assertEqual(
+            payload["library_article_connections"][0]["relation_label"],
+            "shared system",
         )
         output = result.export_path.read_text(encoding="utf-8")
         self.assertNotIn("OPENAI_API_KEY", output)

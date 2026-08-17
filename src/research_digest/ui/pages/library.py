@@ -16,6 +16,11 @@ from research_digest.collections import (
     rename_collection,
     save_note,
 )
+from research_digest.connections import (
+    dismiss_connection,
+    generate_connections_for_saved_article,
+    list_related_connections,
+)
 from research_digest.errors import sanitize_error
 from research_digest.library import LibraryItem, LibrarySort, list_library_items
 from research_digest.models import Article, LibraryCollection, LibraryRelevanceContext, TagOrigin
@@ -28,11 +33,12 @@ from research_digest.tags import (
     remove_user_tag,
 )
 from research_digest.ui.abstracts import render_abstract_control
-from research_digest.ui.common import get_ai_tag_generator, get_database
+from research_digest.ui.common import get_ai_tag_generator, get_connection_generator, get_database
 from research_digest.ui.library_controls import render_library_control
 from research_digest.ui.tag_controls import (
     ai_tag_generation_label,
     collection_action_key,
+    connection_action_key,
     tag_action_key,
 )
 
@@ -59,7 +65,10 @@ def render() -> None:
     known_tags = db.list_library_tags()
 
     with st.form("library_filters", border=False):
-        query = st.text_input("Search Library", placeholder="Title, author, category, abstract...")
+        query = st.text_input(
+            "Search Library",
+            placeholder="Title, author, tag, collection, abstract, note...",
+        )
         sort_by = st.selectbox(
             "Sort",
             options=_SORT_OPTIONS,
@@ -112,6 +121,7 @@ def _render_library_item(item: LibraryItem) -> None:
         _render_note_editor(item)
         _render_collections(item)
         _render_tags(item)
+        _render_connections(item)
         with st.container(horizontal=True):
             st.link_button("arXiv", article.abstract_url)
             if article.pdf_url:
@@ -241,6 +251,90 @@ def _render_ai_tag_generation(*, article_id: int, has_ai_tags: bool) -> None:
         st.rerun()
     if generator is None and message:
         st.caption(f"AI tag generation unavailable: {sanitize_error(message)}")
+
+
+def _render_connections(item: LibraryItem) -> None:
+    import streamlit as st
+
+    article = item.article
+    if article.id is None:
+        return
+    db = get_database()
+    st.markdown("**Related saved papers**")
+    related = list_related_connections(db, article_id=article.id)
+    if related:
+        for relation in related:
+            related_article = relation.related_article
+            connection = relation.connection
+            with st.container(border=True):
+                st.caption("Suggested relationship")
+                st.markdown(f"**{related_article.title}**")
+                confidence = (
+                    f" | confidence {connection.confidence:.2f}"
+                    if connection.confidence is not None
+                    else ""
+                )
+                st.caption(f"{connection.relation_label}{confidence}")
+                st.write(connection.rationale)
+                if related_article.id is not None and st.button(
+                    "Dismiss relationship",
+                    key=connection_action_key(
+                        action="dismiss",
+                        article_id=article.id,
+                        related_article_id=related_article.id,
+                    ),
+                    icon=":material/close:",
+                ):
+                    dismiss_connection(
+                        db,
+                        article_id=article.id,
+                        related_article_id=related_article.id,
+                    )
+                    st.rerun()
+    else:
+        st.caption("No suggested relationships yet")
+    _render_connection_generation(article_id=article.id)
+
+
+def _render_connection_generation(*, article_id: int) -> None:
+    import streamlit as st
+
+    generator, message = get_connection_generator()
+    if st.button(
+        "Find related saved papers",
+        key=connection_action_key(action="generate", article_id=article_id),
+        icon=":material/hub:",
+        disabled=generator is None,
+    ):
+        if generator is None:
+            st.warning(
+                message or "Connection generation is unavailable.",
+                icon=":material/warning:",
+            )
+            return
+        with st.spinner("Finding related saved papers..."):
+            try:
+                connections = generate_connections_for_saved_article(
+                    get_database(),
+                    article_id=article_id,
+                    generator=generator,
+                )
+            except Exception as exc:
+                st.error(
+                    f"Connection generation failed: {sanitize_error(exc)}",
+                    icon=":material/error:",
+                )
+                return
+        if connections:
+            st.success(
+                f"Added {len(connections)} relationship suggestion(s).",
+                icon=":material/check_circle:",
+            )
+        else:
+            st.info("No new related saved papers were found.")
+        st.rerun()
+    if generator is None and message:
+        st.caption(f"Connection generation unavailable: {sanitize_error(message)}")
 
 
 def _render_note_editor(item: LibraryItem) -> None:

@@ -185,6 +185,7 @@ def export_user_data(*, db_path: Path, schema_version: int | None = None) -> dic
             "library_article_notes": _library_article_notes(conn),
             "library_collections": _library_collections(conn),
             "library_collection_memberships": _library_collection_memberships(conn),
+            "library_article_connections": _library_article_connections(conn),
         }
 
 
@@ -680,6 +681,73 @@ def _library_collection_memberships(conn: sqlite3.Connection) -> list[dict[str, 
                     else None
                 ),
                 "title": str(row["title"]) if row["title"] is not None else None,
+            },
+        }
+        for row in rows
+    ]
+
+
+def _library_article_connections(conn: sqlite3.Connection) -> list[dict[str, object]]:
+    if not _table_exists(conn, "library_article_connections"):
+        return []
+    rows = conn.execute(
+        """
+        SELECT
+            connections.id,
+            connections.article_id_a,
+            connections.article_id_b,
+            connections.relation_label,
+            connections.rationale,
+            connections.origin,
+            connections.provenance_json,
+            connections.confidence,
+            connections.generated_at,
+            connections.dismissed_at,
+            article_a.source AS source_a,
+            article_a.source_article_id AS source_article_id_a,
+            article_a.title AS title_a,
+            article_b.source AS source_b,
+            article_b.source_article_id AS source_article_id_b,
+            article_b.title AS title_b
+        FROM library_article_connections AS connections
+        LEFT JOIN articles AS article_a ON article_a.id = connections.article_id_a
+        LEFT JOIN articles AS article_b ON article_b.id = connections.article_id_b
+        ORDER BY connections.article_id_a, connections.article_id_b
+        """
+    ).fetchall()
+    return [
+        {
+            "id": int(row["id"]),
+            "article_id_a": int(row["article_id_a"]),
+            "article_id_b": int(row["article_id_b"]),
+            "relation_label": str(row["relation_label"]),
+            "rationale": str(row["rationale"]),
+            "origin": str(row["origin"]),
+            "provenance": json.loads(str(row["provenance_json"])),
+            "confidence": (
+                float(row["confidence"]) if row["confidence"] is not None else None
+            ),
+            "generated_at": str(row["generated_at"]),
+            "dismissed_at": (
+                str(row["dismissed_at"]) if row["dismissed_at"] is not None else None
+            ),
+            "article_a": {
+                "source": str(row["source_a"]) if row["source_a"] is not None else None,
+                "source_article_id": (
+                    str(row["source_article_id_a"])
+                    if row["source_article_id_a"] is not None
+                    else None
+                ),
+                "title": str(row["title_a"]) if row["title_a"] is not None else None,
+            },
+            "article_b": {
+                "source": str(row["source_b"]) if row["source_b"] is not None else None,
+                "source_article_id": (
+                    str(row["source_article_id_b"])
+                    if row["source_article_id_b"] is not None
+                    else None
+                ),
+                "title": str(row["title_b"]) if row["title_b"] is not None else None,
             },
         }
         for row in rows

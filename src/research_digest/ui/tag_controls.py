@@ -35,3 +35,16 @@ def collection_action_key(
     raw = f"{action}\0{collection_id or ''}\0{article_id or ''}\0{suffix}".encode()
     digest = hashlib.sha256(raw).hexdigest()[:20]
     return f"library_collection_{action}_{digest}"
+
+
+def connection_action_key(
+    *,
+    action: str,
+    article_id: int,
+    related_article_id: int | None = None,
+) -> str:
+    if article_id <= 0:
+        raise ValueError("article id must be positive")
+    raw = f"{action}\0{article_id}\0{related_article_id or ''}".encode()
+    digest = hashlib.sha256(raw).hexdigest()[:20]
+    return f"library_connection_{action}_{digest}"

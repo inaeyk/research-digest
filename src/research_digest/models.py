@@ -50,6 +50,10 @@ class TagOrigin(StrEnum):
     AI = "AI"
 
 
+class ConnectionOrigin(StrEnum):
+    AI = "AI"
+
+
 class DateSelectionKind(StrEnum):
     LATEST_AVAILABLE = "LATEST_AVAILABLE"
     SINGLE_DATE = "SINGLE_DATE"
@@ -543,6 +547,55 @@ class LibraryCollectionMembership:
         if self.article_id <= 0:
             raise ModelValidationError("collection membership article id must be positive")
         object.__setattr__(self, "added_at", ensure_utc(self.added_at))
+
+
+@dataclass(frozen=True)
+class LibrarySearchDocument:
+    article_id: int
+    document_text: str
+    updated_at: datetime
+
+    def __post_init__(self) -> None:
+        if self.article_id <= 0:
+            raise ModelValidationError("library search document article id must be positive")
+        object.__setattr__(self, "document_text", self.document_text.strip())
+        object.__setattr__(self, "updated_at", ensure_utc(self.updated_at))
+
+
+@dataclass(frozen=True)
+class LibraryConnection:
+    id: int | None
+    article_id_a: int
+    article_id_b: int
+    relation_label: str
+    rationale: str
+    origin: ConnectionOrigin
+    provenance: dict[str, object]
+    generated_at: datetime
+    confidence: float | None = None
+    dismissed_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        if self.id is not None and self.id <= 0:
+            raise ModelValidationError("library connection id must be positive")
+        if self.article_id_a <= 0 or self.article_id_b <= 0:
+            raise ModelValidationError("library connection article ids must be positive")
+        if self.article_id_a == self.article_id_b:
+            raise ModelValidationError("library connection cannot link an article to itself")
+        if self.article_id_a > self.article_id_b:
+            raise ModelValidationError("library connection article ids must be canonical")
+        if not self.relation_label.strip():
+            raise ModelValidationError("library connection relation label is required")
+        if not self.rationale.strip():
+            raise ModelValidationError("library connection rationale is required")
+        if self.confidence is not None and not 0 <= self.confidence <= 1:
+            raise ModelValidationError("library connection confidence must be between 0 and 1")
+        object.__setattr__(self, "relation_label", normalize_whitespace(self.relation_label))
+        object.__setattr__(self, "rationale", normalize_whitespace(self.rationale))
+        object.__setattr__(self, "origin", ConnectionOrigin(self.origin))
+        object.__setattr__(self, "generated_at", ensure_utc(self.generated_at))
+        if self.dismissed_at is not None:
+            object.__setattr__(self, "dismissed_at", ensure_utc(self.dismissed_at))
 
 
 @dataclass(frozen=True)
