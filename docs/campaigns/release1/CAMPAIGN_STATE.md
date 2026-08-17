@@ -2,13 +2,13 @@
 
 - current_substage: RELEASE_CANDIDATE_COMPLETE_AWAITING_HUMAN
 - status: RELEASE_CANDIDATE_COMPLETE_AWAITING_HUMAN
-- current_git_head: final live-smoke evidence commit; exact hash to be recorded by follow-up bookkeeping commit
+- current_git_head: final release-candidate bookkeeping commit containing this state; verify with `git rev-parse HEAD`
 - prior_release_candidate_commit: eadedb71b7a64302edb6ac6b7d1fbfe1d6bfbe95
 - scheduler_environment_repair_commit: 6570aa37dc7c055828977cd490063fb160d08445
-- release_candidate_commit: final live-smoke evidence commit; exact hash to be recorded by follow-up bookkeeping commit
+- release_candidate_commit: 905f3133b58b6248fe4d3714c19f8bcdf9dde4cf
 - current_tags_at_head: none
 - current_branch: master
-- local_remote_tracking: `master` tracks `origin/master`; local branch will be 19 commits ahead after final live-smoke evidence commit
+- local_remote_tracking: `master` tracks `origin/master`; local branch will be 20 commits ahead after final live-smoke bookkeeping
 - online_remote_verification: attempted `git ls-remote --heads --tags origin`; blocked by DNS resolution failure for `github.com` even after network escalation
 - baseline_m1_qualified_commit: 36bd1cbe60f95d588e8ccdd41bfce914e9b1d7da
 - baseline_m1_qualified_tag: m1-qualified
@@ -1132,7 +1132,8 @@ Final audit:
 Final release-candidate closeout:
 
 - prior exact RC commit before the live scheduler defect was found: `eadedb71b7a64302edb6ac6b7d1fbfe1d6bfbe95`.
-- that prior candidate is superseded by the committed scheduler environment repair and the final live-smoke evidence commit; exact final RC commit will be recorded by follow-up bookkeeping.
+- exact final RC commit after scheduler repair and passing live smoke: `905f3133b58b6248fe4d3714c19f8bcdf9dde4cf`.
+- final human-stop state is committed after the exact RC commit as bookkeeping; use `git rev-parse HEAD` to inspect that final bookkeeping commit.
 - scheduler environment repair commit tested by passing human live smoke: `6570aa37dc7c055828977cd490063fb160d08445`.
 - suggested release version/tag: `0.1.0` / `v0.1.0`.
 - qualification summary: M4-A through M4-D and M7-A through M7-I are locally qualified and tagged; M3, M5, and M6 were not started.
@@ -1149,7 +1150,7 @@ Final release-candidate closeout:
 ```bash
 git status
 git log --oneline --decorate -n 8
-git tag -a v0.1.0 -m "Research Digest 0.1.0"
+git tag -a v0.1.0 905f3133b58b6248fe4d3714c19f8bcdf9dde4cf -m "Research Digest 0.1.0"
 git push origin master
 git push origin m7g-qualified m7h-qualified m7i-qualified v0.1.0
 ```

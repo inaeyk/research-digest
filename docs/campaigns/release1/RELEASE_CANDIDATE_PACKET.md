@@ -11,7 +11,7 @@ This packet is release-candidate material only. It does not authorize a public r
 - existing public-style version tags: none found by `git tag --list 'v*'`
 - prior release-candidate commit before scheduler repair: `eadedb71b7a64302edb6ac6b7d1fbfe1d6bfbe95`
 - scheduler repair commit tested by passing human live smoke: `6570aa37dc7c055828977cd490063fb160d08445`
-- release-candidate commit: final live-smoke evidence commit; exact hash to be recorded by follow-up bookkeeping
+- release-candidate commit: `905f3133b58b6248fe4d3714c19f8bcdf9dde4cf`
 - suggested final public release tag for human review: `v0.1.0`
 
 The release campaign has local qualification tags through `m7i-qualified`; the final public version tag has not been created.
@@ -201,7 +201,7 @@ After human acceptance, proposed commands are:
 ```bash
 git status
 git log --oneline --decorate -n 5
-git tag -a v0.1.0 -m "Research Digest 0.1.0"
+git tag -a v0.1.0 905f3133b58b6248fe4d3714c19f8bcdf9dde4cf -m "Research Digest 0.1.0"
 git push origin master
 git push origin m7g-qualified m7h-qualified m7i-qualified v0.1.0
 ```

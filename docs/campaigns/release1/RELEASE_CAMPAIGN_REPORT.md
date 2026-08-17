@@ -882,6 +882,7 @@ Live scheduler smoke:
 
 Final stop:
 
+- Exact final release-candidate commit after scheduler repair and passing live smoke: `905f3133b58b6248fe4d3714c19f8bcdf9dde4cf`.
 - Release candidate is complete and awaiting final human release/tag/push decision.
 - No final public release tag, remote push, GitHub release, package publication, or public release operation was performed.
 

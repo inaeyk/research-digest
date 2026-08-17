@@ -8,8 +8,10 @@ Prior release-candidate commit after final-audit MINOR documentation follow-up:
 `eadedb71b7a64302edb6ac6b7d1fbfe1d6bfbe95`. This candidate was superseded
 when a human live scheduler smoke found the non-login WSL Codex PATH defect
 recorded below. That defect is repaired and the required human live scheduler
-smoke passed. The exact final release-candidate commit will be recorded by
-follow-up bookkeeping after this live-smoke evidence commit.
+smoke passed.
+
+Exact final release-candidate commit after scheduler repair and passing live
+smoke: `905f3133b58b6248fe4d3714c19f8bcdf9dde4cf`.
 
 Scheduler repair commit tested by the passing human live smoke:
 `6570aa37dc7c055828977cd490063fb160d08445`.
