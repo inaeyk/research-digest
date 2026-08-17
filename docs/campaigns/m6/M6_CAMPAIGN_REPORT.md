@@ -121,3 +121,11 @@ Audit state:
 - Deferred MINOR/OPTIONAL: dedicated Streamlit click smoke for save/remove
   controls may be added later; current deterministic service/helper coverage
   passed.
+
+Freeze state:
+
+- Qualified local commit:
+  `17e047c325bb61008cf39b9a135bea02bb63a968`.
+- Qualified local annotated tag: `m6a-qualified`.
+- Tag object: `ed9f887058f87135cfa7ff0e4f02fdb579b7398b`.
+- Tag target: `17e047c325bb61008cf39b9a135bea02bb63a968`.
