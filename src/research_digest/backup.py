@@ -307,7 +307,15 @@ def _runs(conn: sqlite3.Connection) -> list[dict[str, object]]:
             skipped_analysis_count,
             analyzed_count,
             relevant_count,
-            error_message
+            error_message,
+            run_origin,
+            date_selection_json,
+            requested_source_dates_json,
+            covered_source_dates_json,
+            empty_source_dates_json,
+            incomplete_source_dates_json,
+            retrieval_complete,
+            retrieval_safety_limit
         FROM app_runs
         ORDER BY id
         """
@@ -329,6 +337,18 @@ def _runs(conn: sqlite3.Connection) -> list[dict[str, object]]:
             "error_message": (
                 sanitize_error_text(str(row["error_message"]))
                 if row["error_message"] is not None
+                else None
+            ),
+            "run_origin": str(row["run_origin"]),
+            "date_selection": _json_object_or_none(row["date_selection_json"]),
+            "requested_source_dates": _json_list(row["requested_source_dates_json"]),
+            "covered_source_dates": _json_list(row["covered_source_dates_json"]),
+            "empty_source_dates": _json_list(row["empty_source_dates_json"]),
+            "incomplete_source_dates": _json_list(row["incomplete_source_dates_json"]),
+            "retrieval_complete": bool(row["retrieval_complete"]),
+            "retrieval_safety_limit": (
+                int(row["retrieval_safety_limit"])
+                if row["retrieval_safety_limit"] is not None
                 else None
             ),
         }
@@ -365,6 +385,15 @@ def _json_list(value: object) -> list[object]:
     parsed = json.loads(str(value))
     if not isinstance(parsed, list):
         raise BackupError("expected JSON list in source settings")
+    return parsed
+
+
+def _json_object_or_none(value: object) -> dict[str, object] | None:
+    if value is None:
+        return None
+    parsed = json.loads(str(value))
+    if not isinstance(parsed, dict):
+        raise BackupError("expected JSON object in run metadata")
     return parsed
 
 

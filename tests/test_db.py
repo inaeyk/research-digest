@@ -458,6 +458,14 @@ class DatabaseTests(unittest.TestCase):
                 4: APP_RUN_ANALYSIS_UNAVAILABLE,
             },
         )
+        self.assertEqual(runs[-1]["run_origin"], "LEGACY")
+        self.assertIsNone(runs[-1]["date_selection_json"])
+        self.assertEqual(runs[-1]["requested_source_dates_json"], "[]")
+        self.assertEqual(runs[-1]["covered_source_dates_json"], "[]")
+        self.assertEqual(runs[-1]["empty_source_dates_json"], "[]")
+        self.assertEqual(runs[-1]["incomplete_source_dates_json"], "[]")
+        self.assertEqual(runs[-1]["retrieval_complete"], 1)
+        self.assertIsNone(runs[-1]["retrieval_safety_limit"])
 
     def test_migration_failure_leaves_recoverable_backup_and_old_db(self) -> None:
         legacy_path = Path(self.tmpdir.name) / "failing_migration.sqlite3"

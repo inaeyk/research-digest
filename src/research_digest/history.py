@@ -27,6 +27,14 @@ class RunHistoryEntry:
     relevant_count: int
     error_message: str | None
     has_snapshot: bool
+    run_origin: str
+    date_selection: dict[str, Any] | None
+    requested_source_dates: tuple[str, ...]
+    covered_source_dates: tuple[str, ...]
+    empty_source_dates: tuple[str, ...]
+    incomplete_source_dates: tuple[str, ...]
+    retrieval_complete: bool
+    retrieval_safety_limit: int | None
 
 
 def build_run_snapshot(
@@ -46,6 +54,18 @@ def build_run_snapshot(
         "analyzed_count": digest.analyzed_count,
         "relevant_count": digest.relevant_count,
         "analysis_available": digest.analysis_available,
+        "run_origin": digest.run_origin.value,
+        "date_selection": (
+            digest.date_selection.to_mapping() if digest.date_selection is not None else None
+        ),
+        "requested_source_dates": [value.isoformat() for value in digest.requested_source_dates],
+        "covered_source_dates": [value.isoformat() for value in digest.covered_source_dates],
+        "empty_source_dates": [value.isoformat() for value in digest.empty_source_dates],
+        "incomplete_source_dates": [
+            value.isoformat() for value in digest.incomplete_source_dates
+        ],
+        "retrieval_complete": digest.retrieval_complete,
+        "retrieval_safety_limit": digest.retrieval_safety_limit,
         "started_at": digest.started_at.isoformat(),
         "completed_at": digest.completed_at.isoformat() if digest.completed_at else None,
         "synthesis": {
@@ -120,6 +140,18 @@ def list_run_history(db: Database, *, limit: int = 25) -> list[RunHistoryEntry]:
                 relevant_count=int(row["relevant_count"]),
                 error_message=str(row["error_message"]) if row["error_message"] else None,
                 has_snapshot=db.get_run_snapshot(run_id=int(row["id"])) is not None,
+                run_origin=str(row["run_origin"]),
+                date_selection=_optional_json_object(row["date_selection_json"]),
+                requested_source_dates=_json_string_tuple(row["requested_source_dates_json"]),
+                covered_source_dates=_json_string_tuple(row["covered_source_dates_json"]),
+                empty_source_dates=_json_string_tuple(row["empty_source_dates_json"]),
+                incomplete_source_dates=_json_string_tuple(row["incomplete_source_dates_json"]),
+                retrieval_complete=bool(row["retrieval_complete"]),
+                retrieval_safety_limit=(
+                    int(row["retrieval_safety_limit"])
+                    if row["retrieval_safety_limit"] is not None
+                    else None
+                ),
             )
         )
     return entries
@@ -137,3 +169,19 @@ def get_run_snapshot(db: Database, *, run_id: int) -> dict[str, Any] | None:
 
 def _format_history_time(value: str) -> str:
     return datetime_from_db(value).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
+def _json_string_tuple(value: object) -> tuple[str, ...]:
+    payload = json.loads(str(value))
+    if not isinstance(payload, list) or not all(isinstance(item, str) for item in payload):
+        raise ValueError("history date metadata must be a JSON string list")
+    return tuple(payload)
+
+
+def _optional_json_object(value: object) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    payload = json.loads(str(value))
+    if not isinstance(payload, dict):
+        raise ValueError("history date selection metadata must be a JSON object")
+    return payload

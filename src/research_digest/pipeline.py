@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from research_digest.analysis.base import AnalyzerError, LLMAnalyzer, article_analysis_key
@@ -19,16 +19,19 @@ from research_digest.models import (
     AnalysisOrigin,
     AnalysisResult,
     Article,
+    DateSelection,
     DigestItem,
     DigestResult,
     InterestProfile,
+    RunOrigin,
     is_above_threshold,
     profile_semantic_fingerprint,
     sorted_digest_items,
+    source_date_from_datetime,
     utc_now,
 )
 from research_digest.preselection import AbstractPreselector, TermOverlapPreselector
-from research_digest.sources.base import SourceAdapter
+from research_digest.sources.base import DateNativeSourceAdapter, SourceAdapter
 from research_digest.sources.registry import SourceRunRequest
 
 
@@ -43,6 +46,8 @@ def run_digest(
     analyzer: LLMAnalyzer | None,
     source_request: SourceRunRequest[Any] | None = None,
     profile_id: int | None = None,
+    date_selection: DateSelection | None = None,
+    run_origin: RunOrigin = RunOrigin.LEGACY,
     now: datetime | None = None,
     preselector: AbstractPreselector | None = None,
 ) -> DigestResult:
@@ -66,6 +71,8 @@ def run_digest(
     run_id = db.create_app_run(
         profile_id=profile.id,
         source_name=active_source_request.source_name,
+        run_origin=run_origin,
+        date_selection=date_selection,
     )
     db.mark_app_run_running(run_id)
     started_at = utc_now()
@@ -80,9 +87,45 @@ def run_digest(
     all_items: list[DigestItem] = []
     status = APP_RUN_COMPLETED
     error_message: str | None = None
+    requested_source_dates: tuple[str, ...] = (
+        tuple(value.isoformat() for value in date_selection.selected_dates())
+        if date_selection is not None
+        else ()
+    )
+    covered_source_dates: tuple[str, ...] = ()
+    empty_source_dates: tuple[str, ...] = ()
+    incomplete_source_dates: tuple[str, ...] = ()
+    retrieval_complete = date_selection is None
+    retrieval_returned = date_selection is None
+    retrieval_safety_limit: int | None = None
 
     try:
-        fetched = active_source_request.adapter.fetch(active_source_request.config, now=now)
+        if date_selection is None:
+            fetched = active_source_request.adapter.fetch(active_source_request.config, now=now)
+        else:
+            if not isinstance(active_source_request.adapter, DateNativeSourceAdapter):
+                raise DigestPipelineError("source adapter does not support date selection")
+            retrieval = active_source_request.adapter.fetch_date_selection(
+                active_source_request.config,
+                date_selection,
+            )
+            retrieval_returned = True
+            fetched = list(retrieval.articles)
+            requested_source_dates = tuple(value.isoformat() for value in retrieval.requested_dates)
+            covered_source_dates = tuple(value.isoformat() for value in retrieval.covered_dates)
+            empty_source_dates = tuple(value.isoformat() for value in retrieval.empty_dates)
+            incomplete_source_dates = tuple(
+                value.isoformat() for value in retrieval.incomplete_dates
+            )
+            retrieval_complete = bool(retrieval.complete)
+            retrieval_safety_limit = int(retrieval.safety_limit)
+            if not requested_source_dates:
+                article_dates = {
+                    source_date_from_datetime(article.published_at).isoformat()
+                    for article in fetched
+                }
+                requested_source_dates = tuple(sorted(article_dates))
+                covered_source_dates = requested_source_dates
         retrieved_count = len(fetched)
         saved_articles, stored_count = db.upsert_articles(fetched)
         saved_articles = _unique_articles(saved_articles)
@@ -170,6 +213,12 @@ def run_digest(
             skipped_analysis_count=skipped_analysis_count,
             analyzed_count=analyzed_count,
             relevant_count=above_threshold_count,
+            requested_source_dates=requested_source_dates,
+            covered_source_dates=covered_source_dates,
+            empty_source_dates=empty_source_dates,
+            incomplete_source_dates=incomplete_source_dates,
+            retrieval_complete=retrieval_complete,
+            retrieval_safety_limit=retrieval_safety_limit,
         )
         return DigestResult(
             run_id=run_id,
@@ -187,9 +236,23 @@ def run_digest(
             items=all_items,
             started_at=started_at,
             completed_at=completed_at,
+            run_origin=run_origin,
+            date_selection=date_selection,
+            requested_source_dates=_source_date_tuple(requested_source_dates),
+            covered_source_dates=_source_date_tuple(covered_source_dates),
+            empty_source_dates=_source_date_tuple(empty_source_dates),
+            incomplete_source_dates=_source_date_tuple(incomplete_source_dates),
+            retrieval_complete=retrieval_complete,
+            retrieval_safety_limit=retrieval_safety_limit,
         )
     except Exception as exc:
         error_message = sanitize_error(exc)
+        failed_incomplete_dates = incomplete_source_dates
+        if date_selection is not None and not retrieval_returned:
+            failed_incomplete_dates = requested_source_dates
+        failed_retrieval_complete = retrieval_complete
+        if date_selection is not None and not retrieval_returned:
+            failed_retrieval_complete = False
         db.finish_app_run(
             run_id,
             status=APP_RUN_FAILED,
@@ -200,8 +263,18 @@ def run_digest(
             analyzed_count=analyzed_count,
             relevant_count=above_threshold_count,
             error_message=error_message,
+            requested_source_dates=requested_source_dates,
+            covered_source_dates=covered_source_dates,
+            empty_source_dates=empty_source_dates,
+            incomplete_source_dates=failed_incomplete_dates,
+            retrieval_complete=failed_retrieval_complete,
+            retrieval_safety_limit=retrieval_safety_limit,
         )
         raise
+
+
+def _source_date_tuple(values: tuple[str, ...]) -> tuple[date, ...]:
+    return tuple(date.fromisoformat(value) for value in values)
 
 
 def _select_profile(db: Database, profile_id: int | None) -> InterestProfile:

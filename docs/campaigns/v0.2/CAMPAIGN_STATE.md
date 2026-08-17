@@ -1,8 +1,8 @@
 # v0.2 Campaign State
 
-- campaign_state: U2_A_QUALIFIED_FROZEN
+- campaign_state: U2_B_QUALIFIED_READY_TO_FREEZE
 - current_substage: U2-B date-native pipeline and run semantics
-- current_git_head: 616d84209c7295de2884d4ae82df0a5bd222d397
+- current_git_head: 066da8d4e58586dbc25e582afe4ff55a9abc2e54
 - current_branch: feature/v0.2-date-native-scheduler-ui
 - released_baseline_tag: v0.1.0
 - released_baseline_commit: 905f3133b58b6248fe4d3714c19f8bcdf9dde4cf
@@ -11,19 +11,19 @@
 - online_remote_verification: attempted `git ls-remote --heads --tags origin`; blocked by DNS resolution failure for `github.com` before and after network escalation.
 - package_version: 0.1.0
 - runtime_version: 0.1.0
-- schema_version: 4
+- schema_version: 5
 - config_version: 2
 - worktree_state_at_campaign_start: clean tracked worktree; ignored runtime files include `.env`, local SQLite, virtualenv, caches, and local agent/runtime directories.
-- qualification_state: U2-A PASS after repair round 1 and fresh re-audit; U2-A frozen locally.
+- qualification_state: U2-B PASS after repair round 1 and fresh re-audit.
 - audit_round: 1
-- deterministic_checks: baseline `pytest` 149 passed; initial U2-A candidate `pytest` 162 passed; post-repair `pytest` 166 passed; `ruff check .` PASS; `mypy --strict src tests` PASS; `python -m compileall -q src tests` PASS; `git diff --check` PASS. Fresh re-auditor independently ran equivalent deterministic checks with PASS.
+- deterministic_checks: baseline `pytest` 149 passed; U2-A post-repair `pytest` 166 passed; U2-B post-repair `pytest` 174 passed; `ruff check .` PASS; `mypy --strict src tests` PASS; `python -m compileall -q src tests` PASS; `git diff --check` PASS. Fresh re-auditor independently ran equivalent deterministic checks with PASS.
 - live_checks: U2-A live arXiv latest-available smoke attempted with bounded timeout; blocked by DNS resolution failure for `export.arxiv.org` before and after network escalation.
-- schema_config_migration_state: v0.1.0 uses ordered SQLite migrations through schema version 4 and JSON config version 1; U2-A candidate raises JSON config to version 2 with a default latest-available date selection while preserving legacy arXiv lookback/max-results DB fields.
+- schema_config_migration_state: v0.1.0 uses ordered SQLite migrations through schema version 4 and JSON config version 1; U2-A raises JSON config to version 2; U2-B candidate raises SQLite schema to version 5 with additive app-run date metadata defaults that preserve legacy historical run meaning.
 - qualified_local_commit: 616d84209c7295de2884d4ae82df0a5bd222d397
 - qualified_local_tag: u2a-qualified
 - qualified_local_tag_object: 84e22c2eaa2b67c1dc6000fe4cc42e25a7f32e7c
 - deferred_minor_optional_findings: U2-A re-auditor OPTIONAL: future hardening could add a separate raw API-row/page scan ceiling for malformed or inconsistent API responses; not required for U2-A after explicit-date repair.
-- next_permitted_action: begin U2-B planning/implementation.
+- next_permitted_action: locally commit U2-B and create annotated tag `u2b-qualified`, then begin U2-C planning/implementation.
 - human_stop_reason: none
 
 ## Recovered v0.1.0 Baseline
@@ -212,3 +212,38 @@ admin compatibility.
   PASS; `compileall` PASS; `git diff --check` PASS.
 - re-auditor OPTIONAL: add a separate raw API-row/page scan ceiling in a future
   hardening pass.
+
+## U2-B Candidate Log
+
+- implementation: added additive app-run date metadata in schema version 5.
+- compatibility: legacy app-run rows default to `LEGACY` origin and empty date
+  metadata rather than being reinterpreted.
+- pipeline: `DateSelection` and `RunOrigin` now flow through the shared
+  pipeline/service boundary.
+- source boundary: added optional `DateNativeSourceAdapter` protocol so future
+  source adapters can implement date selection additively.
+- persistence: date selection, requested dates, covered dates, empty dates,
+  incomplete dates, retrieval completeness, and safety limit are stored in
+  `app_runs`, run snapshots, History entries, CLI status payloads, and JSON
+  export.
+- cache: article/profile semantic analysis cache remains unchanged, so repeated
+  identical date runs reuse valid analyses while each run records immutable
+  date metadata.
+- deterministic verification: `pytest` 172 passed; `ruff check .` PASS;
+  `mypy --strict src tests` PASS; `python -m compileall -q src tests` PASS;
+  `git diff --check` PASS.
+- initial auditor: `01a00f95-797f-7bf1-ba94-bb43b2cf663a`.
+- initial result: FAIL with one IMPORTANT finding.
+- IMPORTANT: if a date-native source failed before returning retrieval metadata,
+  failed app-run rows persisted `retrieval_complete=1` and no
+  requested/incomplete date metadata.
+- repair round 1: date-native runs now precompute deterministic requested
+  dates for single/range/explicit selections, initialize retrieval as incomplete
+  until the source returns, and mark source failures before metadata as
+  incomplete; latest-available failures remain unresolved but incomplete.
+- repair tests: source failure before metadata, latest-available unresolved
+  failure, and pipeline-expanded range metadata.
+- re-auditor: `01a00f9a-2298-7322-871f-ce433e051611`.
+- re-auditor result: PASS with no BLOCKER/IMPORTANT findings.
+- re-auditor checks: `pytest` 174 passed; `ruff check .` PASS; strict
+  `mypy` PASS; `compileall` PASS; `git diff --check` PASS.

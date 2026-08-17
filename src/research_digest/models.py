@@ -36,6 +36,12 @@ class AnalysisOrigin(StrEnum):
     REUSED = "REUSED"
 
 
+class RunOrigin(StrEnum):
+    LEGACY = "LEGACY"
+    MANUAL = "MANUAL"
+    SCHEDULED = "SCHEDULED"
+
+
 class DateSelectionKind(StrEnum):
     LATEST_AVAILABLE = "LATEST_AVAILABLE"
     SINGLE_DATE = "SINGLE_DATE"
@@ -426,6 +432,14 @@ class DigestResult:
     items: list[DigestItem]
     started_at: datetime
     completed_at: datetime | None
+    run_origin: RunOrigin = RunOrigin.LEGACY
+    date_selection: DateSelection | None = None
+    requested_source_dates: tuple[date, ...] = ()
+    covered_source_dates: tuple[date, ...] = ()
+    empty_source_dates: tuple[date, ...] = ()
+    incomplete_source_dates: tuple[date, ...] = ()
+    retrieval_complete: bool = True
+    retrieval_safety_limit: int | None = None
 
     @property
     def relevant_count(self) -> int:

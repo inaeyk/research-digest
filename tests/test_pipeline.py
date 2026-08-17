@@ -3,7 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from collections.abc import Mapping, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 from research_digest.analysis.base import article_analysis_key
@@ -14,8 +14,10 @@ from research_digest.models import (
     AnalysisResult,
     Article,
     ArxivSourceConfig,
+    DateSelection,
     InterestProfile,
     ModelValidationError,
+    RunOrigin,
     above_threshold_digest_items,
     below_threshold_digest_items,
     profile_semantic_fingerprint,
@@ -32,6 +34,54 @@ class StaticSource:
         if not config.enabled:
             return []
         return list(self.articles[: config.max_results])
+
+
+class DateStaticSource(StaticSource):
+    def __init__(
+        self,
+        articles: list[Article],
+        *,
+        incomplete_dates: tuple[date, ...] = (),
+        safety_limit: int = 2000,
+    ) -> None:
+        super().__init__(articles)
+        self.incomplete_dates = incomplete_dates
+        self.safety_limit = safety_limit
+
+    def fetch_date_selection(
+        self,
+        config: ArxivSourceConfig,
+        selection: DateSelection,
+    ) -> object:
+        from research_digest.sources.arxiv import ArxivDateRetrievalResult
+
+        if not config.enabled:
+            articles: tuple[Article, ...] = ()
+        else:
+            selected = set(selection.selected_dates())
+            articles = tuple(
+                article
+                for article in self.articles
+                if article.published_at.date() in selected
+            )
+        requested_dates = selection.selected_dates()
+        covered_dates = tuple(
+            value for value in requested_dates if value not in self.incomplete_dates
+        )
+        article_dates = {item.published_at.date() for item in articles}
+        empty_dates = tuple(value for value in covered_dates if value not in article_dates)
+        return ArxivDateRetrievalResult(
+            selection=selection,
+            articles=articles,
+            requested_dates=requested_dates,
+            covered_dates=covered_dates,
+            empty_dates=empty_dates,
+            incomplete_dates=self.incomplete_dates,
+            latest_available_date=None,
+            retrieved_count=len(articles),
+            safety_limit=self.safety_limit,
+            safety_limit_reached=bool(self.incomplete_dates),
+        )
 
 
 class FailingAnalyzer:
@@ -52,6 +102,15 @@ class FailingAnalyzer:
             + " Bearer "
             + "token.secret.value"
         )
+
+
+class FailingDateSource(DateStaticSource):
+    def fetch_date_selection(
+        self,
+        config: ArxivSourceConfig,
+        selection: DateSelection,
+    ) -> object:
+        raise RuntimeError("source failed before metadata")
 
 
 class ProfileEchoAnalyzer:
@@ -571,6 +630,179 @@ class PipelineTests(unittest.TestCase):
         self.assertIn("[HOME]", error_message)
         self.assertIn("[REDACTED_API_KEY]", error_message)
         self.assertIn("Bearer [REDACTED]", error_message)
+
+    def test_date_selection_run_persists_metadata_and_reuses_identical_rerun_cache(self) -> None:
+        selection = DateSelection.single_date(date(2026, 8, 14))
+        analyzer = FakeAnalyzer(self.analysis_payloads)
+
+        first = run_digest(
+            db=self.db,
+            source=DateStaticSource(self.articles),
+            analyzer=analyzer,
+            profile_id=self.profile.id,
+            date_selection=selection,
+            run_origin=RunOrigin.MANUAL,
+        )
+        analyzer.calls.clear()
+        second = run_digest(
+            db=self.db,
+            source=DateStaticSource(self.articles),
+            analyzer=analyzer,
+            profile_id=self.profile.id,
+            date_selection=selection,
+            run_origin=RunOrigin.MANUAL,
+        )
+
+        self.assertEqual(first.date_selection, selection)
+        self.assertEqual(first.run_origin, RunOrigin.MANUAL)
+        self.assertEqual(first.requested_source_dates, (date(2026, 8, 14),))
+        self.assertEqual(first.covered_source_dates, (date(2026, 8, 14),))
+        self.assertTrue(first.retrieval_complete)
+        self.assertEqual(second.new_analysis_count, 0)
+        self.assertEqual(second.reused_analysis_count, 3)
+        self.assertEqual(analyzer.calls, [])
+        runs = self.db.get_app_runs()
+        self.assertEqual(runs[0]["run_origin"], RunOrigin.MANUAL)
+        self.assertEqual(runs[0]["requested_source_dates_json"], '["2026-08-14"]')
+        self.assertEqual(runs[0]["covered_source_dates_json"], '["2026-08-14"]')
+
+    def test_different_date_selections_produce_distinct_run_metadata(self) -> None:
+        analyzer = FakeAnalyzer(self.analysis_payloads)
+
+        run_digest(
+            db=self.db,
+            source=DateStaticSource(self.articles),
+            analyzer=analyzer,
+            profile_id=self.profile.id,
+            date_selection=DateSelection.single_date(date(2026, 8, 14)),
+            run_origin=RunOrigin.MANUAL,
+        )
+        run_digest(
+            db=self.db,
+            source=DateStaticSource(self.articles),
+            analyzer=analyzer,
+            profile_id=self.profile.id,
+            date_selection=DateSelection.date_range(date(2026, 8, 14), date(2026, 8, 15)),
+            run_origin=RunOrigin.MANUAL,
+        )
+
+        runs = self.db.get_app_runs()
+        self.assertNotEqual(runs[0]["date_selection_json"], runs[1]["date_selection_json"])
+        self.assertIn("DATE_RANGE", runs[0]["date_selection_json"])
+        self.assertIn("SINGLE_DATE", runs[1]["date_selection_json"])
+        self.assertEqual(
+            runs[0]["requested_source_dates_json"],
+            '["2026-08-14", "2026-08-15"]',
+        )
+        self.assertEqual(
+            runs[0]["covered_source_dates_json"],
+            '["2026-08-14", "2026-08-15"]',
+        )
+
+    def test_empty_source_date_is_completed_with_empty_coverage(self) -> None:
+        result = run_digest(
+            db=self.db,
+            source=DateStaticSource([]),
+            analyzer=FakeAnalyzer(),
+            profile_id=self.profile.id,
+            date_selection=DateSelection.single_date(date(2026, 8, 15)),
+            run_origin=RunOrigin.MANUAL,
+        )
+
+        self.assertEqual(result.retrieved_count, 0)
+        self.assertEqual(result.analyzed_count, 0)
+        self.assertEqual(result.covered_source_dates, (date(2026, 8, 15),))
+        self.assertEqual(result.empty_source_dates, (date(2026, 8, 15),))
+        self.assertTrue(result.retrieval_complete)
+
+    def test_partial_retrieval_cannot_mark_date_covered(self) -> None:
+        result = run_digest(
+            db=self.db,
+            source=DateStaticSource(
+                self.articles[:1],
+                incomplete_dates=(date(2026, 8, 14),),
+                safety_limit=1,
+            ),
+            analyzer=FakeAnalyzer(self.analysis_payloads),
+            profile_id=self.profile.id,
+            date_selection=DateSelection.single_date(date(2026, 8, 14)),
+            run_origin=RunOrigin.MANUAL,
+        )
+
+        self.assertFalse(result.retrieval_complete)
+        self.assertEqual(result.covered_source_dates, ())
+        self.assertEqual(result.incomplete_source_dates, (date(2026, 8, 14),))
+        self.assertEqual(result.retrieval_safety_limit, 1)
+        run = self.db.get_app_runs()[0]
+        self.assertEqual(run["retrieval_complete"], 0)
+        self.assertEqual(run["covered_source_dates_json"], "[]")
+        self.assertEqual(run["incomplete_source_dates_json"], '["2026-08-14"]')
+
+    def test_date_selection_failure_records_retrieval_metadata_and_retry_succeeds(self) -> None:
+        selection = DateSelection.single_date(date(2026, 8, 14))
+        with self.assertRaises(RuntimeError):
+            run_digest(
+                db=self.db,
+                source=DateStaticSource(self.articles[:1]),
+                analyzer=FailingAnalyzer(),
+                profile_id=self.profile.id,
+                date_selection=selection,
+                run_origin=RunOrigin.MANUAL,
+            )
+        failed = self.db.get_app_runs()[0]
+
+        retry = run_digest(
+            db=self.db,
+            source=DateStaticSource(self.articles[:1]),
+            analyzer=FakeAnalyzer(self.analysis_payloads),
+            profile_id=self.profile.id,
+            date_selection=selection,
+            run_origin=RunOrigin.MANUAL,
+        )
+
+        self.assertEqual(failed["status"], APP_RUN_FAILED)
+        self.assertEqual(failed["requested_source_dates_json"], '["2026-08-14"]')
+        self.assertEqual(failed["covered_source_dates_json"], '["2026-08-14"]')
+        self.assertEqual(failed["retrieval_complete"], 1)
+        self.assertEqual(retry.new_analysis_count, 1)
+        self.assertTrue(retry.retrieval_complete)
+
+    def test_date_selection_source_failure_before_metadata_marks_requested_incomplete(
+        self,
+    ) -> None:
+        with self.assertRaises(RuntimeError):
+            run_digest(
+                db=self.db,
+                source=FailingDateSource([]),
+                analyzer=FakeAnalyzer(),
+                profile_id=self.profile.id,
+                date_selection=DateSelection.single_date(date(2026, 8, 14)),
+                run_origin=RunOrigin.MANUAL,
+            )
+
+        failed = self.db.get_app_runs()[0]
+        self.assertEqual(failed["status"], APP_RUN_FAILED)
+        self.assertEqual(failed["requested_source_dates_json"], '["2026-08-14"]')
+        self.assertEqual(failed["covered_source_dates_json"], "[]")
+        self.assertEqual(failed["incomplete_source_dates_json"], '["2026-08-14"]')
+        self.assertEqual(failed["retrieval_complete"], 0)
+
+    def test_latest_available_source_failure_remains_unresolved_but_incomplete(self) -> None:
+        with self.assertRaises(RuntimeError):
+            run_digest(
+                db=self.db,
+                source=FailingDateSource([]),
+                analyzer=FakeAnalyzer(),
+                profile_id=self.profile.id,
+                date_selection=DateSelection.latest_available(),
+                run_origin=RunOrigin.MANUAL,
+            )
+
+        failed = self.db.get_app_runs()[0]
+        self.assertEqual(failed["requested_source_dates_json"], "[]")
+        self.assertEqual(failed["covered_source_dates_json"], "[]")
+        self.assertEqual(failed["incomplete_source_dates_json"], "[]")
+        self.assertEqual(failed["retrieval_complete"], 0)
 
 
 if __name__ == "__main__":

@@ -127,3 +127,72 @@ U2-A freeze:
 - qualified commit: `616d84209c7295de2884d4ae82df0a5bd222d397`.
 - qualified tag: `u2a-qualified`.
 - qualified tag object: `84e22c2eaa2b67c1dc6000fe4cc42e25a7f32e7c`.
+
+## U2-B Candidate
+
+Implementation summary:
+
+- Added `RunOrigin` and date-selection/coverage fields to `DigestResult`.
+- Added optional `DateNativeSourceAdapter` protocol for source adapters.
+- Wired `DateSelection` and `RunOrigin` through `run_digest`,
+  `run_digest_for_profile`, and `run_digest_for_enabled_profiles`.
+- Added schema version 5 with additive app-run metadata columns:
+  `run_origin`, `date_selection_json`, requested/covered/empty/incomplete
+  source-date JSON lists, retrieval completeness, and retrieval safety limit.
+- Preserved legacy historical semantics by defaulting older rows to `LEGACY`
+  origin and empty date metadata.
+- Added date metadata to run snapshots, History entries, CLI status last-run
+  payloads, and backup JSON export.
+
+Behavior covered:
+
+- Identical date rerun reuses cached article analyses.
+- Different date selections produce distinct run metadata.
+- Empty source dates complete with empty-date coverage.
+- Partial retrieval cannot mark dates covered.
+- Analyzer failure after retrieval records date metadata and retry succeeds.
+- Historical snapshot date metadata remains immutable after current config
+  changes.
+- Legacy app-runs migrate with non-reinterpreting defaults.
+
+Candidate deterministic verification:
+
+- `pytest`: 172 passed.
+- `ruff check .`: PASS.
+- `mypy --strict src tests`: PASS.
+- `python -m compileall -q src tests`: PASS.
+- `git diff --check`: PASS.
+
+Audit status: fresh independent U2-B Auditor pending.
+
+Initial independent U2-B Auditor:
+
+- Auditor `01a00f95-797f-7bf1-ba94-bb43b2cf663a` returned FAIL with one
+  IMPORTANT finding.
+- Finding: source failures before date-retrieval metadata returned could persist
+  `retrieval_complete=1` and empty requested/incomplete date lists.
+- Repair round 1 precomputes deterministic requested dates for
+  single/range/explicit selections, initializes date-native retrieval as
+  incomplete until the source returns, marks source failures before metadata as
+  incomplete, and keeps latest-available unresolved failures incomplete with no
+  concrete requested dates.
+- Added regression coverage for source failure before metadata,
+  latest-available source failure, and range expanded requested/covered dates
+  at the pipeline layer.
+
+Post-repair verification:
+
+- `pytest`: 174 passed.
+- `ruff check .`: PASS.
+- `mypy --strict src tests`: PASS.
+- `python -m compileall -q src tests`: PASS.
+- `git diff --check`: PASS.
+
+Fresh U2-B re-audit:
+
+- Auditor `01a00f9a-2298-7322-871f-ce433e051611` returned PASS.
+- No BLOCKER or IMPORTANT findings remain.
+- The auditor confirmed the prior repair and broader U2-B coverage: pipeline
+  propagation, schema v5 migration, legacy defaults, immutable snapshots,
+  History/status/export metadata, cache reuse, partial retrieval,
+  failure/retry, profile semantic invalidation, and run locking.

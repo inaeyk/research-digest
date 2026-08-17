@@ -12,7 +12,12 @@ from research_digest.calibration import CalibrationSummary, build_calibration_su
 from research_digest.db import Database
 from research_digest.errors import sanitize_error
 from research_digest.history import persist_run_snapshot
-from research_digest.models import DigestResult, profile_semantic_fingerprint
+from research_digest.models import (
+    DateSelection,
+    DigestResult,
+    RunOrigin,
+    profile_semantic_fingerprint,
+)
 from research_digest.pipeline import DigestPipelineError, run_digest
 from research_digest.preselection import AbstractPreselector
 from research_digest.sources.base import SourceAdapter
@@ -92,6 +97,8 @@ def run_digest_for_profile(
     analyzer: LLMAnalyzer | None,
     profile_id: int,
     source_request: SourceRunRequest[Any] | None = None,
+    date_selection: DateSelection | None = None,
+    run_origin: RunOrigin = RunOrigin.LEGACY,
     now: datetime | None = None,
     preselector: AbstractPreselector | None = None,
     synthesis_builder: CrossPaperSynthesizer | None = None,
@@ -110,6 +117,8 @@ def run_digest_for_profile(
                 analyzer=analyzer,
                 profile_id=profile_id,
                 source_request=source_request,
+                date_selection=date_selection,
+                run_origin=run_origin,
                 now=now,
                 preselector=preselector,
                 synthesis_builder=synthesis_builder,
@@ -124,6 +133,8 @@ def run_digest_for_profile(
         source=source,
         analyzer=analyzer,
         source_request=source_request,
+        date_selection=date_selection,
+        run_origin=run_origin,
         profile_id=profile_id,
         now=now,
         preselector=preselector,
@@ -147,6 +158,8 @@ def run_digest_for_enabled_profiles(
     source: SourceAdapter,
     analyzer: LLMAnalyzer | None,
     source_request: SourceRunRequest[Any] | None = None,
+    date_selection: DateSelection | None = None,
+    run_origin: RunOrigin = RunOrigin.LEGACY,
     now: datetime | None = None,
     preselector: AbstractPreselector | None = None,
     synthesis_builder: CrossPaperSynthesizer | None = None,
@@ -162,6 +175,8 @@ def run_digest_for_enabled_profiles(
             source=source,
             analyzer=analyzer,
             source_request=source_request,
+            date_selection=date_selection,
+            run_origin=run_origin,
             now=now,
             preselector=preselector,
             synthesis_builder=synthesis_builder,
@@ -177,6 +192,8 @@ def _run_digest_for_enabled_profiles_unlocked(
     source: SourceAdapter,
     analyzer: LLMAnalyzer | None,
     source_request: SourceRunRequest[Any] | None,
+    date_selection: DateSelection | None,
+    run_origin: RunOrigin,
     now: datetime | None,
     preselector: AbstractPreselector | None,
     synthesis_builder: CrossPaperSynthesizer | None,
@@ -197,6 +214,8 @@ def _run_digest_for_enabled_profiles_unlocked(
                 analyzer=analyzer,
                 profile_id=profile.id,
                 source_request=source_request,
+                date_selection=date_selection,
+                run_origin=run_origin,
                 now=now,
                 preselector=preselector,
                 synthesis_builder=synthesis_builder,

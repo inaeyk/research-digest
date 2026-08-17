@@ -3,13 +3,20 @@ from __future__ import annotations
 import tempfile
 import unittest
 from collections.abc import Mapping, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 from research_digest.analysis.fake import FakeAnalyzer
 from research_digest.db import APP_RUN_FAILED, Database
 from research_digest.history import get_run_snapshot, list_run_history
-from research_digest.models import AnalysisResult, Article, ArxivSourceConfig, InterestProfile
+from research_digest.models import (
+    AnalysisResult,
+    Article,
+    ArxivSourceConfig,
+    DateSelection,
+    InterestProfile,
+    RunOrigin,
+)
 from research_digest.service import run_digest_for_profile
 
 
@@ -21,6 +28,31 @@ class StaticSource:
         if not config.enabled:
             return []
         return list(self.articles[: config.max_results])
+
+
+class DateStaticSource(StaticSource):
+    def fetch_date_selection(
+        self,
+        config: ArxivSourceConfig,
+        selection: DateSelection,
+    ) -> object:
+        from research_digest.sources.arxiv import ArxivDateRetrievalResult
+
+        articles = tuple(self.articles if config.enabled else [])
+        requested_dates = selection.selected_dates()
+        article_dates = {item.published_at.date() for item in articles}
+        return ArxivDateRetrievalResult(
+            selection=selection,
+            articles=articles,
+            requested_dates=requested_dates,
+            covered_dates=requested_dates,
+            empty_dates=tuple(value for value in requested_dates if value not in article_dates),
+            incomplete_dates=(),
+            latest_available_date=None,
+            retrieved_count=len(articles),
+            safety_limit=2000,
+            safety_limit_reached=False,
+        )
 
 
 class FailingAnalyzer:
@@ -144,6 +176,29 @@ class HistoryTests(unittest.TestCase):
     def test_history_limit_must_be_positive(self) -> None:
         with self.assertRaisesRegex(ValueError, "positive"):
             list_run_history(self.db, limit=0)
+
+    def test_history_preserves_original_date_selection_metadata(self) -> None:
+        selection = DateSelection.single_date(date(2026, 8, 14))
+        result = run_digest_for_profile(
+            db=self.db,
+            source=DateStaticSource([article("2608.history04", "Date history paper")]),
+            analyzer=FakeAnalyzer(),
+            profile_id=self.profile.id or 0,
+            date_selection=selection,
+            run_origin=RunOrigin.MANUAL,
+        )
+        before = get_run_snapshot(self.db, run_id=result.digest.run_id)
+        self.db.save_arxiv_config(ArxivSourceConfig(categories=["gr-qc"]))
+        after = get_run_snapshot(self.db, run_id=result.digest.run_id)
+        entries = list_run_history(self.db)
+
+        self.assertEqual(before, after)
+        assert after is not None
+        self.assertEqual(after["date_selection"], selection.to_mapping())
+        self.assertEqual(after["run_origin"], RunOrigin.MANUAL)
+        self.assertEqual(after["requested_source_dates"], ["2026-08-14"])
+        self.assertEqual(entries[0].date_selection, selection.to_mapping())
+        self.assertEqual(entries[0].requested_source_dates, ("2026-08-14",))
 
 
 if __name__ == "__main__":

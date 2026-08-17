@@ -486,6 +486,16 @@ def _last_run_to_mapping(row: object) -> dict[str, object]:
         "error_message": sanitize_error(str(values["error_message"]))
         if values["error_message"] is not None
         else None,
+        "run_origin": values["run_origin"],
+        "date_selection": json.loads(str(values["date_selection_json"]))
+        if values["date_selection_json"] is not None
+        else None,
+        "requested_source_dates": json.loads(str(values["requested_source_dates_json"])),
+        "covered_source_dates": json.loads(str(values["covered_source_dates_json"])),
+        "empty_source_dates": json.loads(str(values["empty_source_dates_json"])),
+        "incomplete_source_dates": json.loads(str(values["incomplete_source_dates_json"])),
+        "retrieval_complete": bool(values["retrieval_complete"]),
+        "retrieval_safety_limit": values["retrieval_safety_limit"],
     }
 
 

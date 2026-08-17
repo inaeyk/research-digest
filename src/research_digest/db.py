@@ -17,9 +17,11 @@ from research_digest.models import (
     Article,
     ArticleFeedback,
     ArxivSourceConfig,
+    DateSelection,
     FeedbackLabel,
     InterestProfile,
     ReadingPriority,
+    RunOrigin,
     datetime_from_db,
     datetime_to_db,
     utc_now,
@@ -28,7 +30,7 @@ from research_digest.models import (
 SOURCE_ARXIV = "arxiv"
 SCHEMA_VERSION_KEY = "schema_version"
 LAST_MIGRATION_BACKUP_KEY = "last_migration_backup_path"
-CURRENT_SCHEMA_VERSION = 4
+CURRENT_SCHEMA_VERSION = 5
 APP_RUN_STARTING = "STARTING"
 APP_RUN_RUNNING = "RUNNING"
 APP_RUN_COMPLETED = "COMPLETED"
@@ -381,14 +383,32 @@ class Database:
             raise RuntimeError("failed to load saved article feedback")
         return feedback
 
-    def create_app_run(self, *, profile_id: int | None, source_name: str) -> int:
+    def create_app_run(
+        self,
+        *,
+        profile_id: int | None,
+        source_name: str,
+        run_origin: RunOrigin = RunOrigin.LEGACY,
+        date_selection: DateSelection | None = None,
+    ) -> int:
         with self._connection() as conn:
             cursor = conn.execute(
                 """
-                INSERT INTO app_runs (profile_id, source_name, started_at, status)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO app_runs (
+                    profile_id, source_name, started_at, status, run_origin, date_selection_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (profile_id, source_name, datetime_to_db(utc_now()), APP_RUN_STARTING),
+                (
+                    profile_id,
+                    source_name,
+                    datetime_to_db(utc_now()),
+                    APP_RUN_STARTING,
+                    run_origin.value,
+                    json.dumps(date_selection.to_mapping(), sort_keys=True)
+                    if date_selection is not None
+                    else None,
+                ),
             )
             return _lastrowid(cursor)
 
@@ -411,6 +431,12 @@ class Database:
         analyzed_count: int,
         relevant_count: int,
         error_message: str | None = None,
+        requested_source_dates: Sequence[str] = (),
+        covered_source_dates: Sequence[str] = (),
+        empty_source_dates: Sequence[str] = (),
+        incomplete_source_dates: Sequence[str] = (),
+        retrieval_complete: bool = True,
+        retrieval_safety_limit: int | None = None,
     ) -> None:
         with self._connection() as conn:
             conn.execute(
@@ -418,7 +444,10 @@ class Database:
                 UPDATE app_runs
                 SET completed_at = ?, status = ?, retrieved_count = ?, stored_count = ?,
                     preselected_count = ?, skipped_analysis_count = ?, analyzed_count = ?,
-                    relevant_count = ?, error_message = ?
+                    relevant_count = ?, error_message = ?,
+                    requested_source_dates_json = ?, covered_source_dates_json = ?,
+                    empty_source_dates_json = ?, incomplete_source_dates_json = ?,
+                    retrieval_complete = ?, retrieval_safety_limit = ?
                 WHERE id = ?
                 """,
                 (
@@ -431,6 +460,12 @@ class Database:
                     analyzed_count,
                     relevant_count,
                     error_message,
+                    json.dumps(list(requested_source_dates)),
+                    json.dumps(list(covered_source_dates)),
+                    json.dumps(list(empty_source_dates)),
+                    json.dumps(list(incomplete_source_dates)),
+                    int(retrieval_complete),
+                    retrieval_safety_limit,
                     run_id,
                 ),
             )
@@ -459,7 +494,15 @@ class Database:
                         skipped_analysis_count,
                         analyzed_count,
                         relevant_count,
-                        error_message
+                        error_message,
+                        run_origin,
+                        date_selection_json,
+                        requested_source_dates_json,
+                        covered_source_dates_json,
+                        empty_source_dates_json,
+                        incomplete_source_dates_json,
+                        retrieval_complete,
+                        retrieval_safety_limit
                     FROM app_runs
                     ORDER BY id DESC
                     """,
@@ -827,6 +870,25 @@ def _migration_run_lifecycle_history(conn: sqlite3.Connection) -> None:
     _sanitize_existing_app_run_errors(conn)
 
 
+def _migration_run_date_metadata(conn: sqlite3.Connection) -> None:
+    if not _table_exists(conn, "app_runs"):
+        return
+    columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(app_runs)").fetchall()}
+    additions = {
+        "run_origin": "TEXT NOT NULL DEFAULT 'LEGACY'",
+        "date_selection_json": "TEXT",
+        "requested_source_dates_json": "TEXT NOT NULL DEFAULT '[]'",
+        "covered_source_dates_json": "TEXT NOT NULL DEFAULT '[]'",
+        "empty_source_dates_json": "TEXT NOT NULL DEFAULT '[]'",
+        "incomplete_source_dates_json": "TEXT NOT NULL DEFAULT '[]'",
+        "retrieval_complete": "INTEGER NOT NULL DEFAULT 1",
+        "retrieval_safety_limit": "INTEGER",
+    }
+    for name, definition in additions.items():
+        if name not in columns:
+            conn.execute(f"ALTER TABLE app_runs ADD COLUMN {name} {definition}")
+
+
 MIGRATIONS: Sequence[SchemaMigration] = (
     SchemaMigration(1, "core m1/m2 tables", _migration_core_tables),
     SchemaMigration(2, "profile-fingerprinted relevance analyses", _migration_profile_fingerprints),
@@ -836,6 +898,7 @@ MIGRATIONS: Sequence[SchemaMigration] = (
         "run lifecycle locks and history snapshots",
         _migration_run_lifecycle_history,
     ),
+    SchemaMigration(5, "date-native run metadata", _migration_run_date_metadata),
 )
 
 
