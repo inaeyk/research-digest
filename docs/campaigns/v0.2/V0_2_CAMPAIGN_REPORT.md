@@ -121,3 +121,9 @@ Fresh U2-A re-audit:
   compatibility.
 - Deferred OPTIONAL: consider a future raw API-row/page scan ceiling for
   malformed or inconsistent API responses.
+
+U2-A freeze:
+
+- qualified commit: `616d84209c7295de2884d4ae82df0a5bd222d397`.
+- qualified tag: `u2a-qualified`.
+- qualified tag object: `84e22c2eaa2b67c1dc6000fe4cc42e25a7f32e7c`.
