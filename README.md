@@ -4,8 +4,9 @@ Research Digest is a local-first arXiv research digest for a single user. It sto
 profiles, source settings, analyses, feedback, history, configuration, and backups
 locally in SQLite and user config/data directories.
 
-This first release is intentionally small: arXiv sources, title/abstract analysis,
-lightweight history, daily scheduling support, diagnostics, and backup/export.
+This release is intentionally small: arXiv sources, date-native title/abstract
+analysis, date-oriented history, UI-managed daily scheduling with catch-up,
+diagnostics, and backup/export.
 
 ## Installation
 
@@ -35,8 +36,9 @@ In the UI:
 1. Create an interest profile on Interests.
 2. Check the arXiv settings on Sources.
 3. Check provider/data health on Settings.
-4. Run a digest from Today.
-5. Review previous runs in History.
+4. Run a date digest from Today.
+5. Enable daily automation from Settings, if wanted.
+6. Review previous source-date runs in History.
 
 Run a digest without the UI:
 
@@ -44,6 +46,23 @@ Run a digest without the UI:
 research-digest run
 research-digest run --json
 ```
+
+## Manual date digests
+
+Today is date-oriented. Choose one of:
+
+- latest available arXiv source date
+- one explicit source date
+- a contiguous source-date range
+- selected non-contiguous source dates
+
+Research Digest retrieves all eligible arXiv articles for the selected source
+date or dates. The effort control is the qualified preselection/cache system:
+cached analyses are reused, and only cache-miss articles that pass deterministic
+abstract preselection are sent for new LLM analysis.
+
+For this arXiv release, source date means the UTC calendar date of the official
+arXiv Atom `published` timestamp.
 
 ## Analyzer providers
 
@@ -93,10 +112,26 @@ Existing repo-local development databases can be adopted into the user data
 directory during startup when no user-data DB exists. Explicit
 `RESEARCH_DIGEST_DB` disables automatic adoption.
 
-## Daily schedule
+## Daily automation
 
-On WSL2, Research Digest can install a Windows Task Scheduler task that invokes
-the installed headless command. Streamlit does not need to be running.
+Use Settings -> Automation for normal daily scheduling:
+
+- turn automatic daily digest on or off
+- set the daily time
+- see Windows-local-time / daylight-saving semantics
+- see installed state, next run, last scheduled run, and recent outcome
+- run automatic catch-up now
+- choose whether missed source dates should be caught up
+
+On WSL2, Research Digest installs a Windows Task Scheduler task that invokes the
+installed headless command. Streamlit does not need to be running.
+
+The default automatic behavior catches up missed arXiv source dates from the
+configured coverage anchor. A date is marked covered only after retrieval
+completed without truncation/source failure and the digest reached a usable
+terminal state. Failed or partial dates remain eligible for retry.
+
+Administrative CLI commands remain available for power users and debugging:
 
 ```bash
 research-digest schedule install --time 07:30
@@ -133,7 +168,7 @@ network reachability. Output is sanitized and should not include secrets.
 
 ## Backup and export
 
-Create a recoverable SQLite snapshot:
+Create a recoverable SQLite snapshot from Settings -> Data, or from the CLI:
 
 ```bash
 research-digest backup
@@ -162,6 +197,17 @@ source checkout by default and are upgraded through explicit SQLite schema and
 JSON config version handling. Migration backups are created before
 schema-changing DB upgrades where required.
 
+From v0.1.0 to v0.2.0:
+
+- historical rolling-lookback runs remain historical runs; they are not
+  silently reinterpreted as exact source-date coverage
+- stored arXiv `lookback_hours` and `max_results` values are preserved for
+  compatibility, but normal manual runs use explicit date selection
+- automatic coverage starts conservatively on first v0.2.0 config creation or
+  upgrade so the scheduler does not surprise-backfill the full arXiv archive
+- Settings can manage schedule, backup, provider health, paths, and diagnostics
+  without opening a shell after the app is launched
+
 Before upgrading an already-current installed/user-data database, run:
 
 ```bash
@@ -186,6 +232,7 @@ research-digest doctor
 
 - arXiv is the only source pool in this release.
 - Analysis is abstract-level; full-paper/PDF deep reading is deferred.
+- Date semantics use arXiv Atom `published` UTC source dates.
 - Lightweight History is not long-term semantic memory or trend analysis.
 - The supported schedule backend is WSL2 through Windows Task Scheduler.
 - This is a local single-user app; it does not provide authentication,

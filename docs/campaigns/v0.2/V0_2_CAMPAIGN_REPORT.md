@@ -515,3 +515,101 @@ U2-G freeze:
 - qualified commit: `908a4d3a673b65a18c66d5c03ee70bb267f4f3d1`.
 - qualified tag: `u2g-qualified`.
 - qualified tag object: `8dac248a8956d64cd51074be38cd2f237742c6b8`.
+
+## U2-H Candidate
+
+Implementation and documentation summary:
+
+- Bumped package/runtime version to `0.2.0`.
+- Updated README for date-native manual digests, arXiv UTC source-date
+  semantics, UI-managed daily automation, catch-up coverage semantics,
+  Settings backup/data/health, v0.1.0 upgrade expectations, and unchanged
+  release limitations.
+- Added `docs/campaigns/v0.2/RELEASE_CANDIDATE_PACKET.md` with release notes,
+  upgrade notes, date-selection guide, scheduler UI guide, schema/config
+  changes, backup/recovery instructions, known limitations, deferred optional
+  findings, and human-only release command sketch.
+- Added deterministic v0.1.0-style schema/config upgrade coverage preserving
+  history snapshots, legacy source settings, semantic data, and config backup
+  behavior.
+- Updated package/wheel and installed CLI version expectations to `0.2.0`.
+
+Actual v0.1.0 disposable upgrade smoke:
+
+- Created a disposable checkout of exact tag `v0.1.0` at commit
+  `905f3133b58b6248fe4d3714c19f8bcdf9dde4cf`.
+- Used released v0.1.0 code with isolated `/tmp` data/config paths and a
+  synthetic profile/article/analysis/feedback/run to create schema 4/config 1.
+- Reopened the same disposable data/config with current v0.2 candidate code.
+- Verified schema 6, config 3, preserved one synthetic profile, article,
+  analysis, feedback, and app run; run origin `LEGACY`; requested dates empty;
+  preserved legacy arXiv `lookback_hours=72` and `max_results=25`; conservative
+  coverage start date; zero coverage rows; backup/export success.
+
+Candidate deterministic verification:
+
+- focused release matrix/docs tests: 8 passed.
+- initial `pytest`: 211 passed.
+- `ruff check .`: PASS.
+- `mypy --strict src tests`: PASS.
+- `python -m compileall -q src tests`: PASS.
+- `git diff --check`: PASS.
+- migration inventory: version `0.2.0`, config version 3, schema version 6,
+  migrations 1 through 6.
+- package build: `python -m pip wheel . --no-deps` produced
+  `research_digest-0.2.0-py3-none-any.whl`.
+- isolated wheel install: PASS.
+- installed CLI smokes: `research-digest --version` reported `0.2.0`;
+  `status --json` initialized schema 6/config 3 in disposable paths;
+  `doctor --json` ran from the installed wheel and returned no failures with
+  expected fresh-environment warnings.
+
+Live smoke:
+
+- live arXiv latest-available smoke failed with DNS resolution failure for
+  `export.arxiv.org` before and after network escalation.
+- Streamlit serve smoke failed with local socket `[Errno 1] Operation not
+  permitted` before and after escalation.
+- Windows Task Scheduler status smoke failed with WSL
+  `UtilBindVsockAnyPort` socket failure before and after escalation.
+
+Audit status: fresh independent U2-H Auditor pending.
+
+Fresh U2-H audit:
+
+- Auditor `01a00fd9-92c0-7420-88c7-90ead1a806d7` returned PASS.
+- No BLOCKER or IMPORTANT findings remain.
+- Auditor verified the `u2g-qualified` and `v0.1.0` baselines, version/config/
+  schema inventory, focused U2-H release/docs checks, a broad compatibility
+  surface, and diff hygiene.
+- Auditor MINOR/OPTIONAL findings: campaign state `current_git_head` was stale;
+  arXiv user agent still used `ResearchDigest/0.1`.
+
+Minor repair:
+
+- Corrected campaign state `current_git_head` to the literal pre-candidate
+  branch HEAD `211c64ee2dbdbfc58d73fa819b673b4843a4b69e`.
+- Changed the default arXiv user agent to derive from package `__version__`.
+- Added a regression that the default arXiv user agent tracks the package
+  version.
+- Post-repair verification: `pytest` 212 passed; `ruff check .` PASS;
+  strict mypy PASS; compileall PASS; `git diff --check` PASS.
+- Rebuilt wheel from current source:
+  `research_digest-0.2.0-py3-none-any.whl`.
+- Re-ran isolated installed wheel smoke:
+  `research-digest --version` reported `0.2.0`; `status --json` initialized
+  schema 6/config 3 in disposable paths.
+
+Focused U2-H post-repair audit:
+
+- Auditor `01a00fde-b7e3-7fd3-bc16-2271e538bebf` returned PASS.
+- No BLOCKER, IMPORTANT, MINOR, or OPTIONAL findings were newly identified.
+- Auditor verified no circular import risk from the version-derived arXiv user
+  agent, package/runtime version consistency, corrected campaign state HEAD,
+  RC packet consistency, focused tests, import smoke, ruff, and diff hygiene.
+
+U2-H freeze:
+
+- qualified commit: pending U2-H freeze commit.
+- qualified tag: pending `u2h-qualified`.
+- qualified tag object: pending `u2h-qualified`.

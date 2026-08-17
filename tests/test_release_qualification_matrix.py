@@ -91,6 +91,79 @@ class ReleaseQualificationMatrixTests(unittest.TestCase):
             with sqlite3.connect(backup.backup_path) as conn:
                 self.assertEqual(conn.execute("PRAGMA integrity_check").fetchone()[0], "ok")
 
+    def test_v010_upgrade_preserves_history_config_and_legacy_source_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            env = _isolated_env(tmp)
+            config_path = root / "config" / DEFAULT_CONFIG_FILENAME
+            config_path.parent.mkdir(parents=True)
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "config_version": 1,
+                        "analyzer_provider": "codex",
+                        "openai_model": "gpt-5-mini",
+                        "codex_model": None,
+                        "codex_timeout_seconds": 180.0,
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            legacy_db = root / "data" / "research_digest.sqlite3"
+            legacy_db.parent.mkdir(parents=True)
+            _create_representative_v010_db(legacy_db)
+
+            with mock.patch.dict(os.environ, env, clear=True):
+                config = load_config()
+                db = Database(config.db_path)
+                try:
+                    source = db.get_arxiv_config()
+                    runs = db.get_app_runs()
+                    snapshot = db.get_run_snapshot(run_id=1)
+                    backup = run_backup(
+                        output_path=root / "v010-upgrade-backup.sqlite3",
+                        export_json=True,
+                    )
+                    first_counts = _semantic_counts(config.db_path)
+                    first_version = db.get_schema_version()
+                    migration_backup = db.get_last_migration_backup_path()
+                finally:
+                    db.close()
+
+                reopened = Database(config.db_path)
+                try:
+                    second_counts = _semantic_counts(config.db_path)
+                    second_version = reopened.get_schema_version()
+                finally:
+                    reopened.close()
+
+            self.assertEqual(config.config_version, CONFIG_VERSION)
+            self.assertIsNotNone(config.last_config_backup_path)
+            self.assertEqual(first_version, CURRENT_SCHEMA_VERSION)
+            self.assertEqual(second_version, CURRENT_SCHEMA_VERSION)
+            self.assertIsNotNone(migration_backup)
+            self.assertEqual(first_counts, second_counts)
+            self.assertEqual(first_counts["interest_profiles"], 1)
+            self.assertEqual(first_counts["articles"], 1)
+            self.assertEqual(first_counts["relevance_analyses"], 1)
+            self.assertEqual(first_counts["article_feedback"], 1)
+            self.assertEqual(first_counts["app_runs"], 1)
+            self.assertEqual(first_counts["run_snapshots"], 1)
+            self.assertEqual(first_counts["source_date_coverage"], 0)
+            self.assertIsNotNone(source)
+            assert source is not None
+            self.assertEqual(source.lookback_hours, 72)
+            self.assertEqual(source.max_results, 25)
+            self.assertEqual(runs[0]["run_origin"], "LEGACY")
+            self.assertEqual(runs[0]["requested_source_dates_json"], "[]")
+            self.assertEqual(runs[0]["retrieval_complete"], 1)
+            self.assertIsNotNone(snapshot)
+            self.assertTrue(backup.backup_path.exists())
+            self.assertIsNotNone(backup.export_path)
+            assert backup.export_path is not None
+            self.assertTrue(backup.export_path.exists())
+
     def test_codex_unavailable_and_network_failure_are_bounded_and_sanitized(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             env = _isolated_env(tmp)
@@ -170,9 +243,9 @@ class ReleaseQualificationMatrixTests(unittest.TestCase):
             with zipfile.ZipFile(wheels[0]) as wheel:
                 names = set(wheel.namelist())
                 entry_points = wheel.read(
-                    "research_digest-0.1.0.dist-info/entry_points.txt"
+                    "research_digest-0.2.0.dist-info/entry_points.txt"
                 ).decode("utf-8")
-                metadata = wheel.read("research_digest-0.1.0.dist-info/METADATA").decode(
+                metadata = wheel.read("research_digest-0.2.0.dist-info/METADATA").decode(
                     "utf-8"
                 )
 
@@ -217,7 +290,7 @@ class ReleaseQualificationMatrixTests(unittest.TestCase):
                 text=True,
             )
 
-        self.assertEqual(result.stdout.strip(), "research-digest 0.1.0")
+        self.assertEqual(result.stdout.strip(), "research-digest 0.2.0")
 
 
 def _isolated_env(tmp: str) -> dict[str, str]:
@@ -399,6 +472,67 @@ def _create_representative_m2_qualified_db(path: Path) -> None:
         )
 
 
+def _create_representative_v010_db(path: Path) -> None:
+    now = "2026-08-14T12:00:00Z"
+    _create_representative_m2_qualified_db(path)
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            """
+            UPDATE source_configs
+            SET lookback_hours = ?, max_results = ?
+            WHERE source_name = ?
+            """,
+            (72, 25, "arxiv"),
+        )
+        conn.executescript(
+            """
+            CREATE TABLE schema_metadata (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE run_locks (
+                name TEXT PRIMARY KEY,
+                owner TEXT NOT NULL,
+                acquired_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE run_snapshots (
+                run_id INTEGER PRIMARY KEY,
+                snapshot_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(run_id) REFERENCES app_runs(id) ON DELETE CASCADE
+            );
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO schema_metadata (key, value, updated_at)
+            VALUES (?, ?, ?)
+            """,
+            ("schema_version", "4", now),
+        )
+        conn.execute(
+            """
+            INSERT INTO run_snapshots (run_id, snapshot_json, created_at)
+            VALUES (?, ?, ?)
+            """,
+            (
+                1,
+                json.dumps(
+                    {
+                        "run_id": 1,
+                        "profile_id": 1,
+                        "profile_name": "Gravity",
+                        "items": [],
+                        "synthesis": {"relevant_count": 1},
+                    }
+                ),
+                now,
+            ),
+        )
+
+
 def _semantic_counts(path: Path) -> dict[str, int]:
     tables = (
         "interest_profiles",
@@ -408,6 +542,7 @@ def _semantic_counts(path: Path) -> dict[str, int]:
         "article_feedback",
         "app_runs",
         "run_snapshots",
+        "source_date_coverage",
     )
     with sqlite3.connect(path) as conn:
         return {

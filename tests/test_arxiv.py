@@ -5,8 +5,10 @@ import urllib.parse
 from datetime import UTC, date, datetime
 from pathlib import Path
 
+from research_digest import __version__
 from research_digest.models import Article, ArxivSourceConfig, DateSelection
 from research_digest.sources.arxiv import (
+    DEFAULT_USER_AGENT,
     ArxivSource,
     build_arxiv_date_url,
     build_arxiv_url,
@@ -47,6 +49,9 @@ class PagingArxivSource(ArxivSource):
 
 
 class ArxivTests(unittest.TestCase):
+    def test_default_user_agent_tracks_package_version(self) -> None:
+        self.assertIn(f"ResearchDigest/{__version__}", DEFAULT_USER_AGENT)
+
     def test_build_query_supports_multiple_categories_with_encoding(self) -> None:
         config = ArxivSourceConfig(
             categories=["hep-th", "gr-qc"],

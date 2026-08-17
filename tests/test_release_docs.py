@@ -21,6 +21,10 @@ class ReleaseDocsTests(unittest.TestCase):
             self.assertIn(command, readme)
 
         self.assertNotIn("streamlit run src/research_digest/ui/app.py", readme)
+        self.assertIn("latest available arXiv source date", readme)
+        self.assertIn("contiguous source-date range", readme)
+        self.assertIn("Settings -> Automation", readme)
+        self.assertIn("Settings -> Data", readme)
         self.assertIn("arXiv is the only source pool", readme)
         self.assertIn("full-paper/PDF deep reading is deferred", readme)
         self.assertIn("not long-term semantic memory", readme)

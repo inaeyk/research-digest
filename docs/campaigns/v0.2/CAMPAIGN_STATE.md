@@ -1,23 +1,23 @@
 # v0.2 Campaign State
 
-- campaign_state: U2_H_IN_PROGRESS
+- campaign_state: U2_H_QUALIFIED
 - current_substage: U2-H v0.1.0 to v0.2.0 Upgrade Qualification
-- current_git_head: 908a4d3a673b65a18c66d5c03ee70bb267f4f3d1
+- current_git_head: 211c64ee2dbdbfc58d73fa819b673b4843a4b69e
 - current_branch: feature/v0.2-date-native-scheduler-ui
 - released_baseline_tag: v0.1.0
 - released_baseline_commit: 905f3133b58b6248fe4d3714c19f8bcdf9dde4cf
 - released_baseline_tag_object: be5925e7172ab788dde674669fd7d82068038b92
 - current_master_origin_state: local master and local origin/master both resolve to 70fdd312439342defdb1d4036cc71802c001af9c
 - online_remote_verification: attempted `git ls-remote --heads --tags origin`; blocked by DNS resolution failure for `github.com` before and after network escalation.
-- package_version: 0.1.0
-- runtime_version: 0.1.0
+- package_version: 0.2.0
+- runtime_version: 0.2.0
 - schema_version: 6
 - config_version: 3
 - worktree_state_at_campaign_start: clean tracked worktree; ignored runtime files include `.env`, local SQLite, virtualenv, caches, and local agent/runtime directories.
-- qualification_state: U2-G qualified; U2-H qualification planning pending.
+- qualification_state: U2-H PASS after fresh independent audit and focused post-repair audit; freeze commit/tag pending.
 - audit_round: 0
-- deterministic_checks: baseline `pytest` 149 passed; U2-A post-repair `pytest` 166 passed; U2-B post-repair `pytest` 174 passed; U2-C repair round 1 `pytest` 184 passed; U2-D repair round 1 `pytest` 195 passed; U2-E candidate `pytest` 202 passed; U2-F candidate `pytest` 204 passed; U2-G candidate `pytest` 210 passed; `ruff check .` PASS; `mypy --strict src tests` PASS; `python -m compileall -q src tests` PASS; `git diff --check` PASS.
-- live_checks: U2-A live arXiv latest-available smoke blocked by DNS resolution failure for `export.arxiv.org` before and after network escalation. U2-C Streamlit serve smoke blocked by local socket `Operation not permitted` before and after escalation. U2-D disposable live arXiv automatic headless smoke blocked by DNS resolution failure for `export.arxiv.org` before and after network escalation. U2-E Streamlit serve smoke blocked by local socket `Operation not permitted` before and after escalation. U2-E Windows Task Scheduler status smoke blocked by WSL `UtilBindVsockAnyPort` socket failure before and after escalation. U2-G Streamlit serve smoke blocked by local socket `Operation not permitted` before and after escalation.
+- deterministic_checks: baseline `pytest` 149 passed; U2-A post-repair `pytest` 166 passed; U2-B post-repair `pytest` 174 passed; U2-C repair round 1 `pytest` 184 passed; U2-D repair round 1 `pytest` 195 passed; U2-E candidate `pytest` 202 passed; U2-F candidate `pytest` 204 passed; U2-G candidate `pytest` 210 passed; U2-H post-repair `pytest` 212 passed; `ruff check .` PASS; `mypy --strict src tests` PASS; `python -m compileall -q src tests` PASS; `git diff --check` PASS; package wheel build PASS from current source; isolated wheel install plus installed `research-digest --version` and `status --json` smokes PASS with expected fresh-environment warnings only.
+- live_checks: U2-A live arXiv latest-available smoke blocked by DNS resolution failure for `export.arxiv.org` before and after network escalation. U2-C Streamlit serve smoke blocked by local socket `Operation not permitted` before and after escalation. U2-D disposable live arXiv automatic headless smoke blocked by DNS resolution failure for `export.arxiv.org` before and after network escalation. U2-E Streamlit serve smoke blocked by local socket `Operation not permitted` before and after escalation. U2-E Windows Task Scheduler status smoke blocked by WSL `UtilBindVsockAnyPort` socket failure before and after escalation. U2-G Streamlit serve smoke blocked by local socket `Operation not permitted` before and after escalation. U2-H live arXiv latest-available smoke blocked by DNS resolution failure for `export.arxiv.org` before and after network escalation; U2-H Streamlit serve smoke blocked by local socket `Operation not permitted` before and after escalation; U2-H Windows Task Scheduler status smoke blocked by WSL `UtilBindVsockAnyPort` socket failure before and after escalation.
 - schema_config_migration_state: v0.1.0 uses ordered SQLite migrations through schema version 4 and JSON config version 1; U2-A raises JSON config to version 2; U2-B raises SQLite schema to version 5 with additive app-run date metadata defaults that preserve legacy historical run meaning; U2-D candidate raises SQLite schema to version 6 with additive source-date coverage and JSON config to version 3 with automatic catch-up enabled plus a conservative coverage start anchor.
 - qualified_local_commit: 908a4d3a673b65a18c66d5c03ee70bb267f4f3d1
 - qualified_local_tag: u2g-qualified
@@ -44,7 +44,7 @@
 - u2g_qualified_tag: u2g-qualified
 - u2g_qualified_tag_object: 8dac248a8956d64cd51074be38cd2f237742c6b8
 - deferred_minor_optional_findings: U2-A re-auditor OPTIONAL: future hardening could add a separate raw API-row/page scan ceiling for malformed or inconsistent API responses; not required for U2-A after explicit-date repair. U2-F auditor OPTIONAL: selected-entry partial retrieval warnings are visible, but the selectbox/status label can still say `Completed`; requested/covered detail captions use ISO source-date strings rather than friendly date labels. U2-G auditor OPTIONAL: Settings backup directory display hardcodes the current backup directory name instead of importing `backup.DEFAULT_BACKUP_DIRNAME`; behavior matches the backup service.
-- next_permitted_action: freeze U2-H qualification plan, then execute disposable upgrade and release-candidate matrix checks.
+- next_permitted_action: create local U2-H freeze commit and annotated `u2h-qualified` tag, then run final independent RC audit over the complete delta from `v0.1.0`.
 - human_stop_reason: none
 
 ## Recovered v0.1.0 Baseline
@@ -178,6 +178,77 @@ service boundaries.
    - Attempt a Streamlit serve smoke if the environment permits; record any
      sandbox/socket block.
    - Require a fresh independent U2-G Auditor before qualification.
+
+## Frozen U2-H Plan
+
+Goal: qualify the actual released v0.1.0 to v0.2.0 upgrade path and prepare a
+release-candidate stop state without creating a public v0.2.0 release, public
+tag, package publication, or remote push.
+
+1. Release-candidate metadata and docs
+   - Bump package/runtime version from `0.1.0` to `0.2.0`.
+   - Update package qualification tests that intentionally inspect wheel
+     metadata and CLI version output.
+   - Update README for date-native manual digests, UI-managed scheduling,
+     catch-up semantics, date-oriented History, Settings backup/health, and
+     unchanged arXiv-only/abstract-only limitations.
+   - Add durable release-candidate notes covering release notes, upgrade notes,
+     date-selection guide, scheduler UI guide, known limitations,
+     schema/config changes, backup/recovery, and deferred optional findings.
+
+2. Deterministic upgrade tests
+   - Extend the release qualification matrix for v0.1.0-style schema/config
+     upgrade to schema 6/config 3.
+   - Verify preservation of profiles, articles, relevance analyses,
+     preselection counters, feedback, synthesis/snapshots where present,
+     history, source settings, coverage defaults, data/config locations, and
+     backup/export behavior.
+   - Verify config/schema migrations are deterministic and idempotent,
+     including migration away from ordinary lookback/max-results UI semantics
+     without destroying stored legacy values.
+
+3. Date and scheduler matrix coverage
+   - Deterministically exercise one explicit date, date range, explicit
+     non-contiguous dates, latest available, no-submission date, missed-date
+     catch-up, failed-date retry, cached rerun, internal retrieval safety-cap
+     behavior, backup/doctor/status, scheduler install/update/remove request
+     safety, stale Codex PATH warning, and headless scheduled run semantics.
+   - Reuse existing deterministic fake source/analyzer/scheduler tests where
+     they already cover matrix cells; add tests only for uncovered U2-H gaps.
+
+4. Disposable actual v0.1.0 smoke
+   - Create a disposable checkout/worktree or archive of exact tag `v0.1.0`.
+   - In disposable data/config directories, run the v0.1.0 installed/editable
+     CLI enough to create representative v0.1.0 user data/config.
+   - Run current code against those same disposable directories and verify
+     schema/config upgrade, history interpretability, stored source settings,
+     no duplicate scheduled-task construction in deterministic request tests,
+     and backup/export success.
+   - Do not inspect or record private runtime data; use synthetic disposable
+     profiles/papers only.
+
+5. Packaging and installed CLI qualification
+   - Run full `pytest`, `ruff check .`, `mypy --strict src tests`,
+     `python -m compileall -q src tests`, package build, isolated wheel
+     install, installed CLI smokes, git hygiene, and migration inventory.
+   - Prefer local no-dependency installs/builds to avoid network; if a
+     required dependency fetch fails due sandbox/network, request escalation
+     rather than weakening the check.
+
+6. Live smoke attempts
+   - Attempt live arXiv/source UI/scheduler smoke where the environment allows.
+   - Record environment blocks such as DNS/socket/WSL Task Scheduler failures
+     without weakening deterministic qualification.
+
+7. Audit and final stop
+   - Require a fresh independent U2-H Auditor over the complete U2-H candidate.
+   - After U2-H PASS, create local commit and annotated `u2h-qualified` tag.
+   - Run the final independent auditor over the complete delta from `v0.1.0`.
+   - Resolve BLOCKER/IMPORTANT findings within the bounded repair policy.
+   - On final PASS, set
+     `CAMPAIGN_STATE = V0_2_RELEASE_CANDIDATE_COMPLETE_AWAITING_HUMAN`,
+     identify the exact RC commit, ensure worktree clean, and STOP for the
+     human release decision.
 
 ## Frozen U2-A Plan
 

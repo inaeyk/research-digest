@@ -5,7 +5,7 @@ backend-path = ["."]
 
 [project]
 name = "research-digest"
-version = "0.1.0"
+version = "0.2.0"
 description = "A personal research-information extractor MVP."
 readme = "README.md"
 requires-python = ">=3.11"

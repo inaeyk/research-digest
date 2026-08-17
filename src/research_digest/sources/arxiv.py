@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Final
 
+from research_digest import __version__
 from research_digest.models import (
     Article,
     ArxivSourceConfig,
@@ -27,7 +28,7 @@ from research_digest.sources.base import SourceError
 ARXIV_API_URL: Final = "https://export.arxiv.org/api/query"
 ARXIV_SOURCE_NAME: Final = "arxiv"
 DEFAULT_USER_AGENT: Final = (
-    "ResearchDigest/0.1 "
+    f"ResearchDigest/{__version__} "
     "(personal research digest; contact: research-digest@example.invalid)"
 )
 DEFAULT_DATE_PAGE_SIZE: Final = 500
