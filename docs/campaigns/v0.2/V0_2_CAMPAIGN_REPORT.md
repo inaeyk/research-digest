@@ -512,6 +512,6 @@ Fresh U2-G audit:
 
 U2-G freeze:
 
-- qualified commit: pending U2-G freeze commit.
-- qualified tag: pending `u2g-qualified`.
-- qualified tag object: pending `u2g-qualified`.
+- qualified commit: `908a4d3a673b65a18c66d5c03ee70bb267f4f3d1`.
+- qualified tag: `u2g-qualified`.
+- qualified tag object: `8dac248a8956d64cd51074be38cd2f237742c6b8`.
