@@ -361,3 +361,11 @@ Audit state:
 - Deferred MINOR/OPTIONAL: none active after repair; personal note text remains
   searchable locally but is excluded from Codex-facing connection candidate
   evidence.
+
+Freeze state:
+
+- Qualified local commit:
+  `82c323d56c9ed9fbbdb8c36f602d03bd9d3d34b0`.
+- Qualified local annotated tag: `m6d-qualified`.
+- Tag object: `400e031ee29bf48b807e909d28304ea345b06b72`.
+- Tag target: `82c323d56c9ed9fbbdb8c36f602d03bd9d3d34b0`.
