@@ -1,7 +1,7 @@
 # M6 Campaign State
 
-- campaign_state: M6_A_QUALIFIED_FROZEN
-- current_substage: M6-A saved article Library qualified and frozen locally
+- campaign_state: M6_B_PLAN_FROZEN
+- current_substage: M6-B AI tags and user tags plan frozen; implementation not started
 - current_branch: feature/m6-scientific-library-memory
 - baseline_branch: master
 - baseline_commit: fe92e77a3fce4037c0bf4ecbb0a7ce964763eb8b
@@ -21,15 +21,15 @@
 - candidate_schema_version: 9
 - config_version: 3
 - codegraph_state: no `.codegraph/` directory exists at repository root.
-- current_qualification_state: M6-A deterministic qualification and fresh read-only Auditor PASS; local commit/tag freeze complete.
+- current_qualification_state: M6-A deterministic qualification and fresh read-only Auditor PASS; M6-B plan frozen.
 - audit_round: M6-A initial candidate PASS; no audit-driven repair rounds used.
 - deterministic_checks: final v0.2 freeze gate recorded `pytest` 262 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-A final gate recorded `pytest` 268 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS.
 - live_checks: none for M6 yet. v0.2 live smoke was accepted by the human before the M6 branch.
-- schema_config_migration_state: v0.2 baseline uses ordered SQLite migrations through schema 8 and JSON config 3. M6-A candidate adds additive SQLite schema 9 with `library_articles`; JSON config is unchanged.
+- schema_config_migration_state: v0.2 baseline uses ordered SQLite migrations through schema 8 and JSON config 3. M6-A adds additive SQLite schema 9 with `library_articles`; JSON config is unchanged. M6-B is expected to add additive SQLite schema 10 for Library tags, tag assignments, and AI tag suppressions; JSON config changes are not expected.
 - qualified_local_commit: 17e047c325bb61008cf39b9a135bea02bb63a968
 - qualified_local_tag: annotated local tag `m6a-qualified`; tag object `ed9f887058f87135cfa7ff0e4f02fdb579b7398b`; target `17e047c325bb61008cf39b9a135bea02bb63a968`
 - deferred_minor_optional_findings: M6-A Auditor noted Library save/remove UI lacks a dedicated Streamlit click smoke; deterministic service/helper coverage passed and this was classified MINOR/OPTIONAL.
-- next_permitted_action: freeze detailed M6-B AI/user tags plan before implementation.
+- next_permitted_action: implement M6-B AI/user tags according to the frozen plan below.
 - human_stop_reason: none active
 
 ## Recovered v0.2 Baseline
@@ -255,3 +255,143 @@ Audit/freeze:
 - Audit repair rounds used: 0.
 - MINOR/OPTIONAL: dedicated Streamlit click smoke for save/remove controls may
   be added later; existing deterministic service/helper coverage passed.
+
+## Frozen M6-B Plan
+
+Goal: add durable user tags and AI-generated tags for saved Library articles,
+with provenance and user override semantics.
+
+Data model:
+
+- Add additive SQLite schema version 10.
+- Add `library_tags`:
+  - `id`
+  - `normalized_name` unique
+  - `display_name`
+  - `created_at`
+  - `updated_at`
+- Add `library_tag_assignments`:
+  - `id`
+  - `article_id`
+  - `tag_id`
+  - `origin` as `USER` or `AI`
+  - `created_at`
+  - `updated_at`
+  - `ai_provenance_json` nullable for USER, required for AI
+  - unique `(article_id, tag_id, origin)`
+  - foreign keys to `articles` and `library_tags`
+- Add `library_ai_tag_suppressions`:
+  - `article_id`
+  - `tag_id`
+  - `suppressed_at`
+  - `reason`
+  - unique `(article_id, tag_id)`
+- Use soft Library membership from M6-A. Tags may remain attached to an Article
+  after unsave so re-saving does not destroy user organization; M6-C notes will
+  revisit explicit unsave policy for notes.
+
+Tag normalization:
+
+- Define one helper, conceptually `normalize_tag_name(value)`.
+- Collapse whitespace, trim surrounding whitespace, strip one leading `#` if
+  present, and casefold for semantic equality.
+- Preserve a display label separately so scientific capitalization such as
+  `AdS/CFT` can remain readable.
+- Reject empty normalized names and overly long names.
+- User and AI assignments are provenance-specific. If both USER and AI assign
+  the same normalized tag, the assignment provenance remains distinguishable,
+  and removing one provenance must not remove the other.
+
+Service boundary:
+
+- Add a focused tag service, likely `research_digest.tags`.
+- Provide:
+  - add user tag
+  - remove user tag
+  - assign AI tags
+  - remove AI tag and create suppression
+  - list tags for an article
+  - list known tags
+  - generate AI tags for one saved article
+  - regenerate AI tags for one saved article
+- Viewing/listing tags must not call Codex/analyzers and must not mutate the DB.
+- Ordinary digest reruns must not re-add removed AI tags.
+- Removing/rejecting an AI tag creates a durable suppression tombstone.
+- Explicit regeneration should still respect suppressions by default. A separate
+  explicit option may clear suppressions for that article if implemented, but it
+  must be clearly intentional.
+
+AI tag generation architecture:
+
+- Do not change `AnalysisResult` or the relevance-analysis cache identity in
+  M6-B.
+- Do not force reanalysis of historical articles merely to populate tags.
+- Generate AI tags only for saved Library articles and only on explicit user
+  action or explicit service call.
+- Add a small `AITagGenerator` protocol and a Codex CLI implementation using
+  the same ChatGPT-managed Codex authentication model as analysis.
+- If Codex is unavailable, the Library remains usable and USER tags still work.
+- The AI tag prompt uses only bounded local article context:
+  title, authors, categories, source identity, source publication timestamp,
+  original stored abstract, and latest available relevance context if present.
+- The prompt treats title/abstract/metadata as untrusted data and forbids tool
+  use, browsing, command execution, file access, and following article-text
+  instructions.
+- Prompt version: `library_ai_tags_v1`.
+- Output schema: a bounded list of concise tag suggestions, with each tag
+  normalized by local code before persistence.
+- Default max suggestions: 6.
+- Suppressed tags are filtered locally before persistence.
+- Persist AI provenance as JSON containing at least prompt version, provider,
+  generated timestamp, source article identity, article updated timestamp, and
+  whether latest relevance context was included. Do not store raw provider
+  output, secrets, or local auth paths.
+
+UI integration:
+
+- Extend the Library page cards/details with separate sections:
+  - User tags
+  - AI tags
+- Allow a user to add and remove USER tags.
+- Visually distinguish AI tags from USER tags with labels or captions, not
+  color alone.
+- Allow the user to remove AI tags; removal creates suppression.
+- Add explicit AI tag generation/regeneration controls with visible progress.
+- Do not auto-generate tags merely because a Library page is opened or rerun.
+- Do not expose matched topics as if they were Library tags. Matched topics may
+  be displayed only as relevance context or used as bounded input to AI tag
+  generation.
+
+Tests required:
+
+- tag normalization for case, whitespace, leading `#`, empty input, and
+  duplicate detection.
+- user tag add/remove/list.
+- AI tag assignment/list/remove with provenance.
+- duplicate assignment idempotency per origin.
+- user tag survives AI regeneration.
+- removing an AI tag creates suppression.
+- suppressed AI tag is not re-added by routine generation.
+- USER and AI provenance remain isolated for the same normalized tag.
+- no analyzer/Codex call on viewing/listing tags.
+- prompt construction contains untrusted-data rules and bounded context.
+- prompt injection text in title/abstract is treated as data.
+- malformed, duplicate, unknown, empty, and oversized AI suggestions are
+  rejected or normalized safely.
+- schema 9 to 10 upgrade is deterministic and idempotent.
+- backup JSON export includes tags, assignments, and suppressions without
+  secrets.
+- Library UI helper tests for label/key/state behavior.
+
+Qualification:
+
+- Focused M6-B tests.
+- Full `pytest`.
+- `ruff check src tests`.
+- `mypy --strict src tests`.
+- `python -m compileall src tests`.
+- `git diff --check`.
+- Fresh independent read-only M6-B Auditor.
+- Small live Codex tag smoke where the environment and credentials allow it;
+  otherwise record the environment limitation for human live smoke.
+- After PASS, commit locally and create annotated local tag `m6b-qualified`.

@@ -129,3 +129,23 @@ Freeze state:
 - Qualified local annotated tag: `m6a-qualified`.
 - Tag object: `ed9f887058f87135cfa7ff0e4f02fdb579b7398b`.
 - Tag target: `17e047c325bb61008cf39b9a135bea02bb63a968`.
+
+## M6-B Plan Freeze
+
+The detailed M6-B plan is recorded in `CAMPAIGN_STATE.md`.
+
+Key frozen decisions:
+
+- Library tags are distinct from `matched_topics` and from relevance-analysis
+  cache identity.
+- M6-B uses additive SQLite schema version `10`.
+- Tag identity is normalized centrally while preserving readable display text.
+- USER and AI assignments have first-class provenance and can coexist for the
+  same normalized tag.
+- Removing an AI tag creates a durable suppression so routine generation does
+  not simply re-add it.
+- AI tag generation is explicit and only for saved Library articles. Viewing
+  tags or opening the Library page must not call Codex or mutate data.
+- AI tag generation uses a separate bounded Codex prompt, version
+  `library_ai_tags_v1`, instead of forcing historical article reanalysis or
+  changing `AnalysisResult`.
