@@ -14,6 +14,12 @@ from typing import Any, TextIO, cast
 from research_digest import __version__
 from research_digest.analysis.base import LLMAnalyzer
 from research_digest.analysis.providers import build_configured_analyzer
+from research_digest.automation import (
+    install_or_update_schedule,
+    read_schedule_status,
+    remove_schedule,
+    run_automatic_digest_now,
+)
 from research_digest.backup import run_backup
 from research_digest.config import AppConfig, load_config
 from research_digest.db import Database
@@ -23,16 +29,14 @@ from research_digest.scheduler import (
     DEFAULT_TASK_NAME,
     ScheduleError,
     SchedulerBackend,
-    build_schedule_request,
     select_scheduler_backend,
 )
 from research_digest.service import (
     HeadlessDigestRun,
     HeadlessProfileRun,
-    run_automatic_digest_for_enabled_profiles,
 )
 from research_digest.sources.base import SourceAdapter
-from research_digest.sources.registry import ARXIV_SOURCE_DEFINITION, SourceRunRequest
+from research_digest.sources.registry import ARXIV_SOURCE_DEFINITION
 
 DEFAULT_SERVE_PORT = 8501
 SERVE_PORT_SCAN_LIMIT = 50
@@ -240,29 +244,17 @@ def _run_digest_command(
         active_config = config or load_config()
         active_db = db or Database(active_config.db_path)
         active_source = source or ARXIV_SOURCE_DEFINITION.build_adapter()
-        active_source_config = ARXIV_SOURCE_DEFINITION.load_config(active_db)
-        active_source_request = (
-            None
-            if active_source_config is None
-            else SourceRunRequest(
-                source_name=ARXIV_SOURCE_DEFINITION.name,
-                adapter=active_source,
-                config=active_source_config,
-            )
-        )
         active_analyzer = analyzer
         active_analyzer_message = analyzer_message
         if active_analyzer is None and active_analyzer_message is None:
             analyzer_connection = build_configured_analyzer(active_config)
             active_analyzer = analyzer_connection.analyzer
             active_analyzer_message = analyzer_connection.message
-        result = run_automatic_digest_for_enabled_profiles(
+        result = run_automatic_digest_now(
+            config=active_config,
             db=active_db,
             source=active_source,
             analyzer=active_analyzer,
-            source_request=active_source_request,
-            coverage_start_date=active_config.automatic_coverage_start_date,
-            catch_up_missed_dates=active_config.automatic_catch_up_enabled,
         )
     except Exception as exc:
         message = sanitize_error(exc)
@@ -509,16 +501,16 @@ def _last_run_to_mapping(row: object) -> dict[str, object]:
 
 
 def _schedule_status_payload(scheduler_backend: SchedulerBackend | None) -> dict[str, object]:
-    try:
-        backend = scheduler_backend or select_scheduler_backend()
-        return backend.status(task_name=DEFAULT_TASK_NAME).to_mapping()
-    except Exception as exc:
-        return {
-            "backend": None,
-            "task_name": DEFAULT_TASK_NAME,
-            "installed": False,
-            "message": sanitize_error(exc),
-        }
+    status = read_schedule_status(scheduler_backend=scheduler_backend)
+    if status.schedule is not None:
+        return status.schedule.to_mapping()
+    error_message = status.error_message or "Schedule status is unavailable."
+    return {
+        "backend": None,
+        "task_name": DEFAULT_TASK_NAME,
+        "installed": False,
+        "message": error_message,
+    }
 
 
 def _write_status_human(stdout: TextIO, payload: Mapping[str, object]) -> None:
@@ -607,22 +599,29 @@ def _schedule_command(
     scheduler_backend: SchedulerBackend | None,
 ) -> int:
     try:
-        backend = scheduler_backend or select_scheduler_backend(backend_name=args.backend)
         if args.schedule_command == "install":
-            request = build_schedule_request(
-                task_name=args.task_name,
+            backend = scheduler_backend or select_scheduler_backend(backend_name=args.backend)
+            result = install_or_update_schedule(
                 time_of_day=args.time,
                 config=config,
+                scheduler_backend=backend,
+                task_name=args.task_name,
                 wsl_distro=args.distro,
             )
-            result = backend.install(request)
             payload = result.to_mapping()
         elif args.schedule_command == "remove":
-            result = backend.remove(task_name=args.task_name)
+            backend = scheduler_backend or select_scheduler_backend(backend_name=args.backend)
+            result = remove_schedule(scheduler_backend=backend, task_name=args.task_name)
             payload = result.to_mapping()
         elif args.schedule_command == "status":
-            status = backend.status(task_name=args.task_name)
-            payload = status.to_mapping()
+            status = read_schedule_status(
+                scheduler_backend=scheduler_backend
+                or select_scheduler_backend(backend_name=args.backend),
+                task_name=args.task_name,
+            )
+            if status.schedule is None:
+                raise ScheduleError(status.error_message or "Schedule status is unavailable.")
+            payload = status.schedule.to_mapping()
         else:
             raise ScheduleError(f"unsupported schedule command: {args.schedule_command}")
     except Exception as exc:

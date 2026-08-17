@@ -1,6 +1,6 @@
 # v0.2 Campaign State
 
-- campaign_state: U2_E_IN_PROGRESS
+- campaign_state: U2_E_QUALIFIED_AWAITING_FREEZE
 - current_substage: U2-E Scheduler management in UI
 - current_git_head: 4f98ef637891141f1716d5c017e3e1be4fba3d32
 - current_branch: feature/v0.2-date-native-scheduler-ui
@@ -14,14 +14,14 @@
 - schema_version: 6
 - config_version: 3
 - worktree_state_at_campaign_start: clean tracked worktree; ignored runtime files include `.env`, local SQLite, virtualenv, caches, and local agent/runtime directories.
-- qualification_state: U2-D qualified and frozen locally; U2-E implementation may begin.
-- audit_round: 2
-- deterministic_checks: baseline `pytest` 149 passed; U2-A post-repair `pytest` 166 passed; U2-B post-repair `pytest` 174 passed; U2-C repair round 1 `pytest` 184 passed; U2-D repair round 1 `pytest` 195 passed; `ruff check .` PASS; `mypy --strict src tests` PASS; `python -m compileall -q src tests` PASS; `git diff --check` PASS.
-- live_checks: U2-A live arXiv latest-available smoke blocked by DNS resolution failure for `export.arxiv.org` before and after network escalation. U2-C Streamlit serve smoke blocked by local socket `Operation not permitted` before and after escalation. U2-D disposable live arXiv automatic headless smoke blocked by DNS resolution failure for `export.arxiv.org` before and after network escalation.
+- qualification_state: U2-E candidate passed fresh independent audit; local freeze pending.
+- audit_round: 1
+- deterministic_checks: baseline `pytest` 149 passed; U2-A post-repair `pytest` 166 passed; U2-B post-repair `pytest` 174 passed; U2-C repair round 1 `pytest` 184 passed; U2-D repair round 1 `pytest` 195 passed; U2-E candidate `pytest` 202 passed; `ruff check .` PASS; `mypy --strict src tests` PASS; `python -m compileall -q src tests` PASS; `git diff --check` PASS.
+- live_checks: U2-A live arXiv latest-available smoke blocked by DNS resolution failure for `export.arxiv.org` before and after network escalation. U2-C Streamlit serve smoke blocked by local socket `Operation not permitted` before and after escalation. U2-D disposable live arXiv automatic headless smoke blocked by DNS resolution failure for `export.arxiv.org` before and after network escalation. U2-E Streamlit serve smoke blocked by local socket `Operation not permitted` before and after escalation. U2-E Windows Task Scheduler status smoke blocked by WSL `UtilBindVsockAnyPort` socket failure before and after escalation.
 - schema_config_migration_state: v0.1.0 uses ordered SQLite migrations through schema version 4 and JSON config version 1; U2-A raises JSON config to version 2; U2-B raises SQLite schema to version 5 with additive app-run date metadata defaults that preserve legacy historical run meaning; U2-D candidate raises SQLite schema to version 6 with additive source-date coverage and JSON config to version 3 with automatic catch-up enabled plus a conservative coverage start anchor.
-- qualified_local_commit: 4f98ef637891141f1716d5c017e3e1be4fba3d32
-- qualified_local_tag: u2d-qualified
-- qualified_local_tag_object: d0866476699fde8067102ea4d9d9643b6cb3d422
+- qualified_local_commit: pending U2-E freeze commit
+- qualified_local_tag: pending `u2e-qualified`
+- qualified_local_tag_object: pending
 - u2a_qualified_commit: 616d84209c7295de2884d4ae82df0a5bd222d397
 - u2a_qualified_tag: u2a-qualified
 - u2a_qualified_tag_object: 84e22c2eaa2b67c1dc6000fe4cc42e25a7f32e7c
@@ -35,7 +35,7 @@
 - u2d_qualified_tag: u2d-qualified
 - u2d_qualified_tag_object: d0866476699fde8067102ea4d9d9643b6cb3d422
 - deferred_minor_optional_findings: U2-A re-auditor OPTIONAL: future hardening could add a separate raw API-row/page scan ceiling for malformed or inconsistent API responses; not required for U2-A after explicit-date repair. U2-C initial auditor OPTIONAL: Sources page still exposes legacy `Lookback hours` and `Max results`; defer demotion/removal to U2-G unless later substages require it earlier.
-- next_permitted_action: implement U2-E scheduler management in UI using the same scheduler/service boundaries; run deterministic and available live smoke checks; then launch fresh U2-E Auditor.
+- next_permitted_action: create local U2-E qualification commit and annotated tag `u2e-qualified`; then record freeze metadata and proceed to U2-F.
 - human_stop_reason: none
 
 ## Recovered v0.1.0 Baseline
@@ -371,3 +371,37 @@ admin compatibility.
 - U2-D freeze commit: `4f98ef637891141f1716d5c017e3e1be4fba3d32`.
 - U2-D freeze tag: `u2d-qualified`.
 - U2-D freeze tag object: `d0866476699fde8067102ea4d9d9643b6cb3d422`.
+
+## U2-E Candidate Log
+
+- implementation: added `research_digest.automation` as the shared automation
+  service for schedule status, install/update, remove, and Run Now automatic
+  digest execution.
+- CLI: `research-digest run` now calls the automation service Run Now path;
+  `research-digest schedule install|status|remove` delegates through the same
+  automation/scheduler backend surface used by Settings.
+- Settings UI: added an Automation section with installed/not-installed status,
+  scheduler health/error messaging, next run, last scheduled run, last
+  scheduled digest outcome, timezone wording, automatic daily digest on/off,
+  daily time, catch-up toggle, Save / update schedule, Run now, and Disable
+  schedule controls.
+- Run Now: invokes `run_automatic_digest_now()` with current automatic
+  catch-up/date-selection semantics and the same date-native headless service
+  used by scheduled execution.
+- safety: Settings does not construct Windows Task Scheduler commands; install
+  and remove flow through `build_schedule_request()` and the existing scheduler
+  backend, preserving Codex PATH capture and secret exclusion.
+- unsupported environments: scheduler status failures are sanitized and shown
+  as warnings without stack traces; the rest of Settings remains usable.
+- persistence: catch-up behavior is saved through a config helper rather than
+  direct JSON editing.
+- deterministic verification: `pytest` 202 passed; `ruff check .` PASS;
+  `mypy --strict src tests` PASS; `python -m compileall -q src tests` PASS;
+  `git diff --check` PASS.
+- live UI smoke: `python -m research_digest.cli serve --port 18612` failed
+  with `[Errno 1] Operation not permitted` before and after escalation.
+- live scheduler smoke: `python -m research_digest.cli schedule status --json`
+  failed with WSL `UtilBindVsockAnyPort` socket failure before and after
+  escalation. No schedule was installed or modified in this environment.
+- auditor: `01a00fbe-173c-77c3-9a90-61612617af44`.
+- auditor result: PASS with no BLOCKER/IMPORTANT findings.

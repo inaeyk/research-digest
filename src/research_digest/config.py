@@ -141,6 +141,29 @@ def active_data_location() -> Path:
     return load_config().db_path
 
 
+def save_automation_settings(
+    *,
+    catch_up_missed_dates: bool,
+    coverage_start_date: date | None = None,
+) -> AppConfig:
+    config_dir = resolve_config_dir()
+    persisted, _ = _load_persisted_config(config_dir)
+    updated = PersistedConfig(
+        config_version=CONFIG_VERSION,
+        analyzer_provider=persisted.analyzer_provider,
+        openai_model=persisted.openai_model,
+        codex_model=persisted.codex_model,
+        codex_timeout_seconds=persisted.codex_timeout_seconds,
+        default_date_selection=persisted.default_date_selection,
+        automatic_catch_up_enabled=catch_up_missed_dates,
+        automatic_coverage_start_date=(
+            coverage_start_date or persisted.automatic_coverage_start_date
+        ),
+    )
+    _write_persisted_config(config_dir / DEFAULT_CONFIG_FILENAME, updated)
+    return load_config()
+
+
 def _load_persisted_config(config_dir: Path) -> tuple[PersistedConfig, Path | None]:
     config_dir.mkdir(parents=True, exist_ok=True)
     config_path = config_dir / DEFAULT_CONFIG_FILENAME

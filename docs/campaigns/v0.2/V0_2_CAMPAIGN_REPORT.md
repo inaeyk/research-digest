@@ -364,3 +364,52 @@ U2-D freeze:
 - qualified commit: `4f98ef637891141f1716d5c017e3e1be4fba3d32`.
 - qualified tag: `u2d-qualified`.
 - qualified tag object: `d0866476699fde8067102ea4d9d9643b6cb3d422`.
+
+## U2-E Candidate
+
+Implementation summary:
+
+- Added a shared automation service for schedule status, install/update,
+  remove, and Run Now automatic execution.
+- Settings now has an Automation section for automatic daily digest on/off,
+  daily time, catch-up toggle, installed/health status, next run, last scheduled
+  run, last scheduled digest outcome, timezone wording, Save / update schedule,
+  Run now, and Disable schedule.
+- Settings calls the same scheduler backend/request builder as CLI schedule
+  commands; it does not construct Windows Task Scheduler commands.
+- Run Now uses the same automatic catch-up/date-selection service as scheduled
+  execution.
+- Unsupported scheduler environments surface sanitized warnings while keeping
+  Settings usable.
+- Catch-up behavior is persisted through config helpers rather than direct JSON
+  mutation.
+
+Candidate deterministic verification:
+
+- `pytest`: 202 passed.
+- `ruff check .`: PASS.
+- `mypy --strict src tests`: PASS.
+- `python -m compileall -q src tests`: PASS.
+- `git diff --check`: PASS.
+
+Live smoke:
+
+- Streamlit serve smoke failed with local socket `[Errno 1] Operation not
+  permitted` before and after escalation.
+- Windows Task Scheduler status smoke failed with WSL `UtilBindVsockAnyPort`
+  socket failure before and after escalation.
+- No schedule was installed or modified in this environment.
+
+Fresh U2-E audit:
+
+- Auditor `01a00fbe-173c-77c3-9a90-61612617af44` returned PASS.
+- No BLOCKER or IMPORTANT findings remain.
+- The auditor verified the Settings automation controls/status surfaces,
+  shared automation/scheduler delegation, CLI routing through the same service,
+  catch-up persistence, and sanitized unsupported-environment handling.
+
+U2-E freeze:
+
+- qualified commit: pending local freeze commit.
+- qualified tag: pending `u2e-qualified`.
+- qualified tag object: pending.

@@ -17,6 +17,7 @@ from research_digest.config import (
     DEFAULT_DB_FILENAME,
     ConfigError,
     load_config,
+    save_automation_settings,
 )
 from research_digest.models import DateSelectionKind
 
@@ -248,6 +249,24 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(stored["codex_model"], "stored-codex-model")
         self.assertEqual(stored["codex_timeout_seconds"], 33)
         self.assertNotIn("sk-not-persisted", json.dumps(stored))
+
+    def test_save_automation_settings_updates_only_automation_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(
+            os.environ,
+            _isolated_env(tmp),
+            clear=True,
+        ):
+            before = load_config()
+            updated = save_automation_settings(catch_up_missed_dates=False)
+            stored = _read_json(Path(tmp) / "config" / DEFAULT_CONFIG_FILENAME)
+
+        self.assertTrue(before.automatic_catch_up_enabled)
+        self.assertFalse(updated.automatic_catch_up_enabled)
+        self.assertEqual(updated.analyzer_provider, before.analyzer_provider)
+        self.assertEqual(
+            stored["automatic_coverage_start_date"],
+            before.automatic_coverage_start_date.isoformat(),
+        )
 
     def test_empty_openai_model_override_fails_clearly(self) -> None:
         with (
