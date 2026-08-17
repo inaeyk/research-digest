@@ -1,7 +1,6 @@
 # v0.2 Release Candidate Human Review Packet
 
-Status: release-candidate preparation in progress; final human release decision
-required.
+Status: release candidate complete; awaiting final human release decision.
 
 This packet is release-candidate material only. It does not authorize a public
 release, public `v0.2.0` tag, GitHub release, package publication, or remote
