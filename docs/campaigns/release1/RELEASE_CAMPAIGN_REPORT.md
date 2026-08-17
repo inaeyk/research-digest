@@ -829,7 +829,14 @@ Final hygiene evidence:
 
 Final release audit:
 
-- pending fresh independent final release Auditor over `m2-qualified..HEAD`.
+- fresh independent final release Auditor over `m2-qualified..f8d87eda5048c111d5d754c2e089ef3a33254508`: PASS WITH MINOR FINDINGS.
+- MINOR: release bookkeeping pointed at the M7-I base rather than the actual RC commit.
+- MINOR: README/human-packet upgrade backup instructions needed clearer sequencing for older repo-local M2 development databases.
+
+Final-audit MINOR follow-up:
+
+- corrected CAMPAIGN_STATE and final verification docs to distinguish the M7-I qualified base from the actual release-candidate commit.
+- clarified README and release-candidate packet upgrade instructions: back up an already-current active DB with `research-digest backup --export-json`; for an older repo-local M2 database, first keep a separate copy of the SQLite file, let startup adopt/migrate the copied legacy DB and create the pre-migration backup, then use `research-digest backup --export-json` against the current active DB after migration.
 
 Data-safety note:
 

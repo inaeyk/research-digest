@@ -153,12 +153,18 @@ source checkout by default and are upgraded through explicit SQLite schema and
 JSON config version handling. Migration backups are created before
 schema-changing DB upgrades where required.
 
-Before upgrading, run:
+Before upgrading an already-current installed/user-data database, run:
 
 ```bash
 research-digest doctor
 research-digest backup --export-json
 ```
+
+For an older repo-local M2 development database, keep a separate copy of that
+SQLite file first. On first startup without an existing user-data DB, Research
+Digest adopts the copied legacy DB into the user data directory and creates its
+own pre-migration backup before applying schema changes. After that migration,
+use `research-digest backup --export-json` against the current active DB.
 
 After upgrading, run:
 

@@ -71,12 +71,18 @@ research-digest run --json
 
 ## Upgrade From Development/M2 Installations
 
-Before upgrade:
+Before upgrading an already-current installed/user-data database:
 
 ```bash
 research-digest doctor
 research-digest backup --export-json
 ```
+
+For an older repo-local M2 development database, keep a separate copy of that
+SQLite file first. On first startup without an existing user-data DB, Research
+Digest adopts the copied legacy DB into the user data directory and creates its
+own pre-migration backup before applying schema changes. After that migration,
+use `research-digest backup --export-json` against the current active DB.
 
 Upgrade expectations:
 
