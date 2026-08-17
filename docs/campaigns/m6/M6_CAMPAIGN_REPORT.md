@@ -275,3 +275,24 @@ Freeze state:
 - Qualified local annotated tag: `m6c-qualified`.
 - Tag object: `bef7ae04a957e539c5a977fc569621eee8d38311`.
 - Tag target: `7208191b3aa66c21863ec63d21e7d1f60ebe82b0`.
+
+## M6-D Plan Freeze
+
+The detailed M6-D plan is recorded in `CAMPAIGN_STATE.md`.
+
+Key frozen decisions:
+
+- M6-D search remains local-first and SQLite-backed; no embeddings, vector DB,
+  or external search service.
+- Search documents are derived/rebuildable from articles, tags, collections,
+  notes, abstracts, and relevance context.
+- Scientific connections are persisted suggestions with provenance, not facts.
+- Relationship pairs are canonical unordered pairs for M6-D, with bounded
+  deterministic local candidate selection before Codex reasoning.
+- Viewing/searching existing Library data must not call Codex.
+- Explicit per-article generation may call Codex through a focused provider
+  boundary with prompt version `library_connections_v1`.
+- User dismissal must durably hide a suggestion and prevent routine
+  regeneration.
+- M6-D is expected to use additive SQLite schema version `12`; JSON config is
+  unchanged.

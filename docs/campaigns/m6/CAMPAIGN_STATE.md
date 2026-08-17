@@ -1,7 +1,7 @@
 # M6 Campaign State
 
-- campaign_state: M6_C_QUALIFIED_FROZEN
-- current_substage: M6-C notes and collections/projects qualified and frozen locally
+- campaign_state: M6_D_PLAN_FROZEN
+- current_substage: M6-D Library search and scientific connections plan frozen; implementation not started
 - current_branch: feature/m6-scientific-library-memory
 - baseline_branch: master
 - baseline_commit: fe92e77a3fce4037c0bf4ecbb0a7ce964763eb8b
@@ -21,15 +21,15 @@
 - candidate_schema_version: 11
 - config_version: 3
 - codegraph_state: no `.codegraph/` directory exists at repository root.
-- current_qualification_state: M6-C deterministic qualification and fresh read-only Auditor PASS; local commit/tag freeze complete.
+- current_qualification_state: M6-C deterministic qualification and fresh read-only Auditor PASS; M6-D plan frozen.
 - audit_round: M6-B audit repair round 1 PASS. M6-A initial candidate PASS; no M6-A audit-driven repair rounds used.
 - deterministic_checks: final v0.2 freeze gate recorded `pytest` 262 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-A final gate recorded `pytest` 268 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-B candidate recorded `pytest` 283 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-B repair round 1 recorded `pytest` 284 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-C candidate recorded `pytest` 290 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS.
 - live_checks: v0.2 live smoke was accepted by the human before the M6 branch. M6-B synthetic live Codex tag smoke reached the Codex CLI but exited non-zero with the sanitized authentication/usage-limits message; record as environment/provider limitation for later human live smoke, not deterministic code failure.
-- schema_config_migration_state: v0.2 baseline uses ordered SQLite migrations through schema 8 and JSON config 3. M6-A adds additive SQLite schema 9 with `library_articles`; JSON config is unchanged. M6-B adds additive SQLite schema 10 for Library tags, tag assignments, and AI tag suppressions; JSON config is unchanged. M6-C adds additive SQLite schema 11 for article notes, collections/projects, and collection memberships; JSON config is unchanged.
+- schema_config_migration_state: v0.2 baseline uses ordered SQLite migrations through schema 8 and JSON config 3. M6-A adds additive SQLite schema 9 with `library_articles`; JSON config is unchanged. M6-B adds additive SQLite schema 10 for Library tags, tag assignments, and AI tag suppressions; JSON config is unchanged. M6-C adds additive SQLite schema 11 for article notes, collections/projects, and collection memberships; JSON config is unchanged. M6-D is expected to add additive SQLite schema 12 for rebuildable Library search documents, article relationship suggestions, and relationship dismissals; JSON config changes are not expected.
 - qualified_local_commit: 7208191b3aa66c21863ec63d21e7d1f60ebe82b0
 - qualified_local_tag: annotated local tag `m6c-qualified`; tag object `bef7ae04a957e539c5a977fc569621eee8d38311`; target `7208191b3aa66c21863ec63d21e7d1f60ebe82b0`. Prior local tags: `m6b-qualified` targets `104780a0ba9c98cd9663ef8d1088cb9472d53e09`; `m6a-qualified` targets `17e047c325bb61008cf39b9a135bea02bb63a968`.
 - deferred_minor_optional_findings: M6-A Auditor noted Library save/remove UI lacks a dedicated Streamlit click smoke; deterministic service/helper coverage passed and this was classified MINOR/OPTIONAL. M6-B repair Auditor noted regeneration replacement is not a single DB transaction after provider success; current supported paths are covered, but a future atomic replace helper would be safer if the persistence path broadens. M6-C Auditor noted tag filter options may include tags retained only for AI suppression/tombstone history, which can yield no-result filter options.
-- next_permitted_action: freeze detailed M6-D Library search and scientific connections plan before implementation.
+- next_permitted_action: implement M6-D Library search and scientific connections according to the frozen plan below.
 - human_stop_reason: none active
 
 ## Recovered v0.2 Baseline
@@ -547,3 +547,126 @@ Qualification:
 - Audit repair rounds used: 0.
 - MINOR/OPTIONAL: Library tag filter options may include tags retained only for
   AI suppression/tombstone history.
+
+## Frozen M6-D Plan
+
+Goal: make the saved Library searchable and persist bounded, provenance-bearing
+scientific relationship suggestions among saved papers.
+
+Search design:
+
+- Add additive SQLite schema version 12.
+- Add a rebuildable `library_search_documents` table keyed by `article_id`.
+- Store derived search text fields from saved article metadata, tags,
+  collection names/descriptions, abstract text, notes, and best-effort latest
+  relevance context.
+- Treat search documents as derived/rebuildable data. They must be updated by a
+  focused service when Library metadata changes and can be rebuilt
+  deterministically from normalized tables.
+- Use SQLite-local search with normalized casefolded document text and bounded
+  substring matching for M6-D. Do not introduce embeddings, vector databases, or
+  external search services.
+- Keep existing filters by tag and collection. Library search results should
+  include title, authors, abstract, tags, collection text, and notes where
+  practical.
+
+Connection data model:
+
+- Add `library_article_connections` keyed by unordered article pair for M6-D.
+  Store `article_id_a`, `article_id_b`, `relation_label`, concise `rationale`,
+  `provenance_json`, optional `confidence`, `generated_at`, and `dismissed_at`.
+- Store relationships as model-inferred suggestions, not scientific facts.
+- Use a canonical unordered pair so A-B and B-A dedupe unless a later feature
+  deliberately adds directional semantics.
+- Add `library_connection_dismissals` or equivalent durable dismissal state if
+  dismissing a suggestion deletes the visible connection row. M6-D may instead
+  soft-dismiss on the connection row if that preserves the pair/provenance and
+  prevents routine regeneration.
+- Deleting/dismissing a relationship must not delete papers, tags, notes,
+  collections, relevance analyses, feedback, or run history.
+
+Connection candidate selection:
+
+- Add a deterministic local candidate selector before any Codex call.
+- Candidate features: shared user/AI tags, shared arXiv categories, shared
+  collection membership, and normalized title/abstract token overlap.
+- Exclude self-links and unsaved papers.
+- Bound work per article, initially with a conservative default such as the top
+  5 candidates.
+- Deterministic ordering: highest local score first, then publication date,
+  then source identity.
+- Do not generate all O(N^2) pairs. A pair may be considered only when a saved
+  article is explicitly acted on or by bounded service calls.
+
+AI connection generation:
+
+- Add a small `LibraryConnectionGenerator` protocol and a Codex CLI
+  implementation parallel to the existing AI tag provider.
+- Prompt version: `library_connections_v1`.
+- Prompt input is bounded to one target saved article plus selected candidate
+  saved articles and local evidence features.
+- Use only stored title, authors, abstract, categories, tags, collections,
+  notes only when appropriate and clearly labeled as user-authored, and existing
+  relevance context. External article text is untrusted data.
+- Provider output must include relation label, concise rationale, and optional
+  confidence. Validate schema, reject self/unknown/duplicate article IDs, and
+  sanitize errors.
+- Viewing Library pages or existing connections must not call Codex.
+- Explicit "Find related saved papers" action can generate/update suggestions
+  for one saved article. A future batch mode can reuse the same bounded service.
+- Routine generation must respect user dismissals unless an explicit regenerate
+  action says otherwise.
+
+UI design:
+
+- Library search field remains on the Library page but is backed by the new
+  service/index and includes notes, tags, and collections.
+- Each Library card/detail shows `Related saved papers` with existing
+  non-dismissed suggestions.
+- Each suggestion displays related paper title, relation label, concise
+  rationale, provenance/origin, and a remove/dismiss action.
+- Add an explicit per-article action to find/generate related saved papers.
+  Long-running generation shows progress and sanitized failures.
+- Do not show connection inferences as facts; label them as suggested
+  relationships.
+
+Backup/export:
+
+- JSON backup includes rebuildable search document metadata only if useful, and
+  must include durable relationship suggestions/dismissals.
+- Search index can be rebuilt; relationship suggestions and dismissals are
+  durable user/scientific state.
+
+Tests required:
+
+- search index rebuild and query over title, authors, tags, collection,
+  abstract, and notes.
+- collection/tag filters still compose with search.
+- search index data is deterministic and upgrade-safe.
+- candidate selection excludes self-links, is bounded, deterministic, and does
+  not perform uncontrolled O(N^2) work.
+- candidate scoring includes shared tags/categories/collections and text
+  overlap.
+- connection upsert dedupes unordered pairs.
+- user dismissal hides suggestions and suppresses routine regeneration.
+- Codex prompt construction is bounded, labels untrusted data, and does not
+  include secrets.
+- malformed/duplicate/unknown provider output is rejected.
+- no analyzer/Codex call merely from viewing/searching connections.
+- upgrade from schema 11 creates M6-D tables and preserves existing M6-A/B/C
+  data.
+
+Qualification:
+
+- Focused deterministic tests for search, candidate selection, connection
+  persistence, prompt parsing, UI helpers, and migration.
+- Full `pytest`.
+- `ruff check src tests`.
+- `mypy --strict src tests`.
+- `python -m compileall src tests`.
+- `git diff --check`.
+- Fresh independent read-only M6-D Auditor.
+- Attempt a small live Codex connection-generation smoke if the environment can
+  run Codex; otherwise record provider/environment limitation for human live
+  smoke.
+- After PASS, commit locally and create annotated local tag `m6d-qualified`.
