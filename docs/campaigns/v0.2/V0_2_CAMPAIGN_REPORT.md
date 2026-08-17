@@ -454,6 +454,6 @@ Fresh U2-F audit:
 
 U2-F freeze:
 
-- qualified commit: pending U2-F freeze commit.
-- qualified tag: pending `u2f-qualified`.
-- qualified tag object: pending `u2f-qualified`.
+- qualified commit: `4ec80f759c4db041759b9dab550e390559afaa9b`.
+- qualified tag: `u2f-qualified`.
+- qualified tag object: `f63a39f33060b980889214e918b395d081de1f00`.
