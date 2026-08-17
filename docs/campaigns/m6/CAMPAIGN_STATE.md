@@ -1,7 +1,7 @@
 # M6 Campaign State
 
-- campaign_state: M6_B_QUALIFIED_READY_TO_FREEZE
-- current_substage: M6-B AI tags and user tags qualified; local freeze pending
+- campaign_state: M6_B_QUALIFIED_FROZEN
+- current_substage: M6-B AI tags and user tags qualified and frozen locally
 - current_branch: feature/m6-scientific-library-memory
 - baseline_branch: master
 - baseline_commit: fe92e77a3fce4037c0bf4ecbb0a7ce964763eb8b
@@ -21,15 +21,15 @@
 - candidate_schema_version: 10
 - config_version: 3
 - codegraph_state: no `.codegraph/` directory exists at repository root.
-- current_qualification_state: M6-B deterministic qualification and fresh repair Auditor PASS; local commit/tag freeze pending.
+- current_qualification_state: M6-B deterministic qualification and fresh repair Auditor PASS; local commit/tag freeze complete.
 - audit_round: M6-B audit repair round 1 PASS. M6-A initial candidate PASS; no M6-A audit-driven repair rounds used.
 - deterministic_checks: final v0.2 freeze gate recorded `pytest` 262 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-A final gate recorded `pytest` 268 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-B candidate recorded `pytest` 283 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-B repair round 1 recorded `pytest` 284 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS.
 - live_checks: v0.2 live smoke was accepted by the human before the M6 branch. M6-B synthetic live Codex tag smoke reached the Codex CLI but exited non-zero with the sanitized authentication/usage-limits message; record as environment/provider limitation for later human live smoke, not deterministic code failure.
 - schema_config_migration_state: v0.2 baseline uses ordered SQLite migrations through schema 8 and JSON config 3. M6-A adds additive SQLite schema 9 with `library_articles`; JSON config is unchanged. M6-B candidate adds additive SQLite schema 10 for Library tags, tag assignments, and AI tag suppressions; JSON config is unchanged.
-- qualified_local_commit: 17e047c325bb61008cf39b9a135bea02bb63a968
-- qualified_local_tag: annotated local tag `m6a-qualified`; tag object `ed9f887058f87135cfa7ff0e4f02fdb579b7398b`; target `17e047c325bb61008cf39b9a135bea02bb63a968`
+- qualified_local_commit: 104780a0ba9c98cd9663ef8d1088cb9472d53e09
+- qualified_local_tag: annotated local tag `m6b-qualified`; tag object `6d4836113b38ed348a7a0d36527473f1321c0de9`; target `104780a0ba9c98cd9663ef8d1088cb9472d53e09`. Prior local tag `m6a-qualified` targets `17e047c325bb61008cf39b9a135bea02bb63a968`.
 - deferred_minor_optional_findings: M6-A Auditor noted Library save/remove UI lacks a dedicated Streamlit click smoke; deterministic service/helper coverage passed and this was classified MINOR/OPTIONAL. M6-B repair Auditor noted regeneration replacement is not a single DB transaction after provider success; current supported paths are covered, but a future atomic replace helper would be safer if the persistence path broadens.
-- next_permitted_action: stage inventory, inspect for secrets/runtime state, commit locally, and create annotated local tag `m6b-qualified`.
+- next_permitted_action: freeze detailed M6-C notes and collections/projects plan before implementation.
 - human_stop_reason: none active
 
 ## Recovered v0.2 Baseline

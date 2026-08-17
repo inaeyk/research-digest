@@ -203,3 +203,11 @@ Audit state:
 - Audit repair rounds used: 1.
 - Deferred MINOR/OPTIONAL: future broader regeneration replacement flows would
   benefit from a single atomic DB helper; current supported paths are covered.
+
+Freeze state:
+
+- Qualified local commit:
+  `104780a0ba9c98cd9663ef8d1088cb9472d53e09`.
+- Qualified local annotated tag: `m6b-qualified`.
+- Tag object: `6d4836113b38ed348a7a0d36527473f1321c0de9`.
+- Tag target: `104780a0ba9c98cd9663ef8d1088cb9472d53e09`.
