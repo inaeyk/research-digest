@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from datetime import date
+
+from research_digest.db import APP_RUN_ANALYSIS_UNAVAILABLE, APP_RUN_COMPLETED, APP_RUN_FAILED
 from research_digest.history import RunHistoryEntry, get_run_snapshot, list_run_history
 from research_digest.ui.common import get_database
 
@@ -32,8 +35,9 @@ def render() -> None:
 
 def _run_label(entry: RunHistoryEntry) -> str:
     return (
-        f"{entry.started_at} | {entry.status} | "
-        f"profile {entry.profile_id or '-'} | {entry.relevant_count} relevant"
+        f"{history_period_label(entry)} | {origin_label(entry)} | "
+        f"{history_status_label(entry)} | {entry.preselected_count} preselected | "
+        f"{entry.relevant_count} relevant"
     )
 
 
@@ -41,17 +45,30 @@ def _render_entry(entry: RunHistoryEntry) -> None:
     import streamlit as st
 
     with st.container(border=True):
-        st.markdown(f"**Run #{entry.run_id}**")
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Status", entry.status)
+        st.markdown(f"**{history_period_label(entry)}**")
+        st.caption(f"{origin_label(entry)} digest - run #{entry.run_id}")
+        col1, col2, col3, col4, col5 = st.columns(5)
+        col1.metric("Status", history_status_label(entry))
         col2.metric("Retrieved", entry.retrieved_count)
-        col3.metric("Analyzed", entry.analyzed_count)
-        col4.metric("Relevant", entry.relevant_count)
+        col3.metric("Preselected", entry.preselected_count)
+        col4.metric("Analyzed", entry.analyzed_count)
+        col5.metric("Relevant", entry.relevant_count)
         st.caption(
             f"Started: {entry.started_at}. "
             f"Completed: {entry.completed_at or '-'}. "
             f"Source: {entry.source_name}."
         )
+        requested = ", ".join(entry.requested_source_dates) or "-"
+        covered = ", ".join(entry.covered_source_dates) or "-"
+        st.caption(f"Requested source dates: {requested}. Covered source dates: {covered}.")
+        if entry.empty_source_dates:
+            st.caption("No submissions: " + ", ".join(entry.empty_source_dates))
+        if entry.incomplete_source_dates:
+            st.warning(
+                "Incomplete retrieval for "
+                + ", ".join(entry.incomplete_source_dates),
+                icon=":material/warning:",
+            )
         if entry.error_message:
             st.error(entry.error_message)
 
@@ -96,3 +113,55 @@ def _render_snapshot(snapshot: dict[str, object]) -> None:
             url = item.get("abstract_url")
             if isinstance(url, str) and url:
                 st.link_button("Open arXiv", url)
+
+
+def history_period_label(entry: RunHistoryEntry) -> str:
+    dates = _entry_dates(entry)
+    if not dates:
+        return "Legacy digest"
+    if len(dates) == 1:
+        return _format_date(dates[0])
+    if dates == _date_range(dates[0], dates[-1]):
+        return f"{_format_date(dates[0])} to {_format_date(dates[-1])}"
+    return ", ".join(_format_date(value) for value in dates)
+
+
+def origin_label(entry: RunHistoryEntry) -> str:
+    value = entry.run_origin.upper()
+    if value == "SCHEDULED":
+        return "Scheduled"
+    if value == "MANUAL":
+        return "Manual"
+    return "Legacy"
+
+
+def history_status_label(entry: RunHistoryEntry) -> str:
+    if entry.empty_source_dates and not entry.retrieved_count:
+        return "No submissions"
+    if entry.status == APP_RUN_COMPLETED:
+        return "Completed"
+    if entry.status == APP_RUN_ANALYSIS_UNAVAILABLE:
+        return "Analysis unavailable"
+    if entry.status == APP_RUN_FAILED:
+        return "Failed"
+    return entry.status.replace("_", " ").title()
+
+
+def _entry_dates(entry: RunHistoryEntry) -> tuple[date, ...]:
+    raw_dates = entry.requested_source_dates or entry.covered_source_dates
+    dates: list[date] = []
+    for value in raw_dates:
+        try:
+            dates.append(date.fromisoformat(value))
+        except ValueError:
+            continue
+    return tuple(sorted(set(dates)))
+
+
+def _format_date(value: date) -> str:
+    return f"{value:%b} {value.day}, {value:%Y}"
+
+
+def _date_range(start: date, end: date) -> tuple[date, ...]:
+    days = (end - start).days
+    return tuple(date.fromordinal(start.toordinal() + offset) for offset in range(days + 1))

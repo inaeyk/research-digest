@@ -413,3 +413,47 @@ U2-E freeze:
 - qualified commit: `536859eb87034dc55740f3b96b2d78d579d79622`.
 - qualified tag: `u2e-qualified`.
 - qualified tag object: `0dc19ab9b7b0937c32a0fd7feaf2afe0f20e8f57`.
+
+## U2-F Candidate
+
+Implementation summary:
+
+- History labels now lead with source date/date set, origin, preselected count,
+  and relevant count instead of primarily exposing run ids.
+- Manual, Scheduled, and Legacy origins are visibly distinguished.
+- Entry details show requested source dates, covered source dates,
+  no-submission dates, incomplete retrieval warnings, and the required
+  retrieved/preselected/analyzed/relevant counts.
+- Status labels use user-facing wording including No submissions.
+- Immutable run snapshots and historical run ids are preserved; legacy runs are
+  not reinterpreted.
+- No Library, tagging, memory, notes, collections, search, or run merging was
+  introduced.
+
+Candidate deterministic verification:
+
+- `pytest`: 204 passed.
+- `ruff check .`: PASS.
+- `mypy --strict src tests`: PASS.
+- `python -m compileall -q src tests`: PASS.
+- `git diff --check`: PASS.
+
+Fresh U2-F audit:
+
+- Auditor `01a00fc5-60d9-7411-b955-61b651dfb890` returned PASS.
+- No BLOCKER or IMPORTANT findings remain.
+- The auditor verified date/date-set-led History labels, requested/covered
+  source dates, origin labels, completion/failure/partial detail surfaces,
+  retrieved/preselected/analyzed/relevant counts, persisted synthesis, run
+  times, separate historical runs, immutable snapshot semantics, and no M6
+  Library/tagging/memory additions.
+- Auditor checks: focused History pytest passed; focused History plus pipeline
+  pytest passed; `git diff --check` PASS.
+- OPTIONAL: future polish could show Partial directly in the selectbox/status
+  label and format requested/covered detail captions as friendly dates.
+
+U2-F freeze:
+
+- qualified commit: pending U2-F freeze commit.
+- qualified tag: pending `u2f-qualified`.
+- qualified tag object: pending `u2f-qualified`.

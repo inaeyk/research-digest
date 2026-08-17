@@ -18,6 +18,12 @@ from research_digest.models import (
     RunOrigin,
 )
 from research_digest.service import run_digest_for_profile
+from research_digest.ui.pages.history import (
+    _run_label,
+    history_period_label,
+    history_status_label,
+    origin_label,
+)
 
 
 class StaticSource:
@@ -199,6 +205,61 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual(after["requested_source_dates"], ["2026-08-14"])
         self.assertEqual(entries[0].date_selection, selection.to_mapping())
         self.assertEqual(entries[0].requested_source_dates, ("2026-08-14",))
+
+    def test_history_labels_are_date_oriented(self) -> None:
+        manual = run_digest_for_profile(
+            db=self.db,
+            source=DateStaticSource([article("2608.history05", "Manual paper")]),
+            analyzer=FakeAnalyzer(),
+            profile_id=self.profile.id or 0,
+            date_selection=DateSelection.date_range(date(2026, 8, 14), date(2026, 8, 16)),
+            run_origin=RunOrigin.MANUAL,
+        )
+        scheduled = run_digest_for_profile(
+            db=self.db,
+            source=DateStaticSource([article("2608.history06", "Scheduled paper")]),
+            analyzer=FakeAnalyzer(),
+            profile_id=self.profile.id or 0,
+            date_selection=DateSelection.explicit_dates(
+                (date(2026, 8, 12), date(2026, 8, 17))
+            ),
+            run_origin=RunOrigin.SCHEDULED,
+        )
+        entries = {entry.run_id: entry for entry in list_run_history(self.db)}
+
+        self.assertEqual(
+            history_period_label(entries[manual.digest.run_id]),
+            "Aug 14, 2026 to Aug 16, 2026",
+        )
+        self.assertEqual(origin_label(entries[manual.digest.run_id]), "Manual")
+        self.assertEqual(
+            history_period_label(entries[scheduled.digest.run_id]),
+            "Aug 12, 2026, Aug 17, 2026",
+        )
+        self.assertEqual(origin_label(entries[scheduled.digest.run_id]), "Scheduled")
+        self.assertIn("preselected", _run_label(entries[scheduled.digest.run_id]))
+
+    def test_history_labels_no_submission_and_legacy_runs(self) -> None:
+        empty = run_digest_for_profile(
+            db=self.db,
+            source=DateStaticSource([]),
+            analyzer=None,
+            profile_id=self.profile.id or 0,
+            date_selection=DateSelection.single_date(date(2026, 8, 18)),
+            run_origin=RunOrigin.SCHEDULED,
+        )
+        legacy = run_digest_for_profile(
+            db=self.db,
+            source=StaticSource([article("2608.history07", "Legacy paper")]),
+            analyzer=FakeAnalyzer(),
+            profile_id=self.profile.id or 0,
+        )
+        entries = {entry.run_id: entry for entry in list_run_history(self.db)}
+
+        self.assertEqual(history_status_label(entries[empty.digest.run_id]), "No submissions")
+        self.assertEqual(history_period_label(entries[empty.digest.run_id]), "Aug 18, 2026")
+        self.assertEqual(history_period_label(entries[legacy.digest.run_id]), "Legacy digest")
+        self.assertEqual(origin_label(entries[legacy.digest.run_id]), "Legacy")
 
 
 if __name__ == "__main__":
