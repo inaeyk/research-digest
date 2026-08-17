@@ -361,6 +361,6 @@ Fresh U2-D re-audit:
 
 U2-D freeze:
 
-- qualified commit: pending local freeze commit.
-- qualified tag: pending `u2d-qualified`.
-- qualified tag object: pending.
+- qualified commit: `4f98ef637891141f1716d5c017e3e1be4fba3d32`.
+- qualified tag: `u2d-qualified`.
+- qualified tag object: `d0866476699fde8067102ea4d9d9643b6cb3d422`.
