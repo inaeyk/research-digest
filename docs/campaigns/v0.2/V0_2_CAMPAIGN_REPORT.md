@@ -279,6 +279,6 @@ Fresh U2-C re-audit:
 
 U2-C freeze:
 
-- qualified commit: pending local freeze commit.
-- qualified tag: pending `u2c-qualified`.
-- qualified tag object: pending.
+- qualified commit: `24230f3abeefb3cacf97c890247fca4f83e23388`.
+- qualified tag: `u2c-qualified`.
+- qualified tag object: `db857fc566645b477f2c928dd683f66430fbd2d8`.
