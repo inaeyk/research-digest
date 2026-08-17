@@ -18,6 +18,7 @@ from research_digest.models import (
     RunOrigin,
     profile_semantic_fingerprint,
 )
+from research_digest.tags import add_user_tag, assign_ai_tags, remove_ai_tag
 
 
 def sample_article() -> Article:
@@ -150,6 +151,14 @@ class BackupTests(unittest.TestCase):
         article, _ = self.db.upsert_article(sample_article())
         assert article.id is not None
         self.db.save_library_article(article.id)
+        add_user_tag(self.db, article_id=article.id, tag="Black branes")
+        assign_ai_tags(
+            self.db,
+            article_id=article.id,
+            tags=["KK spectra"],
+            provenance={"prompt_version": "library_ai_tags_v1", "provider": "fake"},
+        )
+        remove_ai_tag(self.db, article_id=article.id, tag="KK spectra")
         self.db.upsert_article_feedback(
             article_id=article.id,
             profile_id=profile.id,
@@ -212,6 +221,12 @@ class BackupTests(unittest.TestCase):
         self.assertEqual(payload["source_date_coverage"][0]["source_date"], "2026-08-14")
         self.assertEqual(payload["library_articles"][0]["article"]["title"], "Backup export title")
         self.assertTrue(payload["library_articles"][0]["saved"])
+        self.assertEqual(payload["library_tags"][0]["display_name"], "Black branes")
+        self.assertEqual(payload["library_tag_assignments"][0]["origin"], "USER")
+        self.assertEqual(
+            payload["library_ai_tag_suppressions"][0]["tag"]["display_name"],
+            "KK spectra",
+        )
         output = result.export_path.read_text(encoding="utf-8")
         self.assertNotIn("OPENAI_API_KEY", output)
         self.assertNotIn("sk-secret", output)

@@ -45,6 +45,11 @@ class RunOrigin(StrEnum):
     SCHEDULED = "SCHEDULED"
 
 
+class TagOrigin(StrEnum):
+    USER = "USER"
+    AI = "AI"
+
+
 class DateSelectionKind(StrEnum):
     LATEST_AVAILABLE = "LATEST_AVAILABLE"
     SINGLE_DATE = "SINGLE_DATE"
@@ -424,6 +429,68 @@ class LibraryRelevanceContext:
             raise ModelValidationError("library relevance priority must be LOW, MEDIUM, or HIGH")
         object.__setattr__(self, "profile_name", normalize_whitespace(self.profile_name))
         object.__setattr__(self, "analyzed_at", ensure_utc(self.analyzed_at))
+
+
+@dataclass(frozen=True)
+class LibraryTag:
+    id: int | None
+    normalized_name: str
+    display_name: str
+    created_at: datetime
+    updated_at: datetime
+
+    def __post_init__(self) -> None:
+        if self.id is not None and self.id <= 0:
+            raise ModelValidationError("library tag id must be positive")
+        if not self.normalized_name.strip():
+            raise ModelValidationError("library tag normalized name is required")
+        if not self.display_name.strip():
+            raise ModelValidationError("library tag display name is required")
+        object.__setattr__(self, "normalized_name", normalize_whitespace(self.normalized_name))
+        object.__setattr__(self, "display_name", normalize_whitespace(self.display_name))
+        object.__setattr__(self, "created_at", ensure_utc(self.created_at))
+        object.__setattr__(self, "updated_at", ensure_utc(self.updated_at))
+
+
+@dataclass(frozen=True)
+class LibraryTagAssignment:
+    id: int | None
+    article_id: int
+    tag: LibraryTag
+    origin: TagOrigin
+    created_at: datetime
+    updated_at: datetime
+    ai_provenance: dict[str, object] | None = None
+
+    def __post_init__(self) -> None:
+        if self.id is not None and self.id <= 0:
+            raise ModelValidationError("library tag assignment id must be positive")
+        if self.article_id <= 0:
+            raise ModelValidationError("library tag assignment article id must be positive")
+        origin = TagOrigin(self.origin)
+        if origin == TagOrigin.AI and self.ai_provenance is None:
+            raise ModelValidationError("AI tag assignments require provenance")
+        if origin == TagOrigin.USER and self.ai_provenance is not None:
+            raise ModelValidationError("USER tag assignments must not include AI provenance")
+        object.__setattr__(self, "origin", origin)
+        object.__setattr__(self, "created_at", ensure_utc(self.created_at))
+        object.__setattr__(self, "updated_at", ensure_utc(self.updated_at))
+
+
+@dataclass(frozen=True)
+class AITagSuppression:
+    article_id: int
+    tag: LibraryTag
+    suppressed_at: datetime
+    reason: str
+
+    def __post_init__(self) -> None:
+        if self.article_id <= 0:
+            raise ModelValidationError("AI tag suppression article id must be positive")
+        if not self.reason.strip():
+            raise ModelValidationError("AI tag suppression reason is required")
+        object.__setattr__(self, "reason", normalize_whitespace(self.reason))
+        object.__setattr__(self, "suppressed_at", ensure_utc(self.suppressed_at))
 
 
 @dataclass(frozen=True)

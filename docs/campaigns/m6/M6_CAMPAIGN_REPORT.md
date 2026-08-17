@@ -149,3 +149,57 @@ Key frozen decisions:
 - AI tag generation uses a separate bounded Codex prompt, version
   `library_ai_tags_v1`, instead of forcing historical article reanalysis or
   changing `AnalysisResult`.
+
+## M6-B Candidate
+
+Implemented:
+
+- Additive SQLite schema version `10` with `library_tags`,
+  `library_tag_assignments`, and `library_ai_tag_suppressions`.
+- Central tag normalization with case/whitespace equality and readable display
+  labels.
+- USER and AI tag assignment CRUD with provenance-specific identity.
+- Durable AI suppression tombstones when a user removes an AI tag.
+- Explicit saved-article AI tag generation service that respects suppressions
+  by default and does not change relevance-analysis cache semantics.
+- Codex CLI tag generator with prompt version `library_ai_tags_v1`, bounded
+  JSON schema, untrusted-source-text rules, read-only ephemeral execution, and
+  child-environment API-key redaction.
+- Library UI sections for User tags and AI tags, user add/remove, AI
+  remove/suppress, and explicit AI generate/regenerate actions.
+- JSON backup export for tags, assignments, and suppressions.
+
+Preserved:
+
+- `matched_topics` remain relevance-analysis context, not Library tags.
+- Viewing/listing tags does not call Codex and does not mutate the database.
+- User tags survive AI regeneration.
+- Removing AI tags does not remove same-name user tags.
+- Ordinary digest reruns do not generate or re-add AI tags.
+
+Deterministic candidate checks:
+
+- `pytest`: PASS, 283 passed.
+- `ruff check src tests`: PASS.
+- `mypy --strict src tests`: PASS.
+- `python -m compileall src tests`: PASS.
+- `git diff --check`: PASS.
+
+Live smoke:
+
+- Synthetic live Codex tag smoke reached the Codex CLI but exited non-zero with
+  the sanitized authentication/usage-limits message. This is recorded as an
+  environment/provider limitation for later human live smoke, not as a
+  deterministic code failure.
+
+Audit state:
+
+- First fresh read-only M6-B Auditor found one IMPORTANT issue: regeneration
+  removed existing AI tags/suppressions before provider success.
+- Repair round 1 moved provider generation before local replacement and added a
+  failed-regeneration regression test.
+- Fresh read-only M6-B repair Auditor PASS.
+- BLOCKER/IMPORTANT findings: none remaining.
+- Audit repair rounds used: 1.
+- Deferred MINOR/OPTIONAL: future broader regeneration replacement flows would
+  benefit from a single atomic DB helper; current supported paths are covered.

@@ -4,11 +4,21 @@ from __future__ import annotations
 
 from typing import Any
 
+from research_digest.errors import sanitize_error
 from research_digest.library import LibraryItem, LibrarySort, list_library_items
-from research_digest.models import Article, LibraryRelevanceContext
+from research_digest.models import Article, LibraryRelevanceContext, TagOrigin
+from research_digest.tags import (
+    TagValidationError,
+    add_user_tag,
+    generate_ai_tags_for_saved_article,
+    list_article_tags,
+    remove_ai_tag,
+    remove_user_tag,
+)
 from research_digest.ui.abstracts import render_abstract_control
-from research_digest.ui.common import get_database
+from research_digest.ui.common import get_ai_tag_generator, get_database
 from research_digest.ui.library_controls import render_library_control
+from research_digest.ui.tag_controls import ai_tag_generation_label, tag_action_key
 
 _SORT_OPTIONS: tuple[LibrarySort, ...] = (
     "saved_newest",
@@ -64,6 +74,7 @@ def _render_library_item(item: LibraryItem) -> None:
         metric_cols[1].metric("Published", f"{article.published_at:%Y-%m-%d}")
         _render_relevance_metric(metric_cols[2], item.relevance_context)
         _render_relevance_context(item.relevance_context)
+        _render_tags(item)
         with st.container(horizontal=True):
             st.link_button("arXiv", article.abstract_url)
             if article.pdf_url:
@@ -80,6 +91,119 @@ def _render_library_item(item: LibraryItem) -> None:
             article=article,
             context=f"library:membership:{article.source}:{article.source_article_id}",
         )
+
+
+def _render_tags(item: LibraryItem) -> None:
+    import streamlit as st
+
+    article = item.article
+    if article.id is None:
+        return
+    db = get_database()
+    tags = list_article_tags(db, article_id=article.id)
+    st.markdown("**Tags**")
+    user_col, ai_col = st.columns(2)
+    with user_col:
+        st.caption("User tags")
+        if tags.user_tags:
+            for assignment in tags.user_tags:
+                with st.container(horizontal=True):
+                    st.badge(assignment.tag.display_name, color="blue")
+                    if st.button(
+                        "Remove",
+                        key=tag_action_key(
+                            article_id=article.id,
+                            action="remove",
+                            origin=TagOrigin.USER,
+                            normalized_name=assignment.tag.normalized_name,
+                        ),
+                        icon=":material/close:",
+                    ):
+                        remove_user_tag(
+                            db,
+                            article_id=article.id,
+                            tag=assignment.tag.display_name,
+                        )
+                        st.rerun()
+        else:
+            st.caption("No user tags")
+        with st.form(f"add_user_tag_{article.id}", border=False):
+            tag_text = st.text_input("Add user tag", placeholder="e.g. black branes")
+            submitted = st.form_submit_button("Add tag", icon=":material/add:")
+        if submitted:
+            try:
+                add_user_tag(db, article_id=article.id, tag=tag_text)
+            except TagValidationError as exc:
+                st.warning(str(exc), icon=":material/warning:")
+            else:
+                st.rerun()
+    with ai_col:
+        st.caption("AI tags")
+        if tags.ai_tags:
+            for assignment in tags.ai_tags:
+                with st.container(horizontal=True):
+                    st.badge(assignment.tag.display_name, color="green")
+                    st.caption("AI")
+                    if st.button(
+                        "Remove",
+                        key=tag_action_key(
+                            article_id=article.id,
+                            action="remove",
+                            origin=TagOrigin.AI,
+                            normalized_name=assignment.tag.normalized_name,
+                        ),
+                        icon=":material/close:",
+                    ):
+                        remove_ai_tag(
+                            db,
+                            article_id=article.id,
+                            tag=assignment.tag.display_name,
+                        )
+                        st.rerun()
+        else:
+            st.caption("No AI tags")
+        _render_ai_tag_generation(article_id=article.id, has_ai_tags=bool(tags.ai_tags))
+
+
+def _render_ai_tag_generation(*, article_id: int, has_ai_tags: bool) -> None:
+    import streamlit as st
+
+    generator, message = get_ai_tag_generator()
+    label = ai_tag_generation_label(has_ai_tags=has_ai_tags)
+    if st.button(
+        label,
+        key=tag_action_key(
+            article_id=article_id,
+            action="generate",
+            origin=TagOrigin.AI,
+        ),
+        icon=":material/auto_awesome:",
+        disabled=generator is None,
+    ):
+        if generator is None:
+            st.warning(message or "AI tag generation is unavailable.", icon=":material/warning:")
+            return
+        with st.spinner("Generating AI tags..."):
+            try:
+                assignments = generate_ai_tags_for_saved_article(
+                    get_database(),
+                    article_id=article_id,
+                    generator=generator,
+                    regenerate=has_ai_tags,
+                )
+            except Exception as exc:
+                st.error(
+                    f"AI tag generation failed: {sanitize_error(exc)}",
+                    icon=":material/error:",
+                )
+                return
+        if assignments:
+            st.success(f"Added {len(assignments)} AI tag(s).", icon=":material/check_circle:")
+        else:
+            st.info("No new AI tags were added.")
+        st.rerun()
+    if generator is None and message:
+        st.caption(f"AI tag generation unavailable: {sanitize_error(message)}")
 
 
 def _article_caption(article: Article) -> str:

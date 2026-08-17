@@ -13,6 +13,7 @@ from typing import Any, cast
 
 from research_digest.errors import sanitize_error_text
 from research_digest.models import (
+    AITagSuppression,
     AnalysisResult,
     Article,
     ArticleFeedback,
@@ -22,8 +23,11 @@ from research_digest.models import (
     InterestProfile,
     LibraryEntry,
     LibraryRelevanceContext,
+    LibraryTag,
+    LibraryTagAssignment,
     ReadingPriority,
     RunOrigin,
+    TagOrigin,
     datetime_from_db,
     datetime_to_db,
     utc_now,
@@ -32,7 +36,7 @@ from research_digest.models import (
 SOURCE_ARXIV = "arxiv"
 SCHEMA_VERSION_KEY = "schema_version"
 LAST_MIGRATION_BACKUP_KEY = "last_migration_backup_path"
-CURRENT_SCHEMA_VERSION = 9
+CURRENT_SCHEMA_VERSION = 10
 APP_RUN_STARTING = "STARTING"
 APP_RUN_RUNNING = "RUNNING"
 APP_RUN_COMPLETED = "COMPLETED"
@@ -357,6 +361,235 @@ class Database:
                 (article_id,),
             ).fetchone()
         return _library_relevance_context_from_row(row) if row is not None else None
+
+    def upsert_library_tag(
+        self,
+        *,
+        normalized_name: str,
+        display_name: str,
+    ) -> LibraryTag:
+        normalized = normalized_name.strip()
+        display = display_name.strip()
+        if not normalized:
+            raise ValueError("normalized tag name is required")
+        if not display:
+            raise ValueError("tag display name is required")
+        now = datetime_to_db(utc_now())
+        with self._connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO library_tags (normalized_name, display_name, created_at, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(normalized_name) DO UPDATE SET
+                    updated_at = excluded.updated_at
+                """,
+                (normalized, display, now, now),
+            )
+            tag = _get_library_tag_by_normalized_name(conn, normalized)
+        if tag is None:
+            raise RuntimeError("failed to load library tag")
+        return tag
+
+    def list_library_tags(self) -> list[LibraryTag]:
+        with self._connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM library_tags
+                ORDER BY display_name COLLATE NOCASE ASC, id ASC
+                """
+            ).fetchall()
+        return [_library_tag_from_row(row) for row in rows]
+
+    def upsert_library_tag_assignment(
+        self,
+        *,
+        article_id: int,
+        normalized_name: str,
+        display_name: str,
+        origin: TagOrigin,
+        ai_provenance: dict[str, object] | None = None,
+    ) -> LibraryTagAssignment:
+        if article_id <= 0:
+            raise ValueError("article id must be positive")
+        tag = self.upsert_library_tag(
+            normalized_name=normalized_name,
+            display_name=display_name,
+        )
+        if tag.id is None:
+            raise RuntimeError("library tag id is required")
+        origin = TagOrigin(origin)
+        if origin == TagOrigin.AI and ai_provenance is None:
+            raise ValueError("AI tag provenance is required")
+        if origin == TagOrigin.USER and ai_provenance is not None:
+            raise ValueError("USER tag provenance must be empty")
+        now = datetime_to_db(utc_now())
+        provenance_json = (
+            json.dumps(ai_provenance, sort_keys=True) if ai_provenance is not None else None
+        )
+        with self._connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO library_tag_assignments (
+                    article_id, tag_id, origin, ai_provenance_json, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(article_id, tag_id, origin) DO UPDATE SET
+                    ai_provenance_json = excluded.ai_provenance_json,
+                    updated_at = excluded.updated_at
+                """,
+                (article_id, tag.id, origin.value, provenance_json, now, now),
+            )
+            assignment = _get_library_tag_assignment(
+                conn,
+                article_id=article_id,
+                tag_id=tag.id,
+                origin=origin,
+            )
+        if assignment is None:
+            raise RuntimeError("failed to load library tag assignment")
+        return assignment
+
+    def remove_library_tag_assignment(
+        self,
+        *,
+        article_id: int,
+        normalized_name: str,
+        origin: TagOrigin,
+    ) -> None:
+        if article_id <= 0:
+            raise ValueError("article id must be positive")
+        normalized = normalized_name.strip()
+        if not normalized:
+            return
+        with self._connection() as conn:
+            conn.execute(
+                """
+                DELETE FROM library_tag_assignments
+                WHERE article_id = ?
+                    AND origin = ?
+                    AND tag_id = (
+                        SELECT id FROM library_tags WHERE normalized_name = ?
+                    )
+                """,
+                (article_id, TagOrigin(origin).value, normalized),
+            )
+
+    def remove_library_tag_assignments_for_origin(
+        self,
+        *,
+        article_id: int,
+        origin: TagOrigin,
+    ) -> None:
+        if article_id <= 0:
+            raise ValueError("article id must be positive")
+        with self._connection() as conn:
+            conn.execute(
+                """
+                DELETE FROM library_tag_assignments
+                WHERE article_id = ? AND origin = ?
+                """,
+                (article_id, TagOrigin(origin).value),
+            )
+
+    def list_library_tag_assignments(self, article_id: int) -> list[LibraryTagAssignment]:
+        if article_id <= 0:
+            raise ValueError("article id must be positive")
+        with self._connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    assignments.id AS assignment_id,
+                    assignments.article_id,
+                    assignments.origin,
+                    assignments.ai_provenance_json,
+                    assignments.created_at AS assignment_created_at,
+                    assignments.updated_at AS assignment_updated_at,
+                    tags.id AS tag_id,
+                    tags.normalized_name,
+                    tags.display_name,
+                    tags.created_at AS tag_created_at,
+                    tags.updated_at AS tag_updated_at
+                FROM library_tag_assignments AS assignments
+                JOIN library_tags AS tags ON tags.id = assignments.tag_id
+                WHERE assignments.article_id = ?
+                ORDER BY assignments.origin DESC, tags.display_name COLLATE NOCASE ASC
+                """,
+                (article_id,),
+            ).fetchall()
+        return [_library_tag_assignment_from_row(row) for row in rows]
+
+    def suppress_ai_library_tag(
+        self,
+        *,
+        article_id: int,
+        normalized_name: str,
+        display_name: str,
+        reason: str,
+    ) -> AITagSuppression:
+        if article_id <= 0:
+            raise ValueError("article id must be positive")
+        tag = self.upsert_library_tag(
+            normalized_name=normalized_name,
+            display_name=display_name,
+        )
+        if tag.id is None:
+            raise RuntimeError("library tag id is required")
+        suppressed_at = datetime_to_db(utc_now())
+        with self._connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO library_ai_tag_suppressions (
+                    article_id, tag_id, suppressed_at, reason
+                )
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(article_id, tag_id) DO UPDATE SET
+                    suppressed_at = excluded.suppressed_at,
+                    reason = excluded.reason
+                """,
+                (article_id, tag.id, suppressed_at, reason),
+            )
+            suppression = _get_ai_tag_suppression(
+                conn,
+                article_id=article_id,
+                tag_id=tag.id,
+            )
+        if suppression is None:
+            raise RuntimeError("failed to load AI tag suppression")
+        return suppression
+
+    def delete_ai_library_tag_suppressions(self, article_id: int) -> None:
+        if article_id <= 0:
+            raise ValueError("article id must be positive")
+        with self._connection() as conn:
+            conn.execute(
+                "DELETE FROM library_ai_tag_suppressions WHERE article_id = ?",
+                (article_id,),
+            )
+
+    def list_ai_library_tag_suppressions(self, article_id: int) -> list[AITagSuppression]:
+        if article_id <= 0:
+            raise ValueError("article id must be positive")
+        with self._connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    suppressions.article_id,
+                    suppressions.suppressed_at,
+                    suppressions.reason,
+                    tags.id AS tag_id,
+                    tags.normalized_name,
+                    tags.display_name,
+                    tags.created_at AS tag_created_at,
+                    tags.updated_at AS tag_updated_at
+                FROM library_ai_tag_suppressions AS suppressions
+                JOIN library_tags AS tags ON tags.id = suppressions.tag_id
+                WHERE suppressions.article_id = ?
+                ORDER BY tags.display_name COLLATE NOCASE ASC
+                """,
+                (article_id,),
+            ).fetchall()
+        return [_ai_tag_suppression_from_row(row) for row in rows]
 
     def count_articles(self) -> int:
         with self._connection() as conn:
@@ -1150,6 +1383,56 @@ def _migration_saved_article_library(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migration_library_tags(conn: sqlite3.Connection) -> None:
+    _execute_schema_statements(
+        conn,
+        (
+            """
+            CREATE TABLE IF NOT EXISTS library_tags (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                normalized_name TEXT NOT NULL UNIQUE,
+                display_name TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS library_tag_assignments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                article_id INTEGER NOT NULL,
+                tag_id INTEGER NOT NULL,
+                origin TEXT NOT NULL,
+                ai_provenance_json TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(article_id, tag_id, origin),
+                FOREIGN KEY(article_id) REFERENCES articles(id) ON DELETE CASCADE,
+                FOREIGN KEY(tag_id) REFERENCES library_tags(id) ON DELETE CASCADE
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS library_ai_tag_suppressions (
+                article_id INTEGER NOT NULL,
+                tag_id INTEGER NOT NULL,
+                suppressed_at TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                UNIQUE(article_id, tag_id),
+                FOREIGN KEY(article_id) REFERENCES articles(id) ON DELETE CASCADE,
+                FOREIGN KEY(tag_id) REFERENCES library_tags(id) ON DELETE CASCADE
+            )
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_library_tag_assignments_article
+            ON library_tag_assignments(article_id, origin)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_library_ai_tag_suppressions_article
+            ON library_ai_tag_suppressions(article_id)
+            """,
+        ),
+    )
+
+
 MIGRATIONS: Sequence[SchemaMigration] = (
     SchemaMigration(1, "core m1/m2 tables", _migration_core_tables),
     SchemaMigration(2, "profile-fingerprinted relevance analyses", _migration_profile_fingerprints),
@@ -1164,6 +1447,7 @@ MIGRATIONS: Sequence[SchemaMigration] = (
     SchemaMigration(7, "app run source fingerprint", _migration_app_run_source_fingerprint),
     SchemaMigration(8, "app run profile fingerprint", _migration_app_run_profile_fingerprint),
     SchemaMigration(9, "saved article library", _migration_saved_article_library),
+    SchemaMigration(10, "library tags and AI suppressions", _migration_library_tags),
 )
 
 
@@ -1411,6 +1695,73 @@ def _get_library_entry(conn: sqlite3.Connection, article_id: int) -> LibraryEntr
     return _library_entry_from_row(row) if row is not None else None
 
 
+def _get_library_tag_by_normalized_name(
+    conn: sqlite3.Connection,
+    normalized_name: str,
+) -> LibraryTag | None:
+    row = conn.execute(
+        "SELECT * FROM library_tags WHERE normalized_name = ?",
+        (normalized_name,),
+    ).fetchone()
+    return _library_tag_from_row(row) if row is not None else None
+
+
+def _get_library_tag_assignment(
+    conn: sqlite3.Connection,
+    *,
+    article_id: int,
+    tag_id: int,
+    origin: TagOrigin,
+) -> LibraryTagAssignment | None:
+    row = conn.execute(
+        """
+        SELECT
+            assignments.id AS assignment_id,
+            assignments.article_id,
+            assignments.origin,
+            assignments.ai_provenance_json,
+            assignments.created_at AS assignment_created_at,
+            assignments.updated_at AS assignment_updated_at,
+            tags.id AS tag_id,
+            tags.normalized_name,
+            tags.display_name,
+            tags.created_at AS tag_created_at,
+            tags.updated_at AS tag_updated_at
+        FROM library_tag_assignments AS assignments
+        JOIN library_tags AS tags ON tags.id = assignments.tag_id
+        WHERE assignments.article_id = ? AND assignments.tag_id = ? AND assignments.origin = ?
+        """,
+        (article_id, tag_id, origin.value),
+    ).fetchone()
+    return _library_tag_assignment_from_row(row) if row is not None else None
+
+
+def _get_ai_tag_suppression(
+    conn: sqlite3.Connection,
+    *,
+    article_id: int,
+    tag_id: int,
+) -> AITagSuppression | None:
+    row = conn.execute(
+        """
+        SELECT
+            suppressions.article_id,
+            suppressions.suppressed_at,
+            suppressions.reason,
+            tags.id AS tag_id,
+            tags.normalized_name,
+            tags.display_name,
+            tags.created_at AS tag_created_at,
+            tags.updated_at AS tag_updated_at
+        FROM library_ai_tag_suppressions AS suppressions
+        JOIN library_tags AS tags ON tags.id = suppressions.tag_id
+        WHERE suppressions.article_id = ? AND suppressions.tag_id = ?
+        """,
+        (article_id, tag_id),
+    ).fetchone()
+    return _ai_tag_suppression_from_row(row) if row is not None else None
+
+
 def _get_article_feedback(
     conn: sqlite3.Connection,
     *,
@@ -1502,6 +1853,54 @@ def _library_relevance_context_from_row(row: sqlite3.Row) -> LibraryRelevanceCon
         relevance_score=float(row["relevance_score"]),
         reading_priority=cast(ReadingPriority, str(row["reading_priority"])),
         analyzed_at=datetime_from_db(str(row["analyzed_at"])),
+    )
+
+
+def _library_tag_from_row(row: sqlite3.Row) -> LibraryTag:
+    return LibraryTag(
+        id=int(row["id"]),
+        normalized_name=str(row["normalized_name"]),
+        display_name=str(row["display_name"]),
+        created_at=datetime_from_db(str(row["created_at"])),
+        updated_at=datetime_from_db(str(row["updated_at"])),
+    )
+
+
+def _library_tag_from_joined_row(row: sqlite3.Row) -> LibraryTag:
+    return LibraryTag(
+        id=int(row["tag_id"]),
+        normalized_name=str(row["normalized_name"]),
+        display_name=str(row["display_name"]),
+        created_at=datetime_from_db(str(row["tag_created_at"])),
+        updated_at=datetime_from_db(str(row["tag_updated_at"])),
+    )
+
+
+def _library_tag_assignment_from_row(row: sqlite3.Row) -> LibraryTagAssignment:
+    provenance = (
+        json.loads(str(row["ai_provenance_json"]))
+        if row["ai_provenance_json"] is not None
+        else None
+    )
+    if provenance is not None and not isinstance(provenance, dict):
+        provenance = {"invalid_provenance": True}
+    return LibraryTagAssignment(
+        id=int(row["assignment_id"]),
+        article_id=int(row["article_id"]),
+        tag=_library_tag_from_joined_row(row),
+        origin=TagOrigin(str(row["origin"])),
+        ai_provenance=cast(dict[str, object] | None, provenance),
+        created_at=datetime_from_db(str(row["assignment_created_at"])),
+        updated_at=datetime_from_db(str(row["assignment_updated_at"])),
+    )
+
+
+def _ai_tag_suppression_from_row(row: sqlite3.Row) -> AITagSuppression:
+    return AITagSuppression(
+        article_id=int(row["article_id"]),
+        tag=_library_tag_from_joined_row(row),
+        suppressed_at=datetime_from_db(str(row["suppressed_at"])),
+        reason=str(row["reason"]),
     )
 
 

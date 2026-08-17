@@ -179,6 +179,9 @@ def export_user_data(*, db_path: Path, schema_version: int | None = None) -> dic
             "run_snapshots": _run_snapshots(conn),
             "source_date_coverage": _source_date_coverage(conn),
             "library_articles": _library_articles(conn),
+            "library_tags": _library_tags(conn),
+            "library_tag_assignments": _library_tag_assignments(conn),
+            "library_ai_tag_suppressions": _library_ai_tag_suppressions(conn),
         }
 
 
@@ -448,6 +451,120 @@ def _library_articles(conn: sqlite3.Connection) -> list[dict[str, object]]:
             "saved": bool(row["saved"]),
             "saved_at": str(row["saved_at"]),
             "updated_at": str(row["updated_at"]),
+            "article": {
+                "source": str(row["source"]) if row["source"] is not None else None,
+                "source_article_id": (
+                    str(row["source_article_id"])
+                    if row["source_article_id"] is not None
+                    else None
+                ),
+                "title": str(row["title"]) if row["title"] is not None else None,
+            },
+        }
+        for row in rows
+    ]
+
+
+def _library_tags(conn: sqlite3.Connection) -> list[dict[str, object]]:
+    if not _table_exists(conn, "library_tags"):
+        return []
+    rows = conn.execute(
+        """
+        SELECT id, normalized_name, display_name, created_at, updated_at
+        FROM library_tags
+        ORDER BY id
+        """
+    ).fetchall()
+    return [
+        {
+            "id": int(row["id"]),
+            "normalized_name": str(row["normalized_name"]),
+            "display_name": str(row["display_name"]),
+            "created_at": str(row["created_at"]),
+            "updated_at": str(row["updated_at"]),
+        }
+        for row in rows
+    ]
+
+
+def _library_tag_assignments(conn: sqlite3.Connection) -> list[dict[str, object]]:
+    if not _table_exists(conn, "library_tag_assignments"):
+        return []
+    rows = conn.execute(
+        """
+        SELECT
+            assignments.id,
+            assignments.article_id,
+            assignments.origin,
+            assignments.ai_provenance_json,
+            assignments.created_at,
+            assignments.updated_at,
+            tags.normalized_name,
+            tags.display_name,
+            articles.source,
+            articles.source_article_id,
+            articles.title
+        FROM library_tag_assignments AS assignments
+        JOIN library_tags AS tags ON tags.id = assignments.tag_id
+        LEFT JOIN articles ON articles.id = assignments.article_id
+        ORDER BY assignments.id
+        """
+    ).fetchall()
+    return [
+        {
+            "id": int(row["id"]),
+            "article_id": int(row["article_id"]),
+            "origin": str(row["origin"]),
+            "ai_provenance": _json_object_or_none(row["ai_provenance_json"]),
+            "created_at": str(row["created_at"]),
+            "updated_at": str(row["updated_at"]),
+            "tag": {
+                "normalized_name": str(row["normalized_name"]),
+                "display_name": str(row["display_name"]),
+            },
+            "article": {
+                "source": str(row["source"]) if row["source"] is not None else None,
+                "source_article_id": (
+                    str(row["source_article_id"])
+                    if row["source_article_id"] is not None
+                    else None
+                ),
+                "title": str(row["title"]) if row["title"] is not None else None,
+            },
+        }
+        for row in rows
+    ]
+
+
+def _library_ai_tag_suppressions(conn: sqlite3.Connection) -> list[dict[str, object]]:
+    if not _table_exists(conn, "library_ai_tag_suppressions"):
+        return []
+    rows = conn.execute(
+        """
+        SELECT
+            suppressions.article_id,
+            suppressions.suppressed_at,
+            suppressions.reason,
+            tags.normalized_name,
+            tags.display_name,
+            articles.source,
+            articles.source_article_id,
+            articles.title
+        FROM library_ai_tag_suppressions AS suppressions
+        JOIN library_tags AS tags ON tags.id = suppressions.tag_id
+        LEFT JOIN articles ON articles.id = suppressions.article_id
+        ORDER BY suppressions.article_id, tags.normalized_name
+        """
+    ).fetchall()
+    return [
+        {
+            "article_id": int(row["article_id"]),
+            "suppressed_at": str(row["suppressed_at"]),
+            "reason": str(row["reason"]),
+            "tag": {
+                "normalized_name": str(row["normalized_name"]),
+                "display_name": str(row["display_name"]),
+            },
             "article": {
                 "source": str(row["source"]) if row["source"] is not None else None,
                 "source_article_id": (
