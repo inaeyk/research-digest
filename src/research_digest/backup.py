@@ -177,6 +177,7 @@ def export_user_data(*, db_path: Path, schema_version: int | None = None) -> dic
             "feedback": _feedback(conn),
             "runs": _runs(conn),
             "run_snapshots": _run_snapshots(conn),
+            "source_date_coverage": _source_date_coverage(conn),
         }
 
 
@@ -379,6 +380,47 @@ def _run_snapshots(conn: sqlite3.Connection) -> list[dict[str, object]]:
             }
         )
     return snapshots
+
+
+def _source_date_coverage(conn: sqlite3.Connection) -> list[dict[str, object]]:
+    if not _table_exists(conn, "source_date_coverage"):
+        return []
+    rows = conn.execute(
+        """
+        SELECT
+            id,
+            profile_id,
+            profile_fingerprint,
+            source_name,
+            source_fingerprint,
+            source_date,
+            status,
+            first_covered_run_id,
+            last_covered_run_id,
+            run_origin,
+            covered_at,
+            updated_at
+        FROM source_date_coverage
+        ORDER BY source_date, profile_id, id
+        """
+    ).fetchall()
+    return [
+        {
+            "id": int(row["id"]),
+            "profile_id": int(row["profile_id"]),
+            "profile_fingerprint": str(row["profile_fingerprint"]),
+            "source_name": str(row["source_name"]),
+            "source_fingerprint": str(row["source_fingerprint"]),
+            "source_date": str(row["source_date"]),
+            "status": str(row["status"]),
+            "first_covered_run_id": int(row["first_covered_run_id"]),
+            "last_covered_run_id": int(row["last_covered_run_id"]),
+            "run_origin": str(row["run_origin"]),
+            "covered_at": str(row["covered_at"]),
+            "updated_at": str(row["updated_at"]),
+        }
+        for row in rows
+    ]
 
 
 def _json_list(value: object) -> list[object]:

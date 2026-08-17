@@ -8,16 +8,22 @@ import shutil
 import sqlite3
 import sys
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 from typing import Any, Literal
 
-from research_digest.models import DateSelection, ModelValidationError
+from research_digest.models import (
+    DateSelection,
+    ModelValidationError,
+    source_date_from_datetime,
+    utc_now,
+)
 
 AnalyzerProvider = Literal["codex", "openai"]
 
 DEFAULT_DB_FILENAME = "research_digest.sqlite3"
 DEFAULT_CONFIG_FILENAME = "config.json"
-CONFIG_VERSION = 2
+CONFIG_VERSION = 3
 APP_NAME = "Research Digest"
 APP_AUTHOR = "Research Digest"
 DEFAULT_ANALYZER_PROVIDER: AnalyzerProvider = "codex"
@@ -34,6 +40,8 @@ CONFIG_KEYS = {
     "codex_model",
     "codex_timeout_seconds",
     "default_date_selection",
+    "automatic_catch_up_enabled",
+    "automatic_coverage_start_date",
 }
 SECRET_CONFIG_KEYS = {
     "OPENAI_API_KEY",
@@ -56,6 +64,8 @@ class PersistedConfig:
     codex_model: str | None
     codex_timeout_seconds: float
     default_date_selection: DateSelection
+    automatic_catch_up_enabled: bool
+    automatic_coverage_start_date: date
 
 
 @dataclass(frozen=True)
@@ -74,6 +84,10 @@ class AppConfig:
     config_path: Path | None = None
     last_config_backup_path: Path | None = None
     default_date_selection: DateSelection = field(default_factory=DateSelection.latest_available)
+    automatic_catch_up_enabled: bool = True
+    automatic_coverage_start_date: date = field(
+        default_factory=lambda: source_date_from_datetime(utc_now())
+    )
 
 
 def load_config() -> AppConfig:
@@ -104,6 +118,8 @@ def load_config() -> AppConfig:
         config_path=config_dir / DEFAULT_CONFIG_FILENAME,
         last_config_backup_path=backup_path,
         default_date_selection=persisted_config.default_date_selection,
+        automatic_catch_up_enabled=persisted_config.automatic_catch_up_enabled,
+        automatic_coverage_start_date=persisted_config.automatic_coverage_start_date,
     )
 
 
@@ -157,6 +173,8 @@ def _default_persisted_config() -> PersistedConfig:
         codex_model=None,
         codex_timeout_seconds=DEFAULT_CODEX_TIMEOUT_SECONDS,
         default_date_selection=DateSelection.latest_available(),
+        automatic_catch_up_enabled=True,
+        automatic_coverage_start_date=source_date_from_datetime(utc_now()),
     )
 
 
@@ -213,6 +231,17 @@ def _persisted_config_from_payload(payload: dict[str, Any]) -> PersistedConfig:
             field_name="codex_timeout_seconds",
         ),
         default_date_selection=_coerce_date_selection(payload.get("default_date_selection")),
+        automatic_catch_up_enabled=_coerce_bool(
+            payload.get("automatic_catch_up_enabled", True),
+            field_name="automatic_catch_up_enabled",
+        ),
+        automatic_coverage_start_date=_coerce_date(
+            payload.get(
+                "automatic_coverage_start_date",
+                source_date_from_datetime(utc_now()).isoformat(),
+            ),
+            field_name="automatic_coverage_start_date",
+        ),
     )
 
 
@@ -221,7 +250,7 @@ def _upgrade_persisted_config(
     *,
     from_version: int,
 ) -> PersistedConfig:
-    if from_version not in {0, 1}:
+    if from_version not in {0, 1, 2}:
         raise ConfigError(f"unsupported configuration version: {from_version}")
 
     defaults = _default_persisted_config()
@@ -238,6 +267,14 @@ def _upgrade_persisted_config(
             "default_date_selection",
             defaults.default_date_selection.to_mapping(),
         ),
+        "automatic_catch_up_enabled": payload.get(
+            "automatic_catch_up_enabled",
+            defaults.automatic_catch_up_enabled,
+        ),
+        "automatic_coverage_start_date": payload.get(
+            "automatic_coverage_start_date",
+            defaults.automatic_coverage_start_date.isoformat(),
+        ),
     }
     return _persisted_config_from_payload(upgraded_payload)
 
@@ -250,6 +287,8 @@ def _write_persisted_config(path: Path, config: PersistedConfig) -> None:
         "codex_model": config.codex_model,
         "codex_timeout_seconds": config.codex_timeout_seconds,
         "default_date_selection": config.default_date_selection.to_mapping(),
+        "automatic_catch_up_enabled": config.automatic_catch_up_enabled,
+        "automatic_coverage_start_date": config.automatic_coverage_start_date.isoformat(),
     }
     temporary = path.with_name(path.name + ".tmp")
     try:
@@ -314,6 +353,21 @@ def _coerce_date_selection(value: object) -> DateSelection:
         return DateSelection.from_mapping(value)
     except (ModelValidationError, ValueError) as exc:
         raise ConfigError("default_date_selection is invalid") from exc
+
+
+def _coerce_bool(value: object, *, field_name: str) -> bool:
+    if not isinstance(value, bool):
+        raise ConfigError(f"{field_name} must be a boolean")
+    return value
+
+
+def _coerce_date(value: object, *, field_name: str) -> date:
+    if not isinstance(value, str):
+        raise ConfigError(f"{field_name} must be an ISO calendar date")
+    try:
+        return date.fromisoformat(value)
+    except ValueError as exc:
+        raise ConfigError(f"{field_name} must be an ISO calendar date") from exc
 
 
 def _resolve_db_path(data_dir: Path) -> Path:

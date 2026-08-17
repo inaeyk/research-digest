@@ -5,7 +5,7 @@ import sqlite3
 import tempfile
 import threading
 import unittest
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from unittest import mock
 
@@ -26,6 +26,7 @@ from research_digest.models import (
     ArticleFeedback,
     ArxivSourceConfig,
     InterestProfile,
+    RunOrigin,
     profile_semantic_fingerprint,
 )
 
@@ -206,6 +207,47 @@ class DatabaseTests(unittest.TestCase):
             profile_fingerprint=profile_semantic_fingerprint(profile),
         )
         self.assertEqual(loaded, analysis)
+
+    def test_source_date_coverage_round_trip_and_upsert(self) -> None:
+        profile = self.db.create_interest_profile(
+            name="Gravity",
+            description="Higher-dimensional gravity.",
+        )
+        assert profile.id is not None
+        run_id = self.db.create_app_run(profile_id=profile.id, source_name="arxiv")
+        fingerprint = profile_semantic_fingerprint(profile)
+
+        self.db.mark_source_date_covered(
+            profile_id=profile.id,
+            profile_fingerprint=fingerprint,
+            source_name="arxiv",
+            source_fingerprint="source-a",
+            source_date=date(2026, 8, 14),
+            run_id=run_id,
+            run_origin=RunOrigin.SCHEDULED,
+        )
+        self.db.mark_source_date_covered(
+            profile_id=profile.id,
+            profile_fingerprint=fingerprint,
+            source_name="arxiv",
+            source_fingerprint="source-a",
+            source_date=date(2026, 8, 14),
+            run_id=run_id,
+            run_origin=RunOrigin.SCHEDULED,
+        )
+
+        self.assertEqual(
+            self.db.list_covered_source_dates(
+                profile_id=profile.id,
+                profile_fingerprint=fingerprint,
+                source_name="arxiv",
+                source_fingerprint="source-a",
+                start_date=date(2026, 8, 1),
+                end_date=date(2026, 8, 31),
+            ),
+            {date(2026, 8, 14)},
+        )
+        self.assertEqual(len(self.db.list_source_date_coverage()), 1)
 
     def test_article_feedback_round_trip_and_profile_semantic_isolation(self) -> None:
         profile = self.db.create_interest_profile(
@@ -466,6 +508,7 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(runs[-1]["incomplete_source_dates_json"], "[]")
         self.assertEqual(runs[-1]["retrieval_complete"], 1)
         self.assertIsNone(runs[-1]["retrieval_safety_limit"])
+        self.assertEqual(migrated_db.list_source_date_coverage(), [])
 
     def test_migration_failure_leaves_recoverable_backup_and_old_db(self) -> None:
         legacy_path = Path(self.tmpdir.name) / "failing_migration.sqlite3"

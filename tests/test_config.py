@@ -5,6 +5,7 @@ import os
 import sqlite3
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
 from unittest import mock
 
@@ -42,6 +43,8 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.config_version, CONFIG_VERSION)
         self.assertEqual(config.config_path, Path(tmp) / "config" / DEFAULT_CONFIG_FILENAME)
         self.assertEqual(config.default_date_selection.kind, DateSelectionKind.LATEST_AVAILABLE)
+        self.assertTrue(config.automatic_catch_up_enabled)
+        self.assertIsInstance(config.automatic_coverage_start_date, date)
         self.assertTrue(config_file_exists)
 
     def test_openai_provider_selection_preserves_api_key_config(self) -> None:
@@ -82,6 +85,8 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.codex_model, "stored-codex-model")
         self.assertEqual(config.codex_timeout_seconds, 33)
         self.assertEqual(config.default_date_selection.kind, DateSelectionKind.LATEST_AVAILABLE)
+        self.assertTrue(config.automatic_catch_up_enabled)
+        self.assertIsInstance(config.automatic_coverage_start_date, date)
         self.assertIsNone(config.last_config_backup_path)
 
     def test_old_supported_config_upgrades_with_backup(self) -> None:
@@ -115,7 +120,46 @@ class ConfigTests(unittest.TestCase):
             upgraded["default_date_selection"],
             {"kind": "LATEST_AVAILABLE", "dates": []},
         )
+        self.assertIs(upgraded["automatic_catch_up_enabled"], True)
+        self.assertIsInstance(upgraded["automatic_coverage_start_date"], str)
         self.assertNotIn("OPENAI_API_KEY", json.dumps(upgraded))
+
+    def test_version_2_config_upgrades_to_automatic_coverage_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config" / DEFAULT_CONFIG_FILENAME
+            _write_config_json(
+                config_path,
+                {
+                    "config_version": 2,
+                    "analyzer_provider": "codex",
+                    "openai_model": "stored-openai-model",
+                    "codex_model": None,
+                    "codex_timeout_seconds": 55,
+                    "default_date_selection": {
+                        "kind": "SINGLE_DATE",
+                        "dates": ["2026-08-14"],
+                    },
+                },
+            )
+            with mock.patch.dict(os.environ, _isolated_env(tmp), clear=True):
+                config = load_config()
+
+            upgraded = _read_json(config_path)
+
+        self.assertEqual(config.config_version, CONFIG_VERSION)
+        self.assertEqual(
+            config.default_date_selection.to_mapping(),
+            {"kind": "SINGLE_DATE", "dates": ["2026-08-14"]},
+        )
+        self.assertTrue(config.automatic_catch_up_enabled)
+        self.assertIsInstance(config.automatic_coverage_start_date, date)
+        self.assertEqual(upgraded["config_version"], CONFIG_VERSION)
+        self.assertEqual(
+            upgraded["default_date_selection"],
+            {"kind": "SINGLE_DATE", "dates": ["2026-08-14"]},
+        )
+        self.assertIs(upgraded["automatic_catch_up_enabled"], True)
+        self.assertIsInstance(upgraded["automatic_coverage_start_date"], str)
 
     def test_unknown_future_config_version_fails_clearly(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

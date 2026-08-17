@@ -29,7 +29,7 @@ from research_digest.scheduler import (
 from research_digest.service import (
     HeadlessDigestRun,
     HeadlessProfileRun,
-    run_digest_for_enabled_profiles,
+    run_automatic_digest_for_enabled_profiles,
 )
 from research_digest.sources.base import SourceAdapter
 from research_digest.sources.registry import ARXIV_SOURCE_DEFINITION, SourceRunRequest
@@ -256,18 +256,22 @@ def _run_digest_command(
             analyzer_connection = build_configured_analyzer(active_config)
             active_analyzer = analyzer_connection.analyzer
             active_analyzer_message = analyzer_connection.message
-        result = run_digest_for_enabled_profiles(
+        result = run_automatic_digest_for_enabled_profiles(
             db=active_db,
             source=active_source,
             analyzer=active_analyzer,
             source_request=active_source_request,
+            coverage_start_date=active_config.automatic_coverage_start_date,
+            catch_up_missed_dates=active_config.automatic_catch_up_enabled,
         )
     except Exception as exc:
         message = sanitize_error(exc)
         _write_failure(stdout, stderr, json_output=json_output, message=message)
         return 1
 
-    command_failed = result.failed_count > 0 or active_analyzer_message is not None
+    command_failed = result.failed_count > 0 or (
+        active_analyzer_message is not None and _analysis_was_needed(result)
+    )
     if json_output:
         json.dump(
             _run_to_json(
@@ -465,6 +469,11 @@ def _status_payload(
         "config_version": config.config_version,
         "last_run": last_run,
         "schedule": schedule,
+        "automation": {
+            "catch_up_missed_dates": config.automatic_catch_up_enabled,
+            "coverage_start_date": config.automatic_coverage_start_date.isoformat(),
+            "covered_source_date_count": len(db.list_source_date_coverage()),
+        },
     }
 
 
@@ -537,6 +546,14 @@ def _write_status_human(stdout: TextIO, payload: Mapping[str, object]) -> None:
             f"installed={schedule.get('installed')} "
             f"backend={schedule.get('backend')} "
             f"message={schedule.get('message')}\n"
+        )
+    automation = payload.get("automation")
+    if isinstance(automation, Mapping):
+        stdout.write(
+            "Automation: "
+            f"catch_up={automation.get('catch_up_missed_dates')} "
+            f"coverage_start={automation.get('coverage_start_date')} "
+            f"covered_dates={automation.get('covered_source_date_count')}\n"
         )
 
 
@@ -670,6 +687,14 @@ def _write_human_result(
         f"retrieved {result.retrieved_count}, analyzed {result.analyzed_count}, "
         f"relevant {result.relevant_count}\n"
     )
+    if result.pending_source_dates:
+        stdout.write(
+            "Source dates: "
+            + ", ".join(value.isoformat() for value in result.pending_source_dates)
+            + "\n"
+        )
+    elif result.latest_available_source_date is not None:
+        stdout.write("Source dates: no uncovered dates\n")
     for profile_run in result.profiles:
         if profile_run.digest is None:
             stdout.write(
@@ -699,6 +724,13 @@ def _write_human_result(
         )
 
 
+def _analysis_was_needed(result: HeadlessDigestRun) -> bool:
+    return any(
+        profile_run.digest is not None and profile_run.digest.digest.retrieved_count > 0
+        for profile_run in result.profiles
+    )
+
+
 def _run_to_json(
     result: HeadlessDigestRun,
     db_path: Path,
@@ -717,6 +749,15 @@ def _run_to_json(
         "analyzed_count": result.analyzed_count,
         "relevant_count": result.relevant_count,
         "analysis_unavailable_count": result.analysis_unavailable_count,
+        "date_selection": (
+            result.date_selection.to_mapping() if result.date_selection is not None else None
+        ),
+        "pending_source_dates": [value.isoformat() for value in result.pending_source_dates],
+        "latest_available_source_date": (
+            result.latest_available_source_date.isoformat()
+            if result.latest_available_source_date is not None
+            else None
+        ),
         "profiles": [_profile_run_to_json(profile_run) for profile_run in result.profiles],
     }
 
@@ -744,6 +785,20 @@ def _profile_run_to_json(profile_run: HeadlessProfileRun) -> dict[str, object]:
         "new_analysis_count": digest.new_analysis_count,
         "reused_analysis_count": digest.reused_analysis_count,
         "analysis_available": digest.analysis_available,
+        "run_origin": digest.run_origin.value,
+        "date_selection": (
+            digest.date_selection.to_mapping() if digest.date_selection is not None else None
+        ),
+        "requested_source_dates": [
+            value.isoformat() for value in digest.requested_source_dates
+        ],
+        "covered_source_dates": [value.isoformat() for value in digest.covered_source_dates],
+        "empty_source_dates": [value.isoformat() for value in digest.empty_source_dates],
+        "incomplete_source_dates": [
+            value.isoformat() for value in digest.incomplete_source_dates
+        ],
+        "retrieval_complete": digest.retrieval_complete,
+        "retrieval_safety_limit": digest.retrieval_safety_limit,
         "feedback_count": calibration.feedback_count,
         "false_positive_count": calibration.false_positive_count,
         "false_negative_count": calibration.false_negative_count,

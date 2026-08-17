@@ -5,7 +5,7 @@ import json
 import tempfile
 import unittest
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from unittest import mock
 
@@ -13,18 +13,55 @@ from research_digest.analysis.fake import FakeAnalyzer
 from research_digest.cli import run_cli
 from research_digest.config import AppConfig
 from research_digest.db import APP_RUN_COMPLETED, Database
-from research_digest.models import Article, ArxivSourceConfig
+from research_digest.models import Article, ArxivSourceConfig, DateSelection
 from research_digest.scheduler import ScheduleOperationResult, ScheduleStatus
+from research_digest.sources.arxiv import ArxivDateRetrievalResult
 
 
 class StaticSource:
-    def __init__(self, articles: list[Article]) -> None:
+    def __init__(self, articles: list[Article], *, latest_date: date | None = None) -> None:
         self.articles = articles
+        self.latest_date = latest_date
 
     def fetch(self, config: ArxivSourceConfig, *, now: datetime | None = None) -> list[Article]:
         if not config.enabled:
             return []
         return list(self.articles[: config.max_results])
+
+    def resolve_latest_available_date(self, config: ArxivSourceConfig) -> date | None:
+        if not config.enabled:
+            return None
+        if self.latest_date is not None:
+            return self.latest_date
+        if not self.articles:
+            return None
+        return max(article.published_at.date() for article in self.articles)
+
+    def fetch_date_selection(
+        self,
+        config: ArxivSourceConfig,
+        selection: DateSelection,
+    ) -> ArxivDateRetrievalResult:
+        requested_dates = selection.selected_dates()
+        selected = set(requested_dates)
+        articles = tuple(
+            article
+            for article in self.articles
+            if config.enabled and article.published_at.date() in selected
+        )
+        article_dates = {article.published_at.date() for article in articles}
+        return ArxivDateRetrievalResult(
+            selection=selection,
+            articles=articles,
+            requested_dates=requested_dates,
+            covered_dates=requested_dates,
+            empty_dates=tuple(value for value in requested_dates if value not in article_dates),
+            incomplete_dates=(),
+            latest_available_date=self.resolve_latest_available_date(config),
+            retrieved_count=len(articles),
+            safety_limit=2000,
+            safety_limit_reached=False,
+        )
 
 
 class StaticSchedulerBackend:
@@ -75,6 +112,7 @@ class CLITests(unittest.TestCase):
             openai_model="unused",
             codex_model=None,
             codex_timeout_seconds=1,
+            automatic_coverage_start_date=date(2026, 8, 14),
         )
 
     def tearDown(self) -> None:
@@ -106,6 +144,8 @@ class CLITests(unittest.TestCase):
         self.assertEqual(payload["profile_count"], 1)
         self.assertEqual(payload["retrieved_count"], 1)
         self.assertEqual(payload["analyzed_count"], 1)
+        self.assertEqual(payload["pending_source_dates"], ["2026-08-14"])
+        self.assertEqual(payload["date_selection"]["kind"], "SINGLE_DATE")
         output = stdout.getvalue()
         self.assertNotIn("Private description", output)
         self.assertNotIn("Private title", output)
@@ -138,10 +178,37 @@ class CLITests(unittest.TestCase):
         output = stdout.getvalue()
         self.assertIn("Research Digest run failed", output)
         self.assertIn("Analysis unavailable:", output)
+        self.assertIn("Source dates: 2026-08-14", output)
         self.assertNotIn("/home/" + "inaeyk", output)
         self.assertNotIn("sk-secret", output)
         self.assertIn("[HOME]", output)
         self.assertEqual(stderr.getvalue(), "")
+
+    def test_run_succeeds_for_no_submission_date_without_analyzer(self) -> None:
+        self.db.create_interest_profile(
+            name="Gravity",
+            description="Higher-dimensional gravity.",
+        )
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        exit_code = run_cli(
+            argv=["run", "--json"],
+            stdout=stdout,
+            stderr=stderr,
+            config=self.config,
+            db=self.db,
+            source=StaticSource([], latest_date=date(2026, 8, 14)),
+            analyzer=None,
+            analyzer_message="codex unavailable",
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stderr.getvalue(), "")
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(payload["status"], "completed")
+        self.assertEqual(payload["retrieved_count"], 0)
+        self.assertEqual(payload["pending_source_dates"], ["2026-08-14"])
 
     def test_run_without_profiles_returns_failure(self) -> None:
         stdout = io.StringIO()
@@ -229,6 +296,9 @@ class CLITests(unittest.TestCase):
         self.assertEqual(payload["last_run"]["status"], APP_RUN_COMPLETED)
         self.assertEqual(payload["last_run"]["relevant_count"], 1)
         self.assertTrue(payload["schedule"]["installed"])
+        self.assertTrue(payload["automation"]["catch_up_missed_dates"])
+        self.assertEqual(payload["automation"]["coverage_start_date"], "2026-08-14")
+        self.assertEqual(payload["automation"]["covered_source_date_count"], 0)
         output = stdout.getvalue()
         self.assertNotIn("OPENAI_API_KEY", output)
         self.assertNotIn("sk-", output)

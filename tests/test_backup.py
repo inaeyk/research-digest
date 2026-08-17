@@ -5,14 +5,19 @@ import json
 import sqlite3
 import tempfile
 import unittest
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from unittest import mock
 
 from research_digest.backup import BackupError, run_backup
 from research_digest.cli import run_cli
 from research_digest.db import APP_RUN_COMPLETED, Database
-from research_digest.models import Article, ArxivSourceConfig, profile_semantic_fingerprint
+from research_digest.models import (
+    Article,
+    ArxivSourceConfig,
+    RunOrigin,
+    profile_semantic_fingerprint,
+)
 
 
 def sample_article() -> Article:
@@ -161,6 +166,15 @@ class BackupTests(unittest.TestCase):
             analyzed_count=1,
             relevant_count=1,
         )
+        self.db.mark_source_date_covered(
+            profile_id=profile.id,
+            profile_fingerprint=profile_semantic_fingerprint(profile),
+            source_name="arxiv",
+            source_fingerprint="source-a",
+            source_date=date(2026, 8, 14),
+            run_id=run_id,
+            run_origin=RunOrigin.SCHEDULED,
+        )
         self.db.save_run_snapshot(
             run_id=run_id,
             snapshot_json=json.dumps(
@@ -194,6 +208,7 @@ class BackupTests(unittest.TestCase):
         self.assertEqual(payload["feedback"][0]["feedback_label"], "RELEVANT")
         self.assertEqual(payload["runs"][0]["status"], APP_RUN_COMPLETED)
         self.assertEqual(payload["run_snapshots"][0]["snapshot"]["profile_name"], "Gravity")
+        self.assertEqual(payload["source_date_coverage"][0]["source_date"], "2026-08-14")
         output = result.export_path.read_text(encoding="utf-8")
         self.assertNotIn("OPENAI_API_KEY", output)
         self.assertNotIn("sk-secret", output)

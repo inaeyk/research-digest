@@ -282,3 +282,85 @@ U2-C freeze:
 - qualified commit: `24230f3abeefb3cacf97c890247fca4f83e23388`.
 - qualified tag: `u2c-qualified`.
 - qualified tag object: `db857fc566645b477f2c928dd683f66430fbd2d8`.
+
+## U2-D Candidate
+
+Implementation summary:
+
+- Added source-date coverage planning and persistence for automatic runs.
+- Added schema version 6 with additive `source_date_coverage` scoped by
+  profile semantic fingerprint and source semantic fingerprint.
+- Added config version 3 with catch-up enabled by default and a conservative
+  automatic coverage start date initialized at config creation/upgrade time.
+- Changed headless `research-digest run` to use date-native uncovered-date
+  catch-up with `RunOrigin.SCHEDULED`, rather than legacy rolling lookback.
+- Coverage is only marked after complete retrieval and usable terminal digest
+  semantics; failed, partial, and analyzer-unavailable-with-articles runs remain
+  uncovered for retry.
+- No-submission automatic runs can complete and be covered without an analyzer;
+  analyzer unavailability still fails the command when retrieved articles
+  actually need analysis.
+- Empty/no-submission source dates can be covered after successful retrieval.
+- CLI status exposes automation catch-up state, coverage anchor, and coverage
+  count; JSON backup export preserves source-date coverage.
+
+Migration/upgrade semantics:
+
+- Legacy v0.1.0 rolling-lookback runs are not reinterpreted as source-date
+  coverage because their exact source-date meaning cannot be established
+  safely under the new contract.
+- First upgrade/first schedule install does not backfill the full arXiv
+  history; the default anchor is the UTC source date when config version 3 is
+  created.
+
+Candidate deterministic verification:
+
+- `pytest`: 194 passed.
+- `ruff check .`: PASS.
+- `mypy --strict src tests`: PASS.
+- `python -m compileall -q src tests`: PASS.
+- `git diff --check`: PASS.
+
+Live smoke:
+
+- Disposable automatic arXiv headless smoke failed with DNS resolution failure
+  for `export.arxiv.org`.
+- Same smoke after network escalation failed with the same DNS result.
+
+Initial independent U2-D Auditor:
+
+- Auditor `01a00fb0-e605-7483-9d4a-3cff061a82e4` returned FAIL with one
+  BLOCKER.
+- Finding: U2-C config version 2 could not migrate to U2-D config version 3
+  because the upgrade function only accepted versions 0 and 1.
+- The auditor otherwise found U2-D coverage semantics consistent.
+
+Repair round 1:
+
+- Config migration now accepts version 2.
+- Added a regression for upgrading a version-2 config with an existing
+  `default_date_selection`, preserving it while adding automatic catch-up
+  fields.
+
+Post-repair verification:
+
+- `pytest`: 195 passed.
+- `ruff check .`: PASS.
+- `mypy --strict src tests`: PASS.
+- `python -m compileall -q src tests`: PASS.
+- `git diff --check`: PASS.
+
+Fresh U2-D re-audit:
+
+- Auditor `01a00fb5-4b7e-7b20-8360-656d5b3c003a` returned PASS.
+- No BLOCKER or IMPORTANT findings remain.
+- The auditor verified the config v2-to-v3 repair, additive schema migration,
+  semantic coverage scope, catch-up planning, latest-only behavior when
+  catch-up is disabled, date-native headless path, conservative terminal
+  coverage rule, no-submission/analyzer behavior, and status/export visibility.
+
+U2-D freeze:
+
+- qualified commit: pending local freeze commit.
+- qualified tag: pending `u2d-qualified`.
+- qualified tag object: pending.

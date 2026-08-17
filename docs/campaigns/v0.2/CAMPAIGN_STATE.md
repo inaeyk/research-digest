@@ -1,6 +1,6 @@
 # v0.2 Campaign State
 
-- campaign_state: U2_D_IN_PROGRESS
+- campaign_state: U2_D_QUALIFIED_AWAITING_FREEZE
 - current_substage: U2-D Date coverage and automatic catch-up
 - current_git_head: 24230f3abeefb3cacf97c890247fca4f83e23388
 - current_branch: feature/v0.2-date-native-scheduler-ui
@@ -11,17 +11,17 @@
 - online_remote_verification: attempted `git ls-remote --heads --tags origin`; blocked by DNS resolution failure for `github.com` before and after network escalation.
 - package_version: 0.1.0
 - runtime_version: 0.1.0
-- schema_version: 5
-- config_version: 2
+- schema_version: 6
+- config_version: 3
 - worktree_state_at_campaign_start: clean tracked worktree; ignored runtime files include `.env`, local SQLite, virtualenv, caches, and local agent/runtime directories.
-- qualification_state: U2-C qualified and frozen locally; U2-D implementation may begin.
+- qualification_state: U2-D repair round 1 passed fresh independent re-audit; local freeze pending.
 - audit_round: 2
-- deterministic_checks: baseline `pytest` 149 passed; U2-A post-repair `pytest` 166 passed; U2-B post-repair `pytest` 174 passed; U2-C repair round 1 `pytest` 184 passed; `ruff check .` PASS; `mypy --strict src tests` PASS; `python -m compileall -q src tests` PASS; `git diff --check` PASS.
-- live_checks: U2-A live arXiv latest-available smoke blocked by DNS resolution failure for `export.arxiv.org` before and after network escalation. U2-C Streamlit serve smoke blocked by local socket `Operation not permitted` before and after escalation.
-- schema_config_migration_state: v0.1.0 uses ordered SQLite migrations through schema version 4 and JSON config version 1; U2-A raises JSON config to version 2; U2-B candidate raises SQLite schema to version 5 with additive app-run date metadata defaults that preserve legacy historical run meaning.
-- qualified_local_commit: 24230f3abeefb3cacf97c890247fca4f83e23388
-- qualified_local_tag: u2c-qualified
-- qualified_local_tag_object: db857fc566645b477f2c928dd683f66430fbd2d8
+- deterministic_checks: baseline `pytest` 149 passed; U2-A post-repair `pytest` 166 passed; U2-B post-repair `pytest` 174 passed; U2-C repair round 1 `pytest` 184 passed; U2-D repair round 1 `pytest` 195 passed; `ruff check .` PASS; `mypy --strict src tests` PASS; `python -m compileall -q src tests` PASS; `git diff --check` PASS.
+- live_checks: U2-A live arXiv latest-available smoke blocked by DNS resolution failure for `export.arxiv.org` before and after network escalation. U2-C Streamlit serve smoke blocked by local socket `Operation not permitted` before and after escalation. U2-D disposable live arXiv automatic headless smoke blocked by DNS resolution failure for `export.arxiv.org` before and after network escalation.
+- schema_config_migration_state: v0.1.0 uses ordered SQLite migrations through schema version 4 and JSON config version 1; U2-A raises JSON config to version 2; U2-B raises SQLite schema to version 5 with additive app-run date metadata defaults that preserve legacy historical run meaning; U2-D candidate raises SQLite schema to version 6 with additive source-date coverage and JSON config to version 3 with automatic catch-up enabled plus a conservative coverage start anchor.
+- qualified_local_commit: pending U2-D freeze commit
+- qualified_local_tag: pending `u2d-qualified`
+- qualified_local_tag_object: pending
 - u2a_qualified_commit: 616d84209c7295de2884d4ae82df0a5bd222d397
 - u2a_qualified_tag: u2a-qualified
 - u2a_qualified_tag_object: 84e22c2eaa2b67c1dc6000fe4cc42e25a7f32e7c
@@ -32,7 +32,7 @@
 - u2c_qualified_tag: u2c-qualified
 - u2c_qualified_tag_object: db857fc566645b477f2c928dd683f66430fbd2d8
 - deferred_minor_optional_findings: U2-A re-auditor OPTIONAL: future hardening could add a separate raw API-row/page scan ceiling for malformed or inconsistent API responses; not required for U2-A after explicit-date repair. U2-C initial auditor OPTIONAL: Sources page still exposes legacy `Lookback hours` and `Max results`; defer demotion/removal to U2-G unless later substages require it earlier.
-- next_permitted_action: implement U2-D date coverage and automatic catch-up; run deterministic and scheduler/headless smoke checks; then launch fresh U2-D Auditor.
+- next_permitted_action: create local U2-D qualification commit and annotated tag `u2d-qualified`; then record freeze metadata and proceed to U2-E.
 - human_stop_reason: none
 
 ## Recovered v0.1.0 Baseline
@@ -302,3 +302,66 @@ admin compatibility.
 - U2-C freeze commit: `24230f3abeefb3cacf97c890247fca4f83e23388`.
 - U2-C freeze tag: `u2c-qualified`.
 - U2-C freeze tag object: `db857fc566645b477f2c928dd683f66430fbd2d8`.
+
+## U2-D Candidate Log
+
+- implementation: added `research_digest.coverage` for automatic date coverage
+  planning, compact `DateSelection` construction, profile/source semantic
+  scoping, and coverage marking.
+- schema: raised SQLite schema to version 6 with additive
+  `source_date_coverage`; coverage rows are keyed by profile id, profile
+  semantic fingerprint, source name, source semantic fingerprint, and UTC
+  source date.
+- config: raised JSON config to version 3 with
+  `automatic_catch_up_enabled = true` by default and
+  `automatic_coverage_start_date` initialized to the config creation/upgrade
+  UTC source date. This avoids surprising multi-year arXiv backfill on first
+  upgrade or first schedule install.
+- historical migration: legacy v0.1.0 rolling-lookback runs are not
+  reinterpreted as source-date coverage because their exact source-date
+  semantics cannot be safely reconstructed. Date-native coverage is recorded
+  additively for future runs.
+- automatic behavior: `research-digest run` now uses the automatic date-native
+  catch-up service, resolves latest available through the source abstraction,
+  computes uncovered dates from the coverage anchor, and invokes the same
+  qualified digest engine with `RunOrigin.SCHEDULED`.
+- catch-up behavior: when catch-up is enabled, pending dates are the uncovered
+  UTC source dates from the coverage anchor through the latest available source
+  date. When disabled, only the latest available source date is considered.
+- coverage terminal rule: a source date is marked COVERED only after retrieval
+  is complete with no incomplete dates and the digest is usable. Usable means
+  analysis is available, or retrieval established empty/no-submission date
+  coverage with no articles requiring analysis. Failed runs,
+  partial/safety-truncated retrieval, and analyzer-unavailable runs with
+  retrieved articles are not marked covered. The headless CLI returns success
+  for no-submission automatic runs without an analyzer, but still fails when
+  analyzer unavailability leaves retrieved articles unanalyzed.
+- retry behavior: failed or partial dates remain uncovered and are eligible for
+  the next automatic run.
+- source/profile semantics: materially changed profile semantics or source
+  categories produce a different coverage scope, so old coverage is not
+  silently reused under changed analysis/source meaning.
+- status/export: CLI status exposes automation catch-up state, coverage anchor,
+  and covered-date count without network access; JSON backup export includes
+  source-date coverage rows.
+- deterministic verification: `pytest` 194 passed; `ruff check .` PASS;
+  `mypy --strict src tests` PASS; `python -m compileall -q src tests` PASS;
+  `git diff --check` PASS.
+- live headless smoke: disposable automatic arXiv smoke using the official
+  API failed with DNS resolution failure for `export.arxiv.org` before and
+  after network escalation.
+- initial auditor: `01a00fb0-e605-7483-9d4a-3cff061a82e4`.
+- initial result: FAIL with one BLOCKER.
+- BLOCKER: U2-C JSON config version 2 could not migrate to U2-D config version
+  3 because `_upgrade_persisted_config()` only accepted versions 0 and 1.
+- repair round 1: config migration now accepts version 2 and preserves the
+  v2 `default_date_selection` while adding catch-up defaults and a coverage
+  start anchor.
+- repair round 1 regression: version-2 config upgrade test covers the exact
+  U2-C-to-U2-D path.
+- repair round 1 deterministic verification: `pytest` 195 passed;
+  `ruff check .` PASS; `mypy --strict src tests` PASS;
+  `python -m compileall -q src tests` PASS; `git diff --check` PASS.
+- re-auditor: `01a00fb5-4b7e-7b20-8360-656d5b3c003a`.
+- re-auditor result: PASS with no BLOCKER/IMPORTANT findings.
+- re-auditor checks: focused U2-D regression suite `pytest` 54 passed.

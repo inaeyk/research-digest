@@ -3,16 +3,21 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Any
+from datetime import date, datetime
+from typing import Any, cast
 from uuid import uuid4
 
 from research_digest.analysis.base import LLMAnalyzer
 from research_digest.calibration import CalibrationSummary, build_calibration_summary
+from research_digest.coverage import (
+    build_automatic_coverage_plan,
+    mark_digest_coverage,
+)
 from research_digest.db import Database
 from research_digest.errors import sanitize_error
 from research_digest.history import persist_run_snapshot
 from research_digest.models import (
+    ArxivSourceConfig,
     DateSelection,
     DigestResult,
     RunOrigin,
@@ -20,8 +25,8 @@ from research_digest.models import (
 )
 from research_digest.pipeline import DigestPipelineError, run_digest
 from research_digest.preselection import AbstractPreselector
-from research_digest.sources.base import SourceAdapter
-from research_digest.sources.registry import SourceRunRequest
+from research_digest.sources.base import LatestAvailableDateResolver, SourceAdapter
+from research_digest.sources.registry import ARXIV_SOURCE_DEFINITION, SourceRunRequest
 from research_digest.synthesis import (
     CrossPaperSynthesis,
     CrossPaperSynthesizer,
@@ -49,6 +54,9 @@ class HeadlessProfileRun:
 @dataclass(frozen=True)
 class HeadlessDigestRun:
     profiles: tuple[HeadlessProfileRun, ...]
+    date_selection: DateSelection | None = None
+    pending_source_dates: tuple[date, ...] = ()
+    latest_available_source_date: date | None = None
 
     @property
     def succeeded_count(self) -> int:
@@ -184,6 +192,132 @@ def run_digest_for_enabled_profiles(
         )
     finally:
         db.release_run_lock(owner=owner)
+
+
+def run_automatic_digest_for_enabled_profiles(
+    *,
+    db: Database,
+    source: SourceAdapter,
+    analyzer: LLMAnalyzer | None,
+    coverage_start_date: date,
+    catch_up_missed_dates: bool,
+    source_request: SourceRunRequest[Any] | None = None,
+    now: datetime | None = None,
+    preselector: AbstractPreselector | None = None,
+    synthesis_builder: CrossPaperSynthesizer | None = None,
+    stale_lock_seconds: float = DEFAULT_RUN_LOCK_STALE_SECONDS,
+) -> HeadlessDigestRun:
+    """Run scheduled date-native catch-up for every enabled profile."""
+
+    owner = _lock_owner()
+    db.acquire_run_lock(owner=owner, stale_after_seconds=stale_lock_seconds)
+    try:
+        return _run_automatic_digest_for_enabled_profiles_unlocked(
+            db=db,
+            source=source,
+            analyzer=analyzer,
+            coverage_start_date=coverage_start_date,
+            catch_up_missed_dates=catch_up_missed_dates,
+            source_request=source_request,
+            now=now,
+            preselector=preselector,
+            synthesis_builder=synthesis_builder,
+            stale_lock_seconds=stale_lock_seconds,
+        )
+    finally:
+        db.release_run_lock(owner=owner)
+
+
+def _run_automatic_digest_for_enabled_profiles_unlocked(
+    *,
+    db: Database,
+    source: SourceAdapter,
+    analyzer: LLMAnalyzer | None,
+    coverage_start_date: date,
+    catch_up_missed_dates: bool,
+    source_request: SourceRunRequest[Any] | None,
+    now: datetime | None,
+    preselector: AbstractPreselector | None,
+    synthesis_builder: CrossPaperSynthesizer | None,
+    stale_lock_seconds: float,
+) -> HeadlessDigestRun:
+    profiles = tuple(db.list_interest_profiles(enabled_only=True))
+    if not profiles:
+        raise DigestPipelineError("create and enable an interest profile before running a digest")
+
+    active_source_request = source_request
+    if active_source_request is None:
+        source_config = ARXIV_SOURCE_DEFINITION.load_config(db)
+        if source_config is None:
+            raise DigestPipelineError("source configuration is missing")
+        active_source_request = SourceRunRequest(
+            source_name=ARXIV_SOURCE_DEFINITION.name,
+            adapter=source,
+            config=source_config,
+        )
+
+    if not isinstance(active_source_request.adapter, LatestAvailableDateResolver):
+        raise DigestPipelineError("source adapter cannot resolve latest available source date")
+    source_config = cast(ArxivSourceConfig, active_source_request.config)
+    plan = build_automatic_coverage_plan(
+        db=db,
+        profiles=profiles,
+        source_name=active_source_request.source_name,
+        source_config=source_config,
+        latest_resolver=active_source_request.adapter,
+        coverage_start_date=coverage_start_date,
+        catch_up_missed_dates=catch_up_missed_dates,
+    )
+    date_selection = plan.date_selection
+    if date_selection is None:
+        return HeadlessDigestRun(
+            profiles=(),
+            date_selection=None,
+            pending_source_dates=plan.pending_dates,
+            latest_available_source_date=plan.latest_available_date,
+        )
+
+    runs: list[HeadlessProfileRun] = []
+    for profile in profiles:
+        if profile.id is None:
+            raise DigestPipelineError("enabled interest profile is missing an id")
+        try:
+            digest = run_digest_for_profile(
+                db=db,
+                source=source,
+                analyzer=analyzer,
+                profile_id=profile.id,
+                source_request=active_source_request,
+                date_selection=date_selection,
+                run_origin=RunOrigin.SCHEDULED,
+                now=now,
+                preselector=preselector,
+                synthesis_builder=synthesis_builder,
+                acquire_lock=False,
+                stale_lock_seconds=stale_lock_seconds,
+            )
+        except Exception as exc:
+            runs.append(
+                HeadlessProfileRun(
+                    profile_id=profile.id,
+                    success=False,
+                    error_message=sanitize_error(exc),
+                )
+            )
+        else:
+            mark_digest_coverage(
+                db=db,
+                digest=digest.digest,
+                source_name=active_source_request.source_name,
+            )
+            runs.append(HeadlessProfileRun(profile_id=profile.id, success=True, digest=digest))
+
+    return HeadlessDigestRun(
+        profiles=tuple(runs),
+        date_selection=date_selection,
+        pending_source_dates=plan.pending_dates,
+        latest_available_source_date=plan.latest_available_date,
+    )
 
 
 def _run_digest_for_enabled_profiles_unlocked(

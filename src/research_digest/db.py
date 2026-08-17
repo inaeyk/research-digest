@@ -7,7 +7,7 @@ import sqlite3
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
@@ -30,7 +30,7 @@ from research_digest.models import (
 SOURCE_ARXIV = "arxiv"
 SCHEMA_VERSION_KEY = "schema_version"
 LAST_MIGRATION_BACKUP_KEY = "last_migration_backup_path"
-CURRENT_SCHEMA_VERSION = 5
+CURRENT_SCHEMA_VERSION = 6
 APP_RUN_STARTING = "STARTING"
 APP_RUN_RUNNING = "RUNNING"
 APP_RUN_COMPLETED = "COMPLETED"
@@ -515,6 +515,94 @@ class Database:
                 ).fetchall()
             )
 
+    def mark_source_date_covered(
+        self,
+        *,
+        profile_id: int,
+        profile_fingerprint: str,
+        source_name: str,
+        source_fingerprint: str,
+        source_date: date,
+        run_id: int,
+        run_origin: RunOrigin,
+    ) -> None:
+        covered_at = datetime_to_db(utc_now())
+        with self._connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO source_date_coverage (
+                    profile_id, profile_fingerprint, source_name, source_fingerprint,
+                    source_date, status, first_covered_run_id, last_covered_run_id,
+                    run_origin, covered_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, 'COVERED', ?, ?, ?, ?, ?)
+                ON CONFLICT(
+                    profile_id, profile_fingerprint, source_name, source_fingerprint, source_date
+                ) DO UPDATE SET
+                    status = 'COVERED',
+                    last_covered_run_id = excluded.last_covered_run_id,
+                    run_origin = excluded.run_origin,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    profile_id,
+                    profile_fingerprint,
+                    source_name,
+                    source_fingerprint,
+                    source_date.isoformat(),
+                    run_id,
+                    run_id,
+                    run_origin.value,
+                    covered_at,
+                    covered_at,
+                ),
+            )
+
+    def list_covered_source_dates(
+        self,
+        *,
+        profile_id: int,
+        profile_fingerprint: str,
+        source_name: str,
+        source_fingerprint: str,
+        start_date: date,
+        end_date: date,
+    ) -> set[date]:
+        with self._connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT source_date
+                FROM source_date_coverage
+                WHERE profile_id = ?
+                    AND profile_fingerprint = ?
+                    AND source_name = ?
+                    AND source_fingerprint = ?
+                    AND status = 'COVERED'
+                    AND source_date BETWEEN ? AND ?
+                """,
+                (
+                    profile_id,
+                    profile_fingerprint,
+                    source_name,
+                    source_fingerprint,
+                    start_date.isoformat(),
+                    end_date.isoformat(),
+                ),
+            ).fetchall()
+        return {date.fromisoformat(str(row["source_date"])) for row in rows}
+
+    def list_source_date_coverage(self) -> list[sqlite3.Row]:
+        with self._connection() as conn:
+            return list(
+                conn.execute(
+                    """
+                    SELECT *
+                    FROM source_date_coverage
+                    ORDER BY source_date DESC, profile_id ASC, id DESC
+                    """
+                ).fetchall()
+            )
+
     def save_run_snapshot(self, *, run_id: int, snapshot_json: str) -> None:
         with self._connection() as conn:
             conn.execute(
@@ -889,6 +977,33 @@ def _migration_run_date_metadata(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE app_runs ADD COLUMN {name} {definition}")
 
 
+def _migration_source_date_coverage(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS source_date_coverage (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            profile_id INTEGER NOT NULL,
+            profile_fingerprint TEXT NOT NULL,
+            source_name TEXT NOT NULL,
+            source_fingerprint TEXT NOT NULL,
+            source_date TEXT NOT NULL,
+            status TEXT NOT NULL,
+            first_covered_run_id INTEGER NOT NULL,
+            last_covered_run_id INTEGER NOT NULL,
+            run_origin TEXT NOT NULL,
+            covered_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE (
+                profile_id, profile_fingerprint, source_name, source_fingerprint, source_date
+            ),
+            FOREIGN KEY(profile_id) REFERENCES interest_profiles(id) ON DELETE CASCADE,
+            FOREIGN KEY(first_covered_run_id) REFERENCES app_runs(id) ON DELETE CASCADE,
+            FOREIGN KEY(last_covered_run_id) REFERENCES app_runs(id) ON DELETE CASCADE
+        )
+        """
+    )
+
+
 MIGRATIONS: Sequence[SchemaMigration] = (
     SchemaMigration(1, "core m1/m2 tables", _migration_core_tables),
     SchemaMigration(2, "profile-fingerprinted relevance analyses", _migration_profile_fingerprints),
@@ -899,6 +1014,7 @@ MIGRATIONS: Sequence[SchemaMigration] = (
         _migration_run_lifecycle_history,
     ),
     SchemaMigration(5, "date-native run metadata", _migration_run_date_metadata),
+    SchemaMigration(6, "source date coverage", _migration_source_date_coverage),
 )
 
 
