@@ -1,11 +1,11 @@
 # Release 1 Campaign State
 
-- current_substage: M7-I audit PASS ready to freeze
+- current_substage: final release-candidate audit pending
 - status: ACTIVE
-- current_git_head: e972d95933fc8145924883f0fa29cfeec52d4600
-- current_tags_at_head: m7h-qualified
+- current_git_head: efc4c88a689d06dc0e4b4428605c05836ddb7374
+- current_tags_at_head: m7i-qualified
 - current_branch: master
-- local_remote_tracking: `master` tracks `origin/master`; local branch is 12 commits ahead after M7-H freeze
+- local_remote_tracking: `master` tracks `origin/master`; local branch is 13 commits ahead after M7-I freeze
 - online_remote_verification: attempted `git ls-remote --heads --tags origin`; blocked by DNS resolution failure for `github.com` even after network escalation
 - baseline_m1_qualified_commit: 36bd1cbe60f95d588e8ccdd41bfce914e9b1d7da
 - baseline_m1_qualified_tag: m1-qualified
@@ -53,15 +53,18 @@
 - m7h_qualified_commit: e972d95933fc8145924883f0fa29cfeec52d4600
 - m7h_qualified_tag: m7h-qualified
 - m7h_qualified_tag_object: 4a1b6ab618265a15f9c99682e4d638583f362c32
+- m7i_qualified_commit: efc4c88a689d06dc0e4b4428605c05836ddb7374
+- m7i_qualified_tag: m7i-qualified
+- m7i_qualified_tag_object: ec016b565fe84857b8053c51822290025b50c0db
 - skipped_campaigns: M3 additional source types; M5 full-paper reading; M6 long-term research memory
 - active_campaign_scope: M4 automatic daily operation; M7 release engineering, upgradeability, and productization; first release candidate
-- qualification_status: M7I_AUDIT_PASS_READY_FREEZE
+- qualification_status: FINAL_RELEASE_AUDIT_PENDING
 - audit_repair_round: 1
-- last_deterministic_verification: M7-I repair round 1 second full gate: full `pytest` 145 passed; `ruff check .` PASS; strict `mypy --strict src tests` PASS; `python -m compileall -q src tests` PASS; `git diff --check` PASS.
-- last_live_verification: M7-I repair round 1 package smoke: offline `pip wheel . --no-deps` PASS; isolated fresh-venv wheel install with `--no-deps` PASS; installed `research-digest --version` PASS from `/tmp`; installed entry point metadata PASS; installed `status --json` PASS with isolated data/config; documented editable `pip install -e '.[dev]' --no-deps` PASS; editable installed CLI PASS. Final current-state package smoke repeated under `/tmp/research-digest-m7i-finalpkg3.RhYfM6` and PASS; wheel contains no `__pycache__` or `.pyc` members and includes `dev` extra metadata. Live arXiv/Codex/scheduler/serve limitations remain environment-blocked as previously recorded.
+- last_deterministic_verification: Final RC gate: full `pytest` 145 passed; `ruff check .` PASS; strict `mypy --strict src tests` PASS; `python -m compileall -q src tests` PASS; `git diff --check` PASS; targeted recovery/cache/migration/backup slice 51 passed.
+- last_live_verification: Final RC package/install/CLI/backup smokes PASS from `/tmp/research-digest-rc.Q4O1FA`; live arXiv digest, Codex model transport, WSL scheduler, and serve listener remain environment-blocked with sanitized bounded failures even after escalation where applicable.
 - migration_data_safety_status: M7-B candidate adds explicit schema version metadata, ordered migrations, backup before schema-changing upgrades of existing DBs, rollback on failed migration, and visible migration backup path. Repo-local `research_digest.sqlite3` remains ignored and was not used for upgrade testing.
 - deferred_minor_optional_findings: none
-- next_permitted_action: run post-audit M7-I qualification gate, inspect Git hygiene, stage only qualified M7-I files, commit, and tag `m7i-qualified`
+- next_permitted_action: commit release-candidate packet and verification evidence locally, launch fresh final release Auditor over `m2-qualified..HEAD`, repair if needed, then stop at `RELEASE_CANDIDATE_COMPLETE_AWAITING_HUMAN`
 - human_stop_reason: none
 
 ## Restored Release Campaign Charter Authority
@@ -1067,6 +1070,59 @@ Second closure audit:
 - fresh independent read-only M7-I Auditor returned PASS with no BLOCKER/IMPORTANT/MINOR/OPTIONAL findings.
 - Auditor independently verified the original installed-CLI and M2-upgrade BLOCKERs remain closed.
 - Auditor independently verified the README-documented editable/dev install path is supported, `dev` extra metadata is emitted, wheel/editable installs work from isolated `/tmp` contexts, the twelve-case matrix is credible, generated cache/bytecode files are excluded from wheels, and the environment-blocked live Codex/arXiv/scheduler/serve limitations are concrete and acceptable for M7-I if carried into final RC materials.
+
+Post-audit M7-I qualification:
+
+- full `pytest`: 145 passed.
+- `ruff check .`: PASS.
+- strict `mypy --strict src tests`: PASS.
+- `python -m compileall -q src tests`: PASS.
+- `git diff --check`: PASS.
+- staged inventory contained only M7-I docs, the release qualification matrix, packaging metadata/backend, and M7-I harness.
+- committed `efc4c88a689d06dc0e4b4428605c05836ddb7374` (`Qualify M7-I release matrix`) and created local annotated tag `m7i-qualified` with tag object `ec016b565fe84857b8053c51822290025b50c0db`.
+
+## Release-Candidate Gate Evidence
+
+Versioning:
+
+- package version in `pyproject.toml`: `0.1.0`.
+- runtime version in `src/research_digest/__init__.py`: `0.1.0`.
+- no existing public-style `v*` tags found.
+- suggested human-reviewed final public tag: `v0.1.0`.
+
+Prepared materials:
+
+- `docs/campaigns/release1/RELEASE_CANDIDATE_PACKET.md`
+- `docs/campaigns/release1/FINAL_RELEASE_CANDIDATE_VERIFICATION.md`
+
+Final deterministic verification:
+
+- full `pytest`: 145 passed.
+- `ruff check .`: PASS.
+- strict `mypy --strict src tests`: PASS.
+- `python -m compileall -q src tests`: PASS.
+- `git diff --check`: PASS.
+- targeted recovery/cache/migration/backup tests: 51 passed.
+
+Final package/install verification:
+
+- offline wheel build: PASS.
+- wheel content/metadata/entry point checks: PASS, including no generated bytecode/cache files and `dev` extra metadata.
+- isolated wheel install with `--no-deps`: PASS.
+- isolated editable install `pip install -e '.[dev]' --no-deps`: PASS.
+- installed wheel CLI `--version`, `status --json`, `doctor --json`, and `backup --json --export-json`: PASS where not dependent on blocked external runtime.
+
+Final live/runtime verification:
+
+- installed live digest with one disposable profile and arXiv max results `1`: environment-blocked by arXiv DNS failure; same result after escalation; failure recorded in run history and DB remains valid.
+- Codex CLI exists and reports `codex-cli 0.147.0`; minimal Codex model probe with writable `CODEX_HOME` is environment-blocked by OpenAI websocket/HTTPS transport errors; same result after escalation.
+- scheduler status is environment-blocked by WSL Task Scheduler socket error.
+- serve listener is environment-blocked by local socket `Operation not permitted`; same result after escalation.
+- backup validation: generated SQLite backup has `PRAGMA integrity_check` `ok`; JSON export validates and contains no secrets.
+
+Final audit:
+
+- pending fresh independent final release Auditor over `m2-qualified..HEAD`.
 
 Historical M7-G freeze record:
 

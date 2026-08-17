@@ -760,6 +760,77 @@ M7-I second closure audit:
 - Auditor independently verified closure of the editable/dev install IMPORTANT finding, including PEP 660 backend support, generated `dev` extra metadata, isolated wheel install, isolated editable install, and installed CLI smokes from `/tmp`.
 - Auditor judged the full twelve-case M7-I matrix credible, with live Codex/arXiv/scheduler/serve gaps honestly documented as environment-blocked and acceptable for M7-I if carried into final release-candidate materials.
 
+M7-I freeze:
+
+- post-audit full `pytest`: 145 passed.
+- post-audit `ruff check .`: PASS.
+- post-audit strict `mypy --strict src tests`: PASS.
+- post-audit `python -m compileall -q src tests`: PASS.
+- post-audit `git diff --check`: PASS.
+- qualified commit: `efc4c88a689d06dc0e4b4428605c05836ddb7374`.
+- qualified tag: `m7i-qualified`.
+- qualified tag object: `ec016b565fe84857b8053c51822290025b50c0db`.
+- post-freeze Git state: local `master` is 13 commits ahead of `origin/master`; online remote inspection remains blocked by DNS/network limits in this session.
+
+## Release-Candidate Gate
+
+Release-candidate materials prepared:
+
+- `docs/campaigns/release1/RELEASE_CANDIDATE_PACKET.md`.
+- `docs/campaigns/release1/FINAL_RELEASE_CANDIDATE_VERIFICATION.md`.
+
+Versioning state:
+
+- `pyproject.toml` package version: `0.1.0`.
+- `src/research_digest/__init__.py` runtime version: `0.1.0`.
+- no existing public-style `v*` tags found.
+- suggested human-reviewed public release tag: `v0.1.0`.
+
+Final deterministic verification:
+
+- full `pytest`: 145 passed.
+- `ruff check .`: PASS.
+- strict `mypy --strict src tests`: PASS.
+- `python -m compileall -q src tests`: PASS.
+- `git diff --check`: PASS.
+- targeted recovery/cache/migration/backup slice: 51 passed.
+
+Final package/install evidence:
+
+- `python -m pip wheel . --no-deps -w /tmp/research-digest-rc.Q4O1FA/wheelhouse`: PASS.
+- wheel content/metadata checks: PASS, no `__pycache__`/`.pyc`, `dev` extra present, console entry point present.
+- isolated wheel install with `--no-deps`: PASS.
+- isolated editable install `pip install -e '.[dev]' --no-deps`: PASS.
+- installed wheel CLI `--version`: PASS, `research-digest 0.1.0`.
+- installed editable CLI `--version`: PASS, `research-digest 0.1.0`.
+- installed wheel CLI `status --json`: PASS, schema version 4 and config version 1 initialized.
+- installed wheel CLI `doctor --json`: PASS with no failures before live failed-run smoke.
+
+Final live/runtime evidence:
+
+- disposable profile/source configured in isolated data/config under `/tmp/research-digest-rc.Q4O1FA`.
+- installed `research-digest run --json`: FAIL with sanitized arXiv DNS error; same after escalation.
+- status after live attempts: PASS, failed run recorded and DB valid.
+- `doctor --json --network --network-timeout 5`: FAIL only because last run failed; network warning records arXiv DNS failure; same after escalation.
+- `which codex`: PASS.
+- `codex --version`: PASS, `codex-cli 0.147.0`.
+- minimal Codex model probe with writable `CODEX_HOME`: FAIL after bounded retries due OpenAI websocket/HTTPS transport errors; same after escalation.
+- `research-digest schedule status --json`: FAIL with sanitized WSL Task Scheduler socket error.
+- `research-digest serve --port 18601`: FAIL with sanitized local socket `Operation not permitted`; same after escalation.
+- `research-digest backup --json --export-json`: PASS.
+- backup `PRAGMA integrity_check`: `ok`.
+- JSON export validates and contains no secrets/authentication material.
+
+Final hygiene evidence:
+
+- no tracked `.env`, SQLite DB, virtualenv, cache, `.codex`, or `.codegraph` paths.
+- secret-pattern scan found only fake redaction-test strings and known documentation references; no real credentials or runtime auth material.
+- no public release tag, push, GitHub release, package publication, or public release operation performed.
+
+Final release audit:
+
+- pending fresh independent final release Auditor over `m2-qualified..HEAD`.
+
 Data-safety note:
 
 - During re-audit, the auditor reported one accidental manual CLI smoke without `RESEARCH_DIGEST_DB`; it likely wrote one runtime run record to ignored repo-local `research_digest.sqlite3`.
