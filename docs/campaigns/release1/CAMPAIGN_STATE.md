@@ -1,11 +1,11 @@
 # Release 1 Campaign State
 
-- current_substage: M7-F ready to freeze
+- current_substage: M7-G audit PASS ready to freeze
 - status: ACTIVE
-- current_git_head: 262bdd84be0c634c0b254e325c54304c0e840eb7
-- current_tags_at_head: m7e-qualified
+- current_git_head: 478f4d8582a2e3c9ad7b114fcfb4301253b1a961
+- current_tags_at_head: m7f-qualified
 - current_branch: master
-- local_remote_tracking: `master` tracks `origin/master`; local branch is 9 commits ahead after M7-E freeze
+- local_remote_tracking: `master` tracks `origin/master`; local branch is 10 commits ahead after M7-F freeze
 - online_remote_verification: attempted `git ls-remote --heads --tags origin`; blocked by DNS resolution failure for `github.com` even after network escalation
 - baseline_m1_qualified_commit: 36bd1cbe60f95d588e8ccdd41bfce914e9b1d7da
 - baseline_m1_qualified_tag: m1-qualified
@@ -44,16 +44,90 @@
 - m7e_qualified_commit: 262bdd84be0c634c0b254e325c54304c0e840eb7
 - m7e_qualified_tag: m7e-qualified
 - m7e_qualified_tag_object: 5e46f46ec355391f7ee479d565855025cfa1db94
+- m7f_qualified_commit: 478f4d8582a2e3c9ad7b114fcfb4301253b1a961
+- m7f_qualified_tag: m7f-qualified
+- m7f_qualified_tag_object: 68746dba9d860cb53b3682ccc19d82b087411984
 - skipped_campaigns: M3 additional source types; M5 full-paper reading; M6 long-term research memory
 - active_campaign_scope: M4 automatic daily operation; M7 release engineering, upgradeability, and productization; first release candidate
-- qualification_status: M7F_AUDIT_PASS_READY_FREEZE
+- qualification_status: M7G_AUDIT_PASS_READY_FREEZE
 - audit_repair_round: 1
-- last_deterministic_verification: M7-F repair round 1 full gate: `pytest` 131 passed; `ruff check .` PASS; strict `mypy --strict src tests` PASS; `compileall -q src tests` PASS; `git diff --check` PASS.
-- last_live_verification: M7-F read-only temp-path `doctor --json` smoke passed without creating data/config directories or SQLite DB; mocked network doctor smoke passed with a finite timeout path.
+- last_deterministic_verification: M7-G post-audit qualification gate: full `pytest` 137 passed; `ruff check .` PASS; strict `mypy --strict src tests` PASS; `compileall -q src tests` PASS; `git diff --check` PASS.
+- last_live_verification: M7-G repair round 1 isolated CLI backup/export smoke passed against a temp DB path containing `?` and `#`; backup SQLite `PRAGMA integrity_check` returned `ok`; JSON export contained expected profile data.
 - migration_data_safety_status: M7-B candidate adds explicit schema version metadata, ordered migrations, backup before schema-changing upgrades of existing DBs, rollback on failed migration, and visible migration backup path. Repo-local `research_digest.sqlite3` remains ignored and was not used for upgrade testing.
 - deferred_minor_optional_findings: none
-- next_permitted_action: inspect Git hygiene, stage only qualified M7-F files, commit, and tag `m7f-qualified`
+- next_permitted_action: run post-audit full M7-G qualification gate, inspect Git hygiene, stage only qualified M7-G/release1 docs files, commit, and tag `m7g-qualified`
 - human_stop_reason: none
+
+## Restored Release Campaign Charter Authority
+
+This section records the restored human release-campaign authority so future recovery does not depend on chat transcript context.
+
+Campaign model:
+
+- This is a supervised autonomous release campaign for M4 automatic daily operation, M7 release engineering/productization/upgradeability, and the first release candidate.
+- M3 additional source adapters, M5 full-paper/deep reading, and M6 persistent research memory are explicitly out of scope for this release campaign.
+- For each remaining substage, use the persistent Worker for implementation/repair, launch a fresh independent read-only Auditor for qualification, use bounded Worker/Auditor repair loops, run deterministic qualification before freeze, run live/runtime smoke tests where appropriate, update durable campaign state/report at meaningful boundaries, and commit/tag only qualified substages.
+- The default audit-repair budget is the initial candidate plus up to two audit-driven repair rounds per substage. Ordinary pre-audit test/fix iterations do not count against that budget.
+- Do not weaken requirements or acceptance tests merely to obtain PASS.
+
+Local commit/tag authority:
+
+- The human authorizes local staging, local commits, and local annotated qualification tags for qualified M7-G, M7-H, M7-I, and release-candidate closeout bookkeeping.
+- This release-campaign authority overrides the generic AGENTS.md requirement for explicit permission before local campaign commits/tags.
+- Do not push release-campaign commits/tags, create the final public release/version tag, publish a GitHub release, publish a package, or perform the final public release without the final human release decision.
+
+Human-stop conditions:
+
+- Stop and request human authority only if requirements are materially ambiguous and different reasonable choices would change product behavior; a proposed repair requires changing the frozen release contract; a security or permission boundary must be weakened; a new paid/external service, credential, or external authorization is required; repository/data integrity or recovery state is unsafe or materially ambiguous; trustworthy Worker/Auditor evidence remains materially contradictory after inspection and testing; the bounded audit-repair budget for a substage is exhausted; or the final release-candidate gate is reached.
+- Do not stop merely because tests fail, Streamlit fails, SQLite migration/backup code fails, Codex produces malformed output, scheduling fails, packaging fails, or a fresh Auditor finds an ordinary BLOCKER/IMPORTANT implementation defect. Those belong in the normal repair loop.
+
+Remaining authorized substages:
+
+- M7-G: backup/export qualification and freeze.
+- M7-H: release UI and installation polish without adding M3/M5/M6 functionality.
+- M7-I: release qualification matrix, not feature development.
+- Release-candidate gate: prepare materials, run final verification and final Auditor, then stop at `RELEASE_CANDIDATE_COMPLETE_AWAITING_HUMAN`.
+
+M7-H authority:
+
+- Goal: turn the qualified application into a coherent first-release user experience without adding M3/M5/M6 functionality.
+- Desired release navigation is approximately Today, History, Interests, Sources, Settings.
+- Settings may expose existing release functionality such as analyzer/provider selection/status, preselection fraction, schedule status/configuration, active data location, application version, schema/config version, and health/doctor summary.
+- Streamlit must not duplicate CLI/business logic; it must use the same application/service/configuration boundaries already qualified elsewhere.
+- Required release states: first run, empty digest, loading/running, no provider/Codex unavailable, failed run, stale result, history, and sources.
+- Sources remain arXiv-first; do not add RSS, HTML, arbitrary APIs, or other M3 sources.
+- Update README and release-facing documentation for installed CLI usage: `research-digest serve`, `research-digest run`, `research-digest status`, `research-digest doctor`, and `research-digest backup`.
+- Documentation must cover installation, first run, ChatGPT/Codex CLI authentication, optional OpenAI API provider, data/config locations, manual digest, UI launch, daily schedule install/status/remove, backup, doctor, upgrade expectations, and known release limitations.
+- Require deterministic tests for changed UI/application helpers where useful, a real release-facing UI smoke test, and a fresh independent read-only M7-H Auditor.
+- After qualification, commit locally and create local annotated tag `m7h-qualified`.
+
+M7-I authority:
+
+- M7-I is the release qualification stage and must demonstrate that the first release is installable, upgradeable, recoverable, and operable in realistic conditions.
+- Build durable release qualification evidence/checklist covering fresh install; upgrade from qualified M2 state; repeated upgrade/startup; Codex unavailable; live authenticated Codex; network unavailable; scheduled headless run; overlapping manual/scheduled run; application code upgrade; migration failure; backup; and `serve` port conflict.
+- Minimum deterministic/packaging gate: full `pytest`, `ruff check .`, strict `mypy` over `src` and `tests`, `python -m compileall -q src tests`, `git diff --check`, Git hygiene/inventory checks, package build/install verification, isolated fresh-venv installation, and installed CLI smoke tests.
+- Use real clean environments where practical and document exact environment limitations when a test truly cannot be executed.
+- After the qualification matrix passes, launch a fresh independent read-only M7-I Auditor over qualification evidence, code/config/data separation, migration/backup safety, scheduler semantics, CLI behavior, release docs, package metadata, secret/privacy hygiene, upgradeability boundaries, and deferred findings.
+- After qualification, commit locally and create local annotated tag `m7i-qualified`.
+
+Release-candidate gate authority:
+
+- Do not begin M3, M5, or M6 and do not perform a public/final release automatically.
+- Determine existing package versioning state. If the final release version is not unambiguously established by project history/configuration, recommend a version in the human review packet rather than silently inventing product version policy.
+- Prepare release notes, installation instructions, first-run instructions, upgrade instructions from existing development/M2 installations, scheduler instructions, backup/recovery instructions, Codex subscription authentication instructions, optional OpenAI API instructions, known limitations, deferred MINOR/OPTIONAL findings, and post-release roadmap.
+- Known intentional release limitations must include arXiv-only source pool, abstract-level analysis rather than full-paper reading, and no M6-style long-term semantic research memory.
+- Post-release roadmap: M3 additional websites/source adapters; M5 full-paper/deep reading; M6 persistent research memory.
+- Final verification must include full pytest, ruff, strict mypy, compileall, git diff/check/status, secret/runtime-file hygiene, package build/install smoke, installed CLI smoke, data/config/schema version checks, final small live Codex-backed digest, repeated-run/cache behavior, backup validation, doctor, and scheduler/status evidence where available.
+- Launch a fresh independent final release Auditor over the complete release delta from `m2-qualified` to the proposed release-candidate commit.
+- Resolve BLOCKER/IMPORTANT findings through the campaign repair loop.
+- After final Auditor PASS or justified PASS WITH MINOR FINDINGS, ensure a clean worktree, qualified M7-G/M7-H/M7-I commits/tags recorded, release-candidate commit identified, no personal SQLite DB/config/env/auth/cache/agent state tracked, complete release report committed locally, and no final public release/tag/push performed automatically.
+- Set this file status to `RELEASE_CANDIDATE_COMPLETE_AWAITING_HUMAN` with exact RC commit, suggested release version/tag, qualification summary, final audit result, fresh-install evidence, M2-upgrade evidence, live Codex evidence, scheduler evidence, migration/backup evidence, known limitations, deferred findings, and exact proposed release/push commands. Then stop.
+
+Scope boundary:
+
+- This campaign must not implement RSS, Atom/general feeds beyond existing arXiv behavior, arbitrary HTML website extraction, additional source pools, full-paper/PDF deep reading, embeddings/vector memory, long-term semantic trend analysis, or research-question memory.
+- Do not introduce Redis, Celery, distributed services, Kubernetes, authentication/multi-user systems, cloud requirements, vector databases, or generic agent frameworks.
+- The first release must remain a small, understandable, local-first, upgradeable arXiv research-digest application.
 
 ## M4-A Frozen Specification
 
@@ -720,3 +794,118 @@ Verification:
 - `git diff --check`: PASS.
 - isolated doctor CLI smoke: PASS for temp-path `doctor --json`.
 - mocked network doctor smoke: PASS with finite timeout.
+
+Audit and repair:
+
+- fresh independent read-only M7-F Auditor returned FAIL with three IMPORTANT findings: real CLI doctor initialized/migrated state; scheduler status messages were not sanitized; invalid network timeouts such as `inf` were forwarded to the network checker.
+- repair round 1 made production doctor inspect config/data/SQLite state read-only, sanitize scheduler status messages, and reject non-finite/non-positive/excessive network timeouts before network execution.
+- repair round 1 verification: focused `pytest tests/test_doctor.py tests/test_cli.py` passed, 18 tests; full `pytest` passed, 131 tests; `ruff check .` PASS; strict `mypy --strict src tests` PASS; `compileall -q src tests` PASS; `git diff --check` PASS.
+- read-only smoke: temp-path `doctor --json` did not create data/config directories or SQLite DB.
+- fresh independent M7-F repair round 1 re-auditor returned PASS with no BLOCKER/IMPORTANT findings.
+- freeze: committed `478f4d8582a2e3c9ad7b114fcfb4301253b1a961` (`Qualify M7-F doctor diagnostics`) and created local annotated tag `m7f-qualified` with tag object `68746dba9d860cb53b3682ccc19d82b087411984`.
+
+## M7-G Frozen Specification
+
+Goal: provide a reliable user-facing backup operation and a simple portable export of user-owned semantic data.
+
+CLI surface:
+
+- Implement `research-digest backup`.
+- Default behavior creates a recoverable snapshot of persistent user data using SQLite's backup API.
+- Provide `--json` machine-readable output.
+- Provide `--export-json` for a portable semantic export when practical.
+- If an export path/directory option is needed, keep it explicit and deterministic.
+
+Backup behavior:
+
+- Backup the active configured SQLite database without requiring Streamlit.
+- Use a safe SQLite backup strategy rather than raw copy for active DBs.
+- Never include `.env`, Codex auth material, API keys, virtualenvs, caches, or local runtime agent state.
+- The generated backup path must be printed.
+- Missing/uninitialized DB must fail clearly without creating a replacement DB.
+- Backup output should be suitable for recovery with documented manual file replacement.
+
+Export behavior:
+
+- Export local user-owned semantic data only:
+  profiles, source settings, feedback, digest run summaries, and saved syntheses/snapshots where available.
+- Do not export secrets/auth material or private raw local database internals beyond the release data model.
+- JSON is required for this release; Markdown remains optional unless trivial.
+
+Tests required before M7-G freeze:
+
+- backup creates a valid SQLite snapshot from an isolated temp DB.
+- backup refuses missing or invalid DBs without creating state.
+- backup path output is deterministic enough to assert and contains no secrets.
+- JSON export contains profiles/source settings/feedback/run summaries/synthesis snapshots where present.
+- JSON export excludes API keys, environment values, `.env`, and local runtime paths.
+- CLI `backup --json` returns useful success/failure status and exit codes.
+- full deterministic suite remains green.
+
+Live verification required before M7-G freeze:
+
+- isolated backup CLI smoke against a temp DB; open the backup and run `PRAGMA integrity_check`.
+- isolated JSON export CLI smoke against a temp DB; validate JSON shape and secret exclusion.
+
+Candidate implementation:
+
+- Added `research_digest.backup` with typed backup result and sanitized `BackupError`.
+- Implemented `research-digest backup` with `--json`, `--output`, and `--export-json`.
+- Backup uses SQLite's backup API from a read-only source connection and validates the backup with `PRAGMA integrity_check`.
+- Backup refuses missing, non-file, invalid, or unsupported-schema databases before creating output directories.
+- Default backup destination is the active DB data directory's `backups/` folder; explicit file or directory output is supported without overwriting existing explicit files.
+- JSON export writes a sidecar `.export.json` file containing export version, schema version, profiles, source settings, feedback, app run summaries, and run snapshots.
+- Export sanitizes persisted run error messages and does not read or emit environment secrets, `.env`, Codex auth material, virtualenvs, caches, or local runtime agent state.
+- Removed the M7-E/M7-F deferred backup behavior.
+
+Verification:
+
+- focused `pytest tests/test_backup.py tests/test_cli.py`: 12 passed.
+- focused `ruff check src/research_digest/backup.py src/research_digest/cli.py tests/test_backup.py tests/test_cli.py`: PASS.
+- focused strict `mypy --strict src/research_digest/backup.py src/research_digest/cli.py tests/test_backup.py tests/test_cli.py`: PASS.
+- full `pytest`: 135 passed.
+- `ruff check .`: PASS.
+- strict `mypy --strict src tests`: PASS.
+- `python -m compileall -q src tests`: PASS.
+- `git diff --check`: PASS.
+- isolated CLI smoke: real `python -m research_digest.cli backup --json --output <tmp>/backups --export-json` against a temp DB returned exit 0; generated backup opened with SQLite `integrity_check=ok`; JSON export contained one profile and one run.
+
+Interruption recovery:
+
+- recovery performed after authentication renewal found local HEAD at `478f4d8582a2e3c9ad7b114fcfb4301253b1a961` with tag `m7f-qualified`; no `m7g-qualified` tag or M7-G commit exists.
+- M7-G candidate changes are present only as unstaged/uncommitted worktree files: `src/research_digest/backup.py`, `src/research_digest/cli.py`, `tests/test_backup.py`, `tests/test_cli.py`, `tests/test_doctor.py`, and campaign docs.
+- no staged diff exists.
+- durable campaign docs recorded that a fresh M7-G Auditor had been requested, but did not record the interrupted Auditor's IMPORTANT finding.
+- reconstructed outstanding IMPORTANT finding: backup opens read-only SQLite databases with an unsafe raw `file:{path}?mode=ro` URI, so paths containing SQLite URI-reserved characters such as `?` or `#` may be misinterpreted.
+- Worker self-review also reconstructed one required backup hardening repair: when `--export-json` is requested and the derived JSON sidecar already exists, backup must fail before writing the SQLite backup instead of leaving a new backup after export failure.
+
+Repair round 1:
+
+- `_read_only_connection` now builds the SQLite read-only URI from `Path.as_uri()` so path characters are escaped before appending `mode=ro`.
+- `run_backup` now resolves and checks the derived JSON export sidecar before writing the SQLite backup when `--export-json` is requested.
+- regression tests cover DB filenames containing SQLite URI-reserved characters and pre-existing export sidecars.
+
+Repair round 1 verification:
+
+- focused `pytest tests/test_backup.py tests/test_cli.py`: 14 passed.
+- focused `ruff check src/research_digest/backup.py tests/test_backup.py`: PASS.
+- focused strict `mypy --strict src/research_digest/backup.py tests/test_backup.py`: PASS.
+- full `pytest`: 137 passed.
+- `ruff check .`: PASS.
+- strict `mypy --strict src tests`: PASS.
+- `python -m compileall -q src tests`: PASS.
+- `git diff --check`: PASS.
+- isolated CLI smoke against temp DB path `db?with#reserved.sqlite3`: exit 0; backup SQLite `PRAGMA integrity_check=ok`; JSON export contained one profile.
+
+Fresh closure audit:
+
+- fresh independent read-only M7-G repair round 1 closure Auditor returned PASS with no BLOCKER/IMPORTANT/MINOR findings.
+- Auditor verification: `pytest tests/test_backup.py tests/test_cli.py tests/test_doctor.py` 24 passed; full `pytest` 137 passed; `ruff check .` PASS; strict `mypy --strict src tests` PASS; `compileall -q src tests` PASS; `git diff --check` PASS; isolated CLI smoke with `db?with#reserved.sqlite3` PASS; existing sidecar failed before backup creation.
+
+Post-audit qualification:
+
+- full `pytest`: 137 passed.
+- `ruff check .`: PASS.
+- strict `mypy --strict src tests`: PASS.
+- `python -m compileall -q src tests`: PASS.
+- `git diff --check`: PASS.

@@ -14,6 +14,7 @@ from typing import Any, TextIO, cast
 from research_digest import __version__
 from research_digest.analysis.base import LLMAnalyzer
 from research_digest.analysis.providers import build_configured_analyzer
+from research_digest.backup import run_backup
 from research_digest.config import AppConfig, load_config
 from research_digest.db import Database
 from research_digest.doctor import DoctorReport, run_doctor, run_doctor_from_environment
@@ -109,12 +110,7 @@ def run_cli(
             scheduler_backend=scheduler_backend,
         )
     if args.command == "backup":
-        return _deferred_command(
-            stdout=stdout,
-            json_output=args.json,
-            command="backup",
-            milestone="M7-G",
-        )
+        return _backup_command(args=args, stdout=stdout, stderr=stderr)
 
     _build_parser().print_help(stderr)
     return 2
@@ -191,14 +187,21 @@ def _build_parser() -> argparse.ArgumentParser:
         default=5.0,
         help="Network check timeout in seconds. Defaults to 5.",
     )
-    backup_parser = subparsers.add_parser(
-        "backup",
-        help="Reserved command; release behavior is implemented in M7-G.",
-    )
+    backup_parser = subparsers.add_parser("backup", help="Back up local user data.")
     backup_parser.add_argument(
         "--json",
         action="store_true",
         help="Print a machine-readable JSON result.",
+    )
+    backup_parser.add_argument(
+        "--output",
+        type=Path,
+        help="Backup file or directory. Defaults to the active data directory's backups folder.",
+    )
+    backup_parser.add_argument(
+        "--export-json",
+        action="store_true",
+        help="Write a portable JSON export next to the SQLite backup.",
     )
     return parser
 
@@ -408,6 +411,31 @@ def _write_doctor_human(stdout: TextIO, report: DoctorReport) -> None:
     stdout.write(f"Failures: {report.failure_count}; warnings: {report.warning_count}\n")
     for check in report.checks:
         stdout.write(f"{check.severity}: {check.name}: {check.message}\n")
+
+
+def _backup_command(*, args: argparse.Namespace, stdout: TextIO, stderr: TextIO) -> int:
+    try:
+        result = run_backup(
+            output_path=cast(Path | None, args.output),
+            export_json=bool(args.export_json),
+        )
+    except Exception as exc:
+        message = sanitize_error(exc)
+        if args.json:
+            json.dump({"status": "failed", "error_message": message}, stdout)
+            stdout.write("\n")
+        else:
+            stderr.write(f"Research Digest backup failed: {message}\n")
+        return 1
+
+    if args.json:
+        json.dump(result.to_mapping(), stdout)
+        stdout.write("\n")
+    else:
+        stdout.write(f"Research Digest backup: {result.backup_path}\n")
+        if result.export_path is not None:
+            stdout.write(f"Research Digest export: {result.export_path}\n")
+    return 0
 
 
 def _doctor_network_timeout(value: str) -> float:

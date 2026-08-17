@@ -307,16 +307,6 @@ class DoctorTests(unittest.TestCase):
         self.assertEqual(exit_code, 2)
         self.assertEqual(stdout.getvalue(), "")
 
-    def test_backup_slot_remains_deferred_for_m7g(self) -> None:
-        stdout = io.StringIO()
-        stderr = io.StringIO()
-
-        exit_code = run_cli(argv=["backup", "--json"], stdout=stdout, stderr=stderr)
-
-        self.assertEqual(exit_code, 1)
-        self.assertEqual(stderr.getvalue(), "")
-        self.assertEqual(json.loads(stdout.getvalue())["status"], "deferred")
-
 
 def _check(payload: dict[str, object], name: str) -> dict[str, object]:
     checks = payload["checks"]

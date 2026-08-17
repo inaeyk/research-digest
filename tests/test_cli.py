@@ -233,21 +233,24 @@ class CLITests(unittest.TestCase):
         self.assertNotIn("OPENAI_API_KEY", output)
         self.assertNotIn("sk-", output)
 
-    def test_backup_slot_is_stable_but_deferred(self) -> None:
+    def test_backup_json_creates_snapshot(self) -> None:
         stdout = io.StringIO()
         stderr = io.StringIO()
+        output_dir = Path(self.tmpdir.name) / "cli-backups"
 
-        exit_code = run_cli(
-            argv=["backup", "--json"],
-            stdout=stdout,
-            stderr=stderr,
-        )
+        with mock.patch.dict("os.environ", {"RESEARCH_DIGEST_DB": str(self.db_path)}):
+            exit_code = run_cli(
+                argv=["backup", "--json", "--output", str(output_dir)],
+                stdout=stdout,
+                stderr=stderr,
+            )
 
-        self.assertEqual(exit_code, 1)
+        self.assertEqual(exit_code, 0)
         self.assertEqual(stderr.getvalue(), "")
         payload = json.loads(stdout.getvalue())
-        self.assertEqual(payload["status"], "deferred")
-        self.assertEqual(payload["command"], "backup")
+        self.assertEqual(payload["status"], "completed")
+        self.assertEqual(payload["data_path"], str(self.db_path))
+        self.assertTrue(Path(str(payload["backup_path"])).exists())
 
 if __name__ == "__main__":
     unittest.main()

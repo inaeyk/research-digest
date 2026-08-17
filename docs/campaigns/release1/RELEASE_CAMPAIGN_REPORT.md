@@ -35,6 +35,45 @@ Architectural invariant:
 
 - Future M3/M5/M6 capabilities must be additive upgrades, not rewrites of the current source adapter, analyzer, pipeline, CLI, data, or configuration architecture.
 
+## Restored Release Campaign Charter
+
+The human restored the missing release-campaign authority after recovery found that durable docs only defined M4-A through M4-D and M7-A through M7-G. The restored authority is now recorded durably in `CAMPAIGN_STATE.md` and governs the remaining campaign.
+
+Operational model:
+
+- supervised autonomous Worker/Auditor campaign;
+- persistent Worker implementation/repair;
+- fresh independent read-only Auditor for each remaining substage;
+- bounded audit-repair loop: initial candidate plus up to two audit-driven repair rounds per substage;
+- deterministic gates and live/runtime smoke tests where appropriate;
+- durable state/report updates at meaningful boundaries;
+- local commits and local annotated tags only after qualification.
+
+Commit/tag authority:
+
+- The human explicitly authorizes local staging, local commits, and local annotated qualification tags for qualified M7-G, M7-H, M7-I, and release-candidate closeout bookkeeping.
+- The campaign must not push, create a final public release/version tag, publish a GitHub release, publish a package, or perform a final public release without the final human release decision.
+
+Remaining substages:
+
+- M7-G: backup/export qualification and `m7g-qualified`.
+- M7-H: release UI and installation polish without M3/M5/M6 functionality, then `m7h-qualified`.
+- M7-I: release qualification matrix and packaging/install/upgrade/operate evidence, then `m7i-qualified`.
+- Final release-candidate gate: release materials, final complete verification, final Auditor over the delta from `m2-qualified`, local closeout bookkeeping, then `RELEASE_CANDIDATE_COMPLETE_AWAITING_HUMAN`.
+
+Human stop:
+
+- Stop only for material ambiguity, frozen-contract changes, weakened security/permission boundaries, new paid/external service or credential needs, unsafe/ambiguous repository or data recovery state, materially contradictory Worker/Auditor evidence after inspection and testing, exhausted audit-repair budget, or the final release-candidate gate.
+- Do not stop for ordinary test failures, Streamlit failures, SQLite migration/backup failures, malformed Codex output, scheduling failures, packaging failures, or ordinary Auditor BLOCKER/IMPORTANT implementation findings; those remain inside the repair loop.
+
+Scope boundary:
+
+- M3 RSS/Atom/general feeds, arbitrary HTML extraction, and additional source pools are out of scope.
+- M5 full-paper/PDF deep reading is out of scope.
+- M6 embeddings/vector memory, long-term semantic trend analysis, and research-question memory are out of scope.
+- Redis, Celery, distributed services, Kubernetes, authentication/multi-user systems, cloud requirements, vector databases, and generic agent frameworks are out of scope.
+- The release remains a small, local-first, upgradeable arXiv research-digest application.
+
 ## M4-A Specification Freeze
 
 M4-A is frozen as headless application execution through a stable core service boundary and CLI command conceptually equivalent to `research-digest run`.
@@ -481,6 +520,62 @@ Audit:
 - repair round 1 addresses all three findings and adds regressions for read-only CLI doctor behavior, scheduler status redaction, direct invalid-timeout rejection, and CLI invalid-timeout usage errors.
 - fresh independent M7-F repair round 1 re-auditor returned PASS with no BLOCKER/IMPORTANT findings.
 - re-auditor verified focused and full deterministic tests, read-only temp CLI behavior, scheduler leak sanitization, and invalid timeout rejection before doctor execution.
+
+M7-F freeze:
+
+- qualified commit: `478f4d8582a2e3c9ad7b114fcfb4301253b1a961`.
+- qualified tag: `m7f-qualified`.
+- qualified tag object: `68746dba9d860cb53b3682ccc19d82b087411984`.
+- post-freeze Git state: local `master` is 10 commits ahead of `origin/master`; online remote inspection remains blocked by DNS/network limits in this session.
+
+## M7-G Specification Freeze
+
+M7-G is frozen as a user-facing backup/export feature through `research-digest backup`.
+
+The implementation must create recoverable SQLite backups using SQLite's backup API, expose the generated backup path, optionally emit JSON, provide a portable JSON export of user-owned semantic data, exclude secrets/auth/local runtime material, and fail clearly for missing or invalid uninitialized databases without creating replacement state.
+
+## M7-G Candidate
+
+Implementation summary:
+
+- Added `research_digest.backup` with a focused backup/export service.
+- Implemented `research-digest backup` with `--json`, `--output`, and `--export-json`.
+- SQLite backup uses a read-only source connection plus SQLite's backup API, writes through a temporary file, and validates the generated snapshot with `PRAGMA integrity_check`.
+- Missing, invalid, non-file, or unsupported-schema databases fail clearly before output directories are created.
+- JSON export sidecar includes profiles, source settings, feedback, app run summaries, and run snapshots, with sanitized persisted run errors and no environment/auth/local runtime material.
+
+Deterministic verification:
+
+- focused `pytest tests/test_backup.py tests/test_cli.py`: 12 passed.
+- focused `ruff check src/research_digest/backup.py src/research_digest/cli.py tests/test_backup.py tests/test_cli.py`: PASS.
+- focused strict `mypy --strict src/research_digest/backup.py src/research_digest/cli.py tests/test_backup.py tests/test_cli.py`: PASS.
+- full `pytest`: 135 passed.
+- `ruff check .`: PASS.
+- strict `mypy --strict src tests`: PASS.
+- `compileall -q src tests`: PASS.
+- `git diff --check`: PASS.
+
+Live/backup verification:
+
+- isolated real CLI smoke against a temp DB passed for `backup --json --output <tmp>/backups --export-json`.
+- generated backup opened with SQLite `PRAGMA integrity_check = ok`.
+- generated JSON export contained the expected profile and run data.
+
+Audit:
+
+- fresh independent M7-G Auditor requested.
+- recovery after authentication renewal found the interrupted Auditor finding was not durably recorded in campaign docs.
+- recovered status: HEAD remains `m7f-qualified`, M7-G candidate files are unstaged/uncommitted, no M7-G commit or tag exists, and no staged diff exists.
+- reconstructed IMPORTANT finding: backup read-only SQLite URI handling is unsafe for DB paths containing SQLite URI-reserved characters such as `?` or `#`.
+- Worker repair round 1 also includes a bounded backup hardening concern discovered before interruption: if `--export-json` derives a sidecar path that already exists, backup must fail before writing a new SQLite backup.
+- repair round 1 uses escaped SQLite file URIs via `Path.as_uri()` and preflights the derived JSON export sidecar before any SQLite backup is written.
+- repair round 1 regression coverage covers URI-reserved DB filenames and already-existing export sidecars.
+- repair round 1 verification: focused `pytest tests/test_backup.py tests/test_cli.py` passed, 14 tests; focused `ruff` PASS; focused strict `mypy` PASS; full `pytest` passed, 137 tests; `ruff check .` PASS; strict `mypy --strict src tests` PASS; `compileall -q src tests` PASS; `git diff --check` PASS.
+- repair round 1 live smoke passed against a temp DB path containing `?` and `#`; CLI backup/export exited 0, generated backup passed SQLite `PRAGMA integrity_check=ok`, and JSON export contained expected profile data.
+- restored-charter pre-audit verification repeated the focused and full deterministic M7-G gates: focused backup/CLI tests 14 passed; full `pytest` 137 passed; `ruff check .` PASS; strict `mypy --strict src tests` PASS; `compileall -q src tests` PASS; `git diff --check` PASS.
+- fresh independent M7-G repair round 1 closure Auditor returned PASS with no BLOCKER/IMPORTANT/MINOR findings.
+- closure Auditor verified SQLite backup API/integrity validation, safe `Path.as_uri()` read-only SQLite URI handling, output collision/all-or-nothing preflight, missing/invalid DB behavior before output mutation, secret/privacy exclusion, CLI integration, Git hygiene, full deterministic gates, URI-reserved path smoke, and sidecar-collision preflight smoke.
+- post-audit M7-G qualification gate passed: full `pytest` 137 passed; `ruff check .` PASS; strict `mypy --strict src tests` PASS; `compileall -q src tests` PASS; `git diff --check` PASS.
 
 Data-safety note:
 
