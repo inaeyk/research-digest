@@ -552,6 +552,8 @@ def _semantic_counts(path: Path) -> dict[str, int]:
         "library_collection_memberships",
         "library_search_documents",
         "library_article_connections",
+        "library_context_suggestions",
+        "collection_intelligence_snapshots",
     )
     with sqlite3.connect(path) as conn:
         return {

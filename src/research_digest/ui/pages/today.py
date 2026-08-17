@@ -12,6 +12,11 @@ from research_digest.config import ConfigError, load_config
 from research_digest.coverage import build_date_coverage_statuses
 from research_digest.db import SOURCE_ARXIV, Database
 from research_digest.errors import sanitize_error
+from research_digest.library_context import (
+    dismiss_context_suggestion,
+    generate_library_context_for_item,
+    list_display_context_suggestions,
+)
 from research_digest.models import (
     AnalysisOrigin,
     Article,
@@ -39,9 +44,10 @@ from research_digest.sources.arxiv import ArxivSource
 from research_digest.sources.base import LatestAvailableDateResolver, SourceError
 from research_digest.synthesis import CrossPaperSynthesis, build_cross_paper_synthesis
 from research_digest.ui.abstracts import render_abstract_control
-from research_digest.ui.common import get_analyzer, get_database
+from research_digest.ui.common import get_analyzer, get_database, get_library_context_generator
 from research_digest.ui.date_status import month_bounds, render_date_status_grid
 from research_digest.ui.library_controls import render_library_control
+from research_digest.ui.tag_controls import context_action_key
 
 DigestInputSignature: TypeAlias = tuple[str, str]
 DigestView: TypeAlias = Literal["relevant", "all_analyzed", "below_threshold"]
@@ -709,6 +715,7 @@ def _render_item(
             article=article,
             context=f"{context}:library:{article.source}:{article.source_article_id}",
         )
+        _render_library_context(item, db, result_run_id_from_context(context))
         _render_feedback_control(
             item,
             db,
@@ -716,6 +723,108 @@ def _render_item(
             profile_fingerprint_value,
             current_feedback,
         )
+
+
+def result_run_id_from_context(context: str) -> int | None:
+    parts = context.split(":")
+    if len(parts) < 2 or parts[0] != "today":
+        return None
+    try:
+        return int(parts[1])
+    except ValueError:
+        return None
+
+
+def _render_library_context(item: DigestItem, db: Database, run_id: int | None) -> None:
+    import streamlit as st
+
+    article_id = item.article.id
+    if article_id is None:
+        return
+    suggestions = list_display_context_suggestions(db, article_id=article_id)
+    if suggestions:
+        st.markdown("**Connections to your Library**")
+        for display in suggestions:
+            suggestion = display.suggestion
+            collection_label = (
+                f" | Collection: {display.collection.name}"
+                if display.collection is not None
+                else ""
+            )
+            confidence = (
+                f" | confidence {suggestion.confidence:.2f}"
+                if suggestion.confidence is not None
+                else ""
+            )
+            with st.container(border=True):
+                st.caption(
+                    f"Suggested relationship{collection_label}{confidence}"
+                )
+                st.markdown(f"**{display.related_article.title}**")
+                st.caption(suggestion.relation_label)
+                st.write(suggestion.rationale)
+                if suggestion.id is not None and st.button(
+                    "Dismiss Library context",
+                    key=context_action_key(
+                        action="dismiss",
+                        article_id=article_id,
+                        suggestion_id=suggestion.id,
+                    ),
+                    icon=":material/close:",
+                ):
+                    dismiss_context_suggestion(db, suggestion_id=suggestion.id)
+                    st.rerun()
+    _render_library_context_generation(item, db, run_id)
+
+
+def _render_library_context_generation(
+    item: DigestItem,
+    db: Database,
+    run_id: int | None,
+) -> None:
+    import streamlit as st
+
+    article_id = item.article.id
+    if article_id is None:
+        return
+    generator, message = get_library_context_generator()
+    if st.button(
+        "Find Library context",
+        key=context_action_key(action="generate", article_id=article_id),
+        icon=":material/psychology:",
+        disabled=generator is None,
+    ):
+        if generator is None:
+            st.warning(
+                message or "Library context generation is unavailable.",
+                icon=":material/warning:",
+            )
+            return
+        with st.spinner("Finding Library context..."):
+            try:
+                suggestions = generate_library_context_for_item(
+                    db,
+                    run_id=run_id,
+                    article=item.article,
+                    analysis=item.analysis,
+                    generator=generator,
+                )
+            except Exception as exc:
+                st.error(
+                    f"Library context generation failed: {sanitize_error(exc)}",
+                    icon=":material/error:",
+                )
+                return
+        if suggestions:
+            st.success(
+                f"Added {len(suggestions)} Library context suggestion(s).",
+                icon=":material/check_circle:",
+            )
+        else:
+            st.info("No grounded Library context was found.")
+        st.rerun()
+    if generator is None and message:
+        st.caption(f"Library context generation unavailable: {sanitize_error(message)}")
 
 
 def _render_preselected_out_articles(result: DigestResult, db: Database) -> None:

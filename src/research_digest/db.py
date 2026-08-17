@@ -18,6 +18,7 @@ from research_digest.models import (
     Article,
     ArticleFeedback,
     ArxivSourceConfig,
+    CollectionIntelligenceSnapshot,
     ConnectionOrigin,
     DateSelection,
     FeedbackLabel,
@@ -25,6 +26,8 @@ from research_digest.models import (
     LibraryCollection,
     LibraryCollectionMembership,
     LibraryConnection,
+    LibraryContextOrigin,
+    LibraryContextSuggestion,
     LibraryEntry,
     LibraryNote,
     LibraryRelevanceContext,
@@ -42,7 +45,7 @@ from research_digest.models import (
 SOURCE_ARXIV = "arxiv"
 SCHEMA_VERSION_KEY = "schema_version"
 LAST_MIGRATION_BACKUP_KEY = "last_migration_backup_path"
-CURRENT_SCHEMA_VERSION = 12
+CURRENT_SCHEMA_VERSION = 13
 APP_RUN_STARTING = "STARTING"
 APP_RUN_RUNNING = "RUNNING"
 APP_RUN_COMPLETED = "COMPLETED"
@@ -1011,6 +1014,218 @@ class Database:
             ).fetchall()
         return [_library_connection_from_row(row) for row in rows]
 
+    def upsert_library_context_suggestion(
+        self,
+        *,
+        run_id: int | None,
+        article_id: int,
+        related_article_id: int,
+        collection_id: int | None,
+        relation_label: str,
+        rationale: str,
+        provenance: dict[str, object],
+        confidence: float | None = None,
+        origin: LibraryContextOrigin = LibraryContextOrigin.AI,
+        revive: bool = False,
+    ) -> LibraryContextSuggestion:
+        if run_id is not None and run_id <= 0:
+            raise ValueError("run id must be positive")
+        if article_id <= 0 or related_article_id <= 0:
+            raise ValueError("article ids must be positive")
+        if article_id == related_article_id:
+            raise ValueError("context suggestion cannot link an article to itself")
+        if collection_id is not None and collection_id <= 0:
+            raise ValueError("collection id must be positive")
+        label = relation_label.strip()
+        reason = rationale.strip()
+        if not label:
+            raise ValueError("context relation label is required")
+        if not reason:
+            raise ValueError("context rationale is required")
+        if confidence is not None and not 0 <= confidence <= 1:
+            raise ValueError("context confidence must be between 0 and 1")
+        created_at = datetime_to_db(utc_now())
+        provenance_json = json.dumps(provenance, sort_keys=True)
+        with self._connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO library_context_suggestions (
+                    run_id, article_id, related_article_id, collection_id, relation_label,
+                    rationale, origin, provenance_json, confidence, created_at, dismissed_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                ON CONFLICT(article_id, related_article_id, collection_key) DO UPDATE SET
+                    run_id = excluded.run_id,
+                    relation_label = excluded.relation_label,
+                    rationale = excluded.rationale,
+                    origin = excluded.origin,
+                    provenance_json = excluded.provenance_json,
+                    confidence = excluded.confidence,
+                    created_at = excluded.created_at,
+                    dismissed_at = CASE
+                        WHEN ? THEN NULL
+                        ELSE library_context_suggestions.dismissed_at
+                    END
+                """,
+                (
+                    run_id,
+                    article_id,
+                    related_article_id,
+                    collection_id,
+                    label,
+                    reason,
+                    LibraryContextOrigin(origin).value,
+                    provenance_json,
+                    confidence,
+                    created_at,
+                    int(revive),
+                ),
+            )
+            suggestion = _get_library_context_suggestion(
+                conn,
+                article_id=article_id,
+                related_article_id=related_article_id,
+                collection_id=collection_id,
+            )
+        if suggestion is None:
+            raise RuntimeError("failed to load library context suggestion")
+        return suggestion
+
+    def dismiss_library_context_suggestion(self, suggestion_id: int) -> None:
+        if suggestion_id <= 0:
+            raise ValueError("suggestion id must be positive")
+        with self._connection() as conn:
+            conn.execute(
+                """
+                UPDATE library_context_suggestions
+                SET dismissed_at = ?
+                WHERE id = ?
+                """,
+                (datetime_to_db(utc_now()), suggestion_id),
+            )
+
+    def list_library_context_suggestions_for_article(
+        self,
+        article_id: int,
+        *,
+        include_dismissed: bool = False,
+    ) -> list[LibraryContextSuggestion]:
+        if article_id <= 0:
+            raise ValueError("article id must be positive")
+        where = "article_id = ?"
+        if not include_dismissed:
+            where += " AND dismissed_at IS NULL"
+        with self._connection() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT *
+                FROM library_context_suggestions
+                WHERE {where}
+                ORDER BY created_at DESC, id DESC
+                """,
+                (article_id,),
+            ).fetchall()
+        return [_library_context_suggestion_from_row(row) for row in rows]
+
+    def list_library_context_suggestions(
+        self,
+        *,
+        include_dismissed: bool = True,
+    ) -> list[LibraryContextSuggestion]:
+        where = "" if include_dismissed else "WHERE dismissed_at IS NULL"
+        with self._connection() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT *
+                FROM library_context_suggestions
+                {where}
+                ORDER BY article_id ASC, related_article_id ASC, id ASC
+                """
+            ).fetchall()
+        return [_library_context_suggestion_from_row(row) for row in rows]
+
+    def save_collection_intelligence_snapshot(
+        self,
+        *,
+        collection_id: int,
+        title: str,
+        summary: str,
+        evidence: dict[str, object],
+        provenance: dict[str, object],
+        origin: LibraryContextOrigin = LibraryContextOrigin.DETERMINISTIC,
+    ) -> CollectionIntelligenceSnapshot:
+        if collection_id <= 0:
+            raise ValueError("collection id must be positive")
+        if not title.strip():
+            raise ValueError("collection intelligence title is required")
+        if not summary.strip():
+            raise ValueError("collection intelligence summary is required")
+        generated_at = datetime_to_db(utc_now())
+        with self._connection() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO collection_intelligence_snapshots (
+                    collection_id, title, summary, evidence_json, origin, provenance_json,
+                    generated_at, dismissed_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+                """,
+                (
+                    collection_id,
+                    title.strip(),
+                    summary.strip(),
+                    json.dumps(evidence, sort_keys=True),
+                    LibraryContextOrigin(origin).value,
+                    json.dumps(provenance, sort_keys=True),
+                    generated_at,
+                ),
+            )
+            snapshot = _get_collection_intelligence_snapshot(conn, _lastrowid(cursor))
+        if snapshot is None:
+            raise RuntimeError("failed to load collection intelligence snapshot")
+        return snapshot
+
+    def dismiss_collection_intelligence_snapshot(self, snapshot_id: int) -> None:
+        if snapshot_id <= 0:
+            raise ValueError("snapshot id must be positive")
+        with self._connection() as conn:
+            conn.execute(
+                """
+                UPDATE collection_intelligence_snapshots
+                SET dismissed_at = ?
+                WHERE id = ?
+                """,
+                (datetime_to_db(utc_now()), snapshot_id),
+            )
+
+    def list_collection_intelligence_snapshots(
+        self,
+        collection_id: int | None = None,
+        *,
+        include_dismissed: bool = False,
+    ) -> list[CollectionIntelligenceSnapshot]:
+        params: list[object] = []
+        clauses: list[str] = []
+        if collection_id is not None:
+            if collection_id <= 0:
+                raise ValueError("collection id must be positive")
+            clauses.append("collection_id = ?")
+            params.append(collection_id)
+        if not include_dismissed:
+            clauses.append("dismissed_at IS NULL")
+        where = "WHERE " + " AND ".join(clauses) if clauses else ""
+        with self._connection() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT *
+                FROM collection_intelligence_snapshots
+                {where}
+                ORDER BY generated_at DESC, id DESC
+                """,
+                tuple(params),
+            ).fetchall()
+        return [_collection_intelligence_snapshot_from_row(row) for row in rows]
+
     def count_articles(self) -> int:
         with self._connection() as conn:
             row = conn.execute("SELECT COUNT(*) AS count FROM articles").fetchone()
@@ -1936,6 +2151,59 @@ def _migration_library_search_connections(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migration_library_context_intelligence(conn: sqlite3.Connection) -> None:
+    _execute_schema_statements(
+        conn,
+        (
+            """
+            CREATE TABLE IF NOT EXISTS library_context_suggestions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id INTEGER,
+                article_id INTEGER NOT NULL,
+                related_article_id INTEGER NOT NULL,
+                collection_id INTEGER,
+                collection_key INTEGER GENERATED ALWAYS AS (IFNULL(collection_id, 0)) STORED,
+                relation_label TEXT NOT NULL,
+                rationale TEXT NOT NULL,
+                origin TEXT NOT NULL,
+                provenance_json TEXT NOT NULL,
+                confidence REAL,
+                created_at TEXT NOT NULL,
+                dismissed_at TEXT,
+                CHECK(article_id != related_article_id),
+                UNIQUE(article_id, related_article_id, collection_key),
+                FOREIGN KEY(run_id) REFERENCES app_runs(id) ON DELETE SET NULL,
+                FOREIGN KEY(article_id) REFERENCES articles(id) ON DELETE CASCADE,
+                FOREIGN KEY(related_article_id) REFERENCES articles(id) ON DELETE CASCADE,
+                FOREIGN KEY(collection_id) REFERENCES library_collections(id) ON DELETE SET NULL
+            )
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_library_context_suggestions_article
+            ON library_context_suggestions(article_id, dismissed_at)
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS collection_intelligence_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                collection_id INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                evidence_json TEXT NOT NULL,
+                origin TEXT NOT NULL,
+                provenance_json TEXT NOT NULL,
+                generated_at TEXT NOT NULL,
+                dismissed_at TEXT,
+                FOREIGN KEY(collection_id) REFERENCES library_collections(id) ON DELETE CASCADE
+            )
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_collection_intelligence_collection
+            ON collection_intelligence_snapshots(collection_id, dismissed_at, generated_at DESC)
+            """,
+        ),
+    )
+
+
 MIGRATIONS: Sequence[SchemaMigration] = (
     SchemaMigration(1, "core m1/m2 tables", _migration_core_tables),
     SchemaMigration(2, "profile-fingerprinted relevance analyses", _migration_profile_fingerprints),
@@ -1960,6 +2228,11 @@ MIGRATIONS: Sequence[SchemaMigration] = (
         12,
         "library search and connections",
         _migration_library_search_connections,
+    ),
+    SchemaMigration(
+        13,
+        "library context intelligence",
+        _migration_library_context_intelligence,
     ),
 )
 
@@ -2349,6 +2622,37 @@ def _get_library_connection_by_pair(
     return _library_connection_from_row(row) if row is not None else None
 
 
+def _get_library_context_suggestion(
+    conn: sqlite3.Connection,
+    *,
+    article_id: int,
+    related_article_id: int,
+    collection_id: int | None,
+) -> LibraryContextSuggestion | None:
+    row = conn.execute(
+        """
+        SELECT *
+        FROM library_context_suggestions
+        WHERE article_id = ?
+            AND related_article_id = ?
+            AND collection_key = IFNULL(?, 0)
+        """,
+        (article_id, related_article_id, collection_id),
+    ).fetchone()
+    return _library_context_suggestion_from_row(row) if row is not None else None
+
+
+def _get_collection_intelligence_snapshot(
+    conn: sqlite3.Connection,
+    snapshot_id: int,
+) -> CollectionIntelligenceSnapshot | None:
+    row = conn.execute(
+        "SELECT * FROM collection_intelligence_snapshots WHERE id = ?",
+        (snapshot_id,),
+    ).fetchone()
+    return _collection_intelligence_snapshot_from_row(row) if row is not None else None
+
+
 def _get_article_feedback(
     conn: sqlite3.Connection,
     *,
@@ -2558,6 +2862,53 @@ def _library_connection_from_row(row: sqlite3.Row) -> LibraryConnection:
         origin=ConnectionOrigin(str(row["origin"])),
         provenance=cast(dict[str, object], provenance),
         confidence=float(confidence) if confidence is not None else None,
+        generated_at=datetime_from_db(str(row["generated_at"])),
+        dismissed_at=datetime_from_db(str(dismissed_at)) if dismissed_at is not None else None,
+    )
+
+
+def _library_context_suggestion_from_row(row: sqlite3.Row) -> LibraryContextSuggestion:
+    provenance = json.loads(str(row["provenance_json"]))
+    if not isinstance(provenance, dict):
+        provenance = {"invalid_provenance": True}
+    confidence = row["confidence"]
+    dismissed_at = row["dismissed_at"]
+    collection_id = row["collection_id"]
+    run_id = row["run_id"]
+    return LibraryContextSuggestion(
+        id=int(row["id"]),
+        run_id=int(run_id) if run_id is not None else None,
+        article_id=int(row["article_id"]),
+        related_article_id=int(row["related_article_id"]),
+        collection_id=int(collection_id) if collection_id is not None else None,
+        relation_label=str(row["relation_label"]),
+        rationale=str(row["rationale"]),
+        origin=LibraryContextOrigin(str(row["origin"])),
+        provenance=cast(dict[str, object], provenance),
+        confidence=float(confidence) if confidence is not None else None,
+        created_at=datetime_from_db(str(row["created_at"])),
+        dismissed_at=datetime_from_db(str(dismissed_at)) if dismissed_at is not None else None,
+    )
+
+
+def _collection_intelligence_snapshot_from_row(
+    row: sqlite3.Row,
+) -> CollectionIntelligenceSnapshot:
+    evidence = json.loads(str(row["evidence_json"]))
+    provenance = json.loads(str(row["provenance_json"]))
+    if not isinstance(evidence, dict):
+        evidence = {"invalid_evidence": True}
+    if not isinstance(provenance, dict):
+        provenance = {"invalid_provenance": True}
+    dismissed_at = row["dismissed_at"]
+    return CollectionIntelligenceSnapshot(
+        id=int(row["id"]),
+        collection_id=int(row["collection_id"]),
+        title=str(row["title"]),
+        summary=str(row["summary"]),
+        evidence=cast(dict[str, object], evidence),
+        origin=LibraryContextOrigin(str(row["origin"])),
+        provenance=cast(dict[str, object], provenance),
         generated_at=datetime_from_db(str(row["generated_at"])),
         dismissed_at=datetime_from_db(str(dismissed_at)) if dismissed_at is not None else None,
     )

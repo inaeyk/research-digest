@@ -7,11 +7,13 @@ from typing import cast
 
 from research_digest.analysis.base import LLMAnalyzer
 from research_digest.analysis.codex_connections import CodexLibraryConnectionGenerator
+from research_digest.analysis.codex_context import CodexLibraryContextGenerator
 from research_digest.analysis.codex_tags import CodexAITagGenerator
 from research_digest.analysis.providers import build_configured_analyzer
 from research_digest.config import AnalyzerProvider, AppConfig, ConfigError, load_config
 from research_digest.connections import LibraryConnectionGenerator
 from research_digest.db import Database
+from research_digest.library_context import LibraryContextGenerator
 from research_digest.tags import AITagGenerator
 
 
@@ -122,4 +124,33 @@ def get_connection_generator() -> tuple[LibraryConnectionGenerator | None, str |
     return cast(
         tuple[LibraryConnectionGenerator | None, str | None],
         _connect_connection_generator(config.codex_model, config.codex_timeout_seconds),
+    )
+
+
+def get_library_context_generator() -> tuple[LibraryContextGenerator | None, str | None]:
+    import streamlit as st
+
+    @st.cache_resource(show_spinner=False)  # type: ignore[untyped-decorator]
+    def _connect_context_generator(
+        codex_model: str | None,
+        codex_timeout_seconds: float,
+    ) -> tuple[LibraryContextGenerator | None, str | None]:
+        try:
+            return (
+                CodexLibraryContextGenerator(
+                    model=codex_model,
+                    timeout_seconds=codex_timeout_seconds,
+                ),
+                None,
+            )
+        except Exception as exc:
+            return None, str(exc)
+
+    try:
+        config = load_config()
+    except ConfigError as exc:
+        return None, str(exc)
+    return cast(
+        tuple[LibraryContextGenerator | None, str | None],
+        _connect_context_generator(config.codex_model, config.codex_timeout_seconds),
     )

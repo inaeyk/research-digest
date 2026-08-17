@@ -389,3 +389,71 @@ Key frozen decisions:
   relationships.
 - M6-E is expected to use additive SQLite schema version `13`; JSON config is
   unchanged.
+
+## M6-E Candidate
+
+Implemented:
+
+- Additive SQLite schema version `13` with `library_context_suggestions` and
+  `collection_intelligence_snapshots`.
+- Bounded deterministic Library-context candidate selection for newly analyzed
+  papers using shared tags/topics, categories, collections, and title/abstract
+  token overlap.
+- Explicit Codex context provider boundary with prompt version
+  `library_context_v1`, bounded schema, untrusted-source-text rules, and no
+  personal-note text in prompt input.
+- Today page `Connections to your Library` display, dismiss controls, and
+  explicit `Find Library context` generation action.
+- Deterministic collection intelligence snapshots in the Library collection
+  section, with stored evidence and dismiss/update controls.
+- JSON backup export for context suggestions and collection intelligence
+  snapshots.
+
+Preserved:
+
+- Daily relevance scoring, preselection, feedback, and analysis cache identity
+  are unchanged.
+- Viewing Today/Library/context does not call Codex.
+- Historical run snapshots remain immutable.
+- Personal notes remain searchable locally but are excluded from Codex context
+  prompts and context candidate evidence.
+- Collection intelligence and Library context use active saved-Library state
+  rather than treating unsaved papers as active evidence.
+
+Deterministic candidate checks:
+
+- `pytest`: PASS, 310 passed after a test repair for button-label-based
+  abstract UI smoke.
+- `ruff check src tests`: PASS.
+- `mypy --strict src tests`: PASS.
+- `python -m compileall src tests`: PASS.
+- `git diff --check`: PASS.
+
+Live smoke:
+
+- Synthetic live Codex context smoke reached the Codex CLI but failed before
+  model work because the CLI could not initialize in the read-only runtime.
+  This is recorded as an environment/provider limitation for later human live
+  smoke, not as a deterministic code failure.
+
+Audit state:
+
+- First fresh read-only M6-E Auditor found two IMPORTANT issues:
+  collection-intelligence snapshots counted unsaved collection members as
+  active evidence, and invalid provider output could partially persist an
+  earlier valid context suggestion before raising on a later invalid item.
+- Repair round 1 filters collection-intelligence evidence to currently saved
+  Library entries.
+- Repair round 1 validates the full provider-output batch before any context
+  suggestion persistence.
+- Added regressions for unsaved collection members and no partial persistence
+  on invalid provider output.
+- M6-E repair round 1 deterministic checks: `pytest` PASS, 312 passed;
+  `ruff check src tests` PASS; `mypy --strict src tests` PASS;
+  `python -m compileall src tests` PASS; `git diff --check` PASS.
+- Fresh read-only M6-E repair Auditor PASS.
+- BLOCKER/IMPORTANT findings: none remaining.
+- Audit repair rounds used: 1.
+- Deferred MINOR/OPTIONAL: context candidate eligibility can still spend prompt
+  budget on a candidate whose only existing suggestion is collection-scoped and
+  will later be skipped during assignment; no incorrect mutation occurs.

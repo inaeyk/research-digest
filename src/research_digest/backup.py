@@ -186,6 +186,8 @@ def export_user_data(*, db_path: Path, schema_version: int | None = None) -> dic
             "library_collections": _library_collections(conn),
             "library_collection_memberships": _library_collection_memberships(conn),
             "library_article_connections": _library_article_connections(conn),
+            "library_context_suggestions": _library_context_suggestions(conn),
+            "collection_intelligence_snapshots": _collection_intelligence_snapshots(conn),
         }
 
 
@@ -748,6 +750,126 @@ def _library_article_connections(conn: sqlite3.Connection) -> list[dict[str, obj
                     else None
                 ),
                 "title": str(row["title_b"]) if row["title_b"] is not None else None,
+            },
+        }
+        for row in rows
+    ]
+
+
+def _library_context_suggestions(conn: sqlite3.Connection) -> list[dict[str, object]]:
+    if not _table_exists(conn, "library_context_suggestions"):
+        return []
+    rows = conn.execute(
+        """
+        SELECT
+            suggestions.id,
+            suggestions.run_id,
+            suggestions.article_id,
+            suggestions.related_article_id,
+            suggestions.collection_id,
+            suggestions.relation_label,
+            suggestions.rationale,
+            suggestions.origin,
+            suggestions.provenance_json,
+            suggestions.confidence,
+            suggestions.created_at,
+            suggestions.dismissed_at,
+            article.source AS article_source,
+            article.source_article_id AS article_source_article_id,
+            article.title AS article_title,
+            related.source AS related_source,
+            related.source_article_id AS related_source_article_id,
+            related.title AS related_title,
+            collections.name AS collection_name
+        FROM library_context_suggestions AS suggestions
+        LEFT JOIN articles AS article ON article.id = suggestions.article_id
+        LEFT JOIN articles AS related ON related.id = suggestions.related_article_id
+        LEFT JOIN library_collections AS collections ON collections.id = suggestions.collection_id
+        ORDER BY suggestions.article_id, suggestions.related_article_id, suggestions.id
+        """
+    ).fetchall()
+    return [
+        {
+            "id": int(row["id"]),
+            "run_id": int(row["run_id"]) if row["run_id"] is not None else None,
+            "article_id": int(row["article_id"]),
+            "related_article_id": int(row["related_article_id"]),
+            "collection_id": (
+                int(row["collection_id"]) if row["collection_id"] is not None else None
+            ),
+            "relation_label": str(row["relation_label"]),
+            "rationale": str(row["rationale"]),
+            "origin": str(row["origin"]),
+            "provenance": json.loads(str(row["provenance_json"])),
+            "confidence": (
+                float(row["confidence"]) if row["confidence"] is not None else None
+            ),
+            "created_at": str(row["created_at"]),
+            "dismissed_at": (
+                str(row["dismissed_at"]) if row["dismissed_at"] is not None else None
+            ),
+            "article": {
+                "source": str(row["article_source"]) if row["article_source"] is not None else None,
+                "source_article_id": (
+                    str(row["article_source_article_id"])
+                    if row["article_source_article_id"] is not None
+                    else None
+                ),
+                "title": str(row["article_title"]) if row["article_title"] is not None else None,
+            },
+            "related_article": {
+                "source": str(row["related_source"]) if row["related_source"] is not None else None,
+                "source_article_id": (
+                    str(row["related_source_article_id"])
+                    if row["related_source_article_id"] is not None
+                    else None
+                ),
+                "title": str(row["related_title"]) if row["related_title"] is not None else None,
+            },
+            "collection": {
+                "name": str(row["collection_name"]) if row["collection_name"] is not None else None,
+            },
+        }
+        for row in rows
+    ]
+
+
+def _collection_intelligence_snapshots(conn: sqlite3.Connection) -> list[dict[str, object]]:
+    if not _table_exists(conn, "collection_intelligence_snapshots"):
+        return []
+    rows = conn.execute(
+        """
+        SELECT
+            snapshots.id,
+            snapshots.collection_id,
+            snapshots.title,
+            snapshots.summary,
+            snapshots.evidence_json,
+            snapshots.origin,
+            snapshots.provenance_json,
+            snapshots.generated_at,
+            snapshots.dismissed_at,
+            collections.name AS collection_name
+        FROM collection_intelligence_snapshots AS snapshots
+        LEFT JOIN library_collections AS collections ON collections.id = snapshots.collection_id
+        ORDER BY snapshots.collection_id, snapshots.generated_at DESC, snapshots.id DESC
+        """
+    ).fetchall()
+    return [
+        {
+            "id": int(row["id"]),
+            "collection_id": int(row["collection_id"]),
+            "title": str(row["title"]),
+            "summary": str(row["summary"]),
+            "evidence": json.loads(str(row["evidence_json"])),
+            "origin": str(row["origin"]),
+            "provenance": json.loads(str(row["provenance_json"])),
+            "generated_at": str(row["generated_at"]),
+            "dismissed_at": (
+                str(row["dismissed_at"]) if row["dismissed_at"] is not None else None
+            ),
+            "collection": {
+                "name": str(row["collection_name"]) if row["collection_name"] is not None else None,
             },
         }
         for row in rows

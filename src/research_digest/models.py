@@ -54,6 +54,11 @@ class ConnectionOrigin(StrEnum):
     AI = "AI"
 
 
+class LibraryContextOrigin(StrEnum):
+    AI = "AI"
+    DETERMINISTIC = "DETERMINISTIC"
+
+
 class DateSelectionKind(StrEnum):
     LATEST_AVAILABLE = "LATEST_AVAILABLE"
     SINGLE_DATE = "SINGLE_DATE"
@@ -593,6 +598,79 @@ class LibraryConnection:
         object.__setattr__(self, "relation_label", normalize_whitespace(self.relation_label))
         object.__setattr__(self, "rationale", normalize_whitespace(self.rationale))
         object.__setattr__(self, "origin", ConnectionOrigin(self.origin))
+        object.__setattr__(self, "generated_at", ensure_utc(self.generated_at))
+        if self.dismissed_at is not None:
+            object.__setattr__(self, "dismissed_at", ensure_utc(self.dismissed_at))
+
+
+@dataclass(frozen=True)
+class LibraryContextSuggestion:
+    id: int | None
+    run_id: int | None
+    article_id: int
+    related_article_id: int
+    collection_id: int | None
+    relation_label: str
+    rationale: str
+    origin: LibraryContextOrigin
+    provenance: dict[str, object]
+    created_at: datetime
+    confidence: float | None = None
+    dismissed_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        if self.id is not None and self.id <= 0:
+            raise ModelValidationError("library context suggestion id must be positive")
+        if self.run_id is not None and self.run_id <= 0:
+            raise ModelValidationError("library context suggestion run id must be positive")
+        if self.article_id <= 0 or self.related_article_id <= 0:
+            raise ModelValidationError("library context suggestion article ids must be positive")
+        if self.article_id == self.related_article_id:
+            raise ModelValidationError(
+                "library context suggestion cannot link an article to itself"
+            )
+        if self.collection_id is not None and self.collection_id <= 0:
+            raise ModelValidationError("library context suggestion collection id must be positive")
+        if not self.relation_label.strip():
+            raise ModelValidationError("library context suggestion relation label is required")
+        if not self.rationale.strip():
+            raise ModelValidationError("library context suggestion rationale is required")
+        if self.confidence is not None and not 0 <= self.confidence <= 1:
+            raise ModelValidationError(
+                "library context suggestion confidence must be between 0 and 1"
+            )
+        object.__setattr__(self, "relation_label", normalize_whitespace(self.relation_label))
+        object.__setattr__(self, "rationale", normalize_whitespace(self.rationale))
+        object.__setattr__(self, "origin", LibraryContextOrigin(self.origin))
+        object.__setattr__(self, "created_at", ensure_utc(self.created_at))
+        if self.dismissed_at is not None:
+            object.__setattr__(self, "dismissed_at", ensure_utc(self.dismissed_at))
+
+
+@dataclass(frozen=True)
+class CollectionIntelligenceSnapshot:
+    id: int | None
+    collection_id: int
+    title: str
+    summary: str
+    evidence: dict[str, object]
+    origin: LibraryContextOrigin
+    provenance: dict[str, object]
+    generated_at: datetime
+    dismissed_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        if self.id is not None and self.id <= 0:
+            raise ModelValidationError("collection intelligence snapshot id must be positive")
+        if self.collection_id <= 0:
+            raise ModelValidationError("collection intelligence collection id must be positive")
+        if not self.title.strip():
+            raise ModelValidationError("collection intelligence title is required")
+        if not self.summary.strip():
+            raise ModelValidationError("collection intelligence summary is required")
+        object.__setattr__(self, "title", normalize_whitespace(self.title))
+        object.__setattr__(self, "summary", normalize_whitespace(self.summary))
+        object.__setattr__(self, "origin", LibraryContextOrigin(self.origin))
         object.__setattr__(self, "generated_at", ensure_utc(self.generated_at))
         if self.dismissed_at is not None:
             object.__setattr__(self, "dismissed_at", ensure_utc(self.dismissed_at))

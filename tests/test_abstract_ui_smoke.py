@@ -137,18 +137,18 @@ class AbstractUiSmokeTests(unittest.TestCase):
         ).run()
         self.assert_no_streamlit_exceptions(at)
 
-        at.button[0].click().run()
+        self.click_button(at, "Show abstract", occurrence=0).run()
         self.assert_no_streamlit_exceptions(at)
         self.assert_text_present(at, "Above threshold source abstract.")
         self.assert_text_absent(at, "Generated summary for 0.9.")
 
-        at.button[2].click().run()
+        self.click_button(at, "Show abstract", occurrence=1).run()
         self.assert_no_streamlit_exceptions(at)
         self.assert_text_present(at, "Preselected-out source abstract.")
 
         at.segmented_control[0].set_value("below_threshold").run()
         self.assert_no_streamlit_exceptions(at)
-        at.button[0].click().run()
+        self.click_button(at, "Show abstract", occurrence=0).run()
         self.assert_no_streamlit_exceptions(at)
         self.assert_text_present(at, "Below threshold source abstract.")
 
@@ -184,7 +184,7 @@ class AbstractUiSmokeTests(unittest.TestCase):
         ).run()
         self.assert_no_streamlit_exceptions(at)
 
-        at.button[0].click().run()
+        self.click_button(at, "Show abstract", occurrence=0).run()
         self.assert_no_streamlit_exceptions(at)
         self.assert_text_present(at, "Preselected-out source abstract.")
 
@@ -198,6 +198,11 @@ class AbstractUiSmokeTests(unittest.TestCase):
     def assert_text_absent(self, at: AppTest, expected: str) -> None:
         texts = self._plain_texts(at)
         self.assertNotIn(expected, texts)
+
+    def click_button(self, at: AppTest, label: str, *, occurrence: int) -> AppTest:
+        matches = [button for button in at.button if str(button.label) == label]
+        self.assertGreater(len(matches), occurrence)
+        return matches[occurrence].click()
 
     def _plain_texts(self, at: AppTest) -> list[str]:
         return [str(element.value) for element in at.text] + [

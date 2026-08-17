@@ -48,3 +48,29 @@ def connection_action_key(
     raw = f"{action}\0{article_id}\0{related_article_id or ''}".encode()
     digest = hashlib.sha256(raw).hexdigest()[:20]
     return f"library_connection_{action}_{digest}"
+
+
+def context_action_key(
+    *,
+    action: str,
+    article_id: int,
+    suggestion_id: int | None = None,
+) -> str:
+    if article_id <= 0:
+        raise ValueError("article id must be positive")
+    raw = f"{action}\0{article_id}\0{suggestion_id or ''}".encode()
+    digest = hashlib.sha256(raw).hexdigest()[:20]
+    return f"library_context_{action}_{digest}"
+
+
+def collection_intelligence_action_key(
+    *,
+    action: str,
+    collection_id: int,
+    snapshot_id: int | None = None,
+) -> str:
+    if collection_id <= 0:
+        raise ValueError("collection id must be positive")
+    raw = f"{action}\0{collection_id}\0{snapshot_id or ''}".encode()
+    digest = hashlib.sha256(raw).hexdigest()[:20]
+    return f"collection_intelligence_{action}_{digest}"

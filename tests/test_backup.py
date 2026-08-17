@@ -17,6 +17,7 @@ from research_digest.collections import (
     save_note,
 )
 from research_digest.db import APP_RUN_COMPLETED, Database
+from research_digest.library_context import build_collection_intelligence_snapshot
 from research_digest.models import (
     Article,
     ArxivSourceConfig,
@@ -237,6 +238,17 @@ class BackupTests(unittest.TestCase):
             provenance={"prompt_version": "library_connections_v1", "provider": "fake"},
             confidence=0.5,
         )
+        self.db.upsert_library_context_suggestion(
+            run_id=run_id,
+            article_id=article.id,
+            related_article_id=related.id,
+            collection_id=collection.id,
+            relation_label="project context",
+            rationale="Related through the GL project.",
+            provenance={"prompt_version": "library_context_v1", "provider": "fake"},
+            confidence=0.6,
+        )
+        build_collection_intelligence_snapshot(self.db, collection_id=collection.id)
 
         with mock.patch.dict(
             "os.environ",
@@ -278,6 +290,14 @@ class BackupTests(unittest.TestCase):
         self.assertEqual(
             payload["library_article_connections"][0]["relation_label"],
             "shared system",
+        )
+        self.assertEqual(
+            payload["library_context_suggestions"][0]["relation_label"],
+            "project context",
+        )
+        self.assertEqual(
+            payload["collection_intelligence_snapshots"][0]["collection"]["name"],
+            "GL project",
         )
         output = result.export_path.read_text(encoding="utf-8")
         self.assertNotIn("OPENAI_API_KEY", output)

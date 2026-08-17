@@ -23,6 +23,7 @@ from research_digest.connections import (
 )
 from research_digest.errors import sanitize_error
 from research_digest.library import LibraryItem, LibrarySort, list_library_items
+from research_digest.library_context import build_collection_intelligence_snapshot
 from research_digest.models import Article, LibraryCollection, LibraryRelevanceContext, TagOrigin
 from research_digest.tags import (
     TagValidationError,
@@ -38,6 +39,7 @@ from research_digest.ui.library_controls import render_library_control
 from research_digest.ui.tag_controls import (
     ai_tag_generation_label,
     collection_action_key,
+    collection_intelligence_action_key,
     connection_action_key,
     tag_action_key,
 )
@@ -477,6 +479,7 @@ def _render_collection_management(collections: list[LibraryCollection]) -> None:
                     else:
                         st.rerun()
                 st.caption("Deleting a collection does not delete papers.")
+                _render_collection_intelligence(collection)
                 if st.button(
                     "Delete collection",
                     key=collection_action_key(
@@ -487,6 +490,47 @@ def _render_collection_management(collections: list[LibraryCollection]) -> None:
                 ):
                     delete_collection(get_database(), collection_id=collection.id)
                     st.rerun()
+
+
+def _render_collection_intelligence(collection: LibraryCollection) -> None:
+    import streamlit as st
+
+    if collection.id is None:
+        return
+    db = get_database()
+    snapshots = db.list_collection_intelligence_snapshots(collection.id)
+    if snapshots:
+        st.caption("Collection intelligence")
+        for snapshot in snapshots[:2]:
+            with st.container(border=True):
+                st.markdown(f"**{snapshot.title}**")
+                st.write(snapshot.summary)
+                st.caption(f"{snapshot.origin.value}; generated {snapshot.generated_at:%Y-%m-%d}")
+                if snapshot.id is not None and st.button(
+                    "Dismiss snapshot",
+                    key=collection_intelligence_action_key(
+                        action="dismiss",
+                        collection_id=collection.id,
+                        snapshot_id=snapshot.id,
+                    ),
+                    icon=":material/close:",
+                ):
+                    db.dismiss_collection_intelligence_snapshot(snapshot.id)
+                    st.rerun()
+    if st.button(
+        "Update intelligence snapshot",
+        key=collection_intelligence_action_key(
+            action="generate",
+            collection_id=collection.id,
+        ),
+        icon=":material/insights:",
+    ):
+        try:
+            build_collection_intelligence_snapshot(db, collection_id=collection.id)
+        except Exception as exc:
+            st.error(sanitize_error(exc), icon=":material/error:")
+        else:
+            st.rerun()
 
 
 def _article_caption(article: Article) -> str:
