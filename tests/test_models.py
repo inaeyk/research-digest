@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import unittest
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from research_digest.models import (
     MAX_ARXIV_LOOKBACK_HOURS,
@@ -9,9 +9,12 @@ from research_digest.models import (
     AnalysisResult,
     Article,
     ArxivSourceConfig,
+    DateSelection,
+    DateSelectionKind,
     InterestProfile,
     ModelValidationError,
     normalize_whitespace,
+    source_date_from_datetime,
 )
 
 
@@ -68,6 +71,52 @@ class ModelTests(unittest.TestCase):
                 lookback_hours=MAX_ARXIV_LOOKBACK_HOURS,
                 max_results=MAX_ARXIV_RESULTS + 1,
             )
+
+    def test_date_selection_normalizes_explicit_dates_and_ordering(self) -> None:
+        selection = DateSelection.explicit_dates(
+            [
+                date(2026, 8, 17),
+                date(2026, 8, 15),
+                date(2026, 8, 17),
+            ]
+        )
+
+        self.assertEqual(selection.kind, DateSelectionKind.EXPLICIT_DATES)
+        self.assertEqual(selection.dates, (date(2026, 8, 15), date(2026, 8, 17)))
+        self.assertEqual(selection.selected_dates(), selection.dates)
+
+    def test_date_selection_range_expands_inclusive_dates(self) -> None:
+        selection = DateSelection.date_range(date(2026, 8, 14), date(2026, 8, 16))
+
+        self.assertEqual(
+            selection.selected_dates(),
+            (date(2026, 8, 14), date(2026, 8, 15), date(2026, 8, 16)),
+        )
+
+    def test_date_selection_rejects_invalid_shapes(self) -> None:
+        with self.assertRaises(ModelValidationError):
+            DateSelection.explicit_dates([])
+        with self.assertRaises(ModelValidationError):
+            DateSelection.date_range(date(2026, 8, 17), date(2026, 8, 16))
+        with self.assertRaises(ModelValidationError):
+            DateSelection(DateSelectionKind.LATEST_AVAILABLE, (date(2026, 8, 17),))
+
+    def test_date_selection_round_trip_mapping_and_fingerprint(self) -> None:
+        selection = DateSelection.single_date(date(2026, 8, 17))
+        loaded = DateSelection.from_mapping(selection.to_mapping())
+
+        self.assertEqual(loaded, selection)
+        self.assertEqual(loaded.canonical_key(), selection.canonical_key())
+        self.assertEqual(loaded.display_label(), "2026-08-17")
+
+    def test_date_selection_rejects_unknown_mapping_kind(self) -> None:
+        with self.assertRaises(ModelValidationError):
+            DateSelection.from_mapping({"kind": "UNKNOWN", "dates": []})
+
+    def test_source_date_from_datetime_uses_utc_calendar_date(self) -> None:
+        timestamp = datetime.fromisoformat("2026-08-17T01:15:00+02:00")
+
+        self.assertEqual(source_date_from_datetime(timestamp), date(2026, 8, 16))
 
     def test_analysis_payload_accepts_exact_schema(self) -> None:
         result = AnalysisResult.from_mapping(

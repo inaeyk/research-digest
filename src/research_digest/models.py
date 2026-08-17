@@ -7,7 +7,7 @@ import json
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
 from typing import Any, Literal, cast
 
@@ -36,6 +36,13 @@ class AnalysisOrigin(StrEnum):
     REUSED = "REUSED"
 
 
+class DateSelectionKind(StrEnum):
+    LATEST_AVAILABLE = "LATEST_AVAILABLE"
+    SINGLE_DATE = "SINGLE_DATE"
+    DATE_RANGE = "DATE_RANGE"
+    EXPLICIT_DATES = "EXPLICIT_DATES"
+
+
 def normalize_whitespace(value: str) -> str:
     """Collapse repeated whitespace and trim surrounding whitespace."""
 
@@ -60,6 +67,125 @@ def datetime_from_db(value: str) -> datetime:
     normalized = value.replace("Z", "+00:00")
     parsed = datetime.fromisoformat(normalized)
     return ensure_utc(parsed)
+
+
+def source_date_from_datetime(value: datetime) -> date:
+    """Return the UTC arXiv source date for a source timestamp."""
+
+    return ensure_utc(value).date()
+
+
+@dataclass(frozen=True)
+class DateSelection:
+    """Normalized source-date selection for date-native digest runs."""
+
+    kind: DateSelectionKind
+    dates: tuple[date, ...] = ()
+
+    def __post_init__(self) -> None:
+        coerced_kind = DateSelectionKind(self.kind)
+        dates = tuple(_coerce_date(value) for value in self.dates)
+        normalized = _normalize_date_selection_dates(coerced_kind, dates)
+        object.__setattr__(self, "kind", coerced_kind)
+        object.__setattr__(self, "dates", normalized)
+
+    @classmethod
+    def latest_available(cls) -> DateSelection:
+        return cls(DateSelectionKind.LATEST_AVAILABLE)
+
+    @classmethod
+    def single_date(cls, value: date) -> DateSelection:
+        return cls(DateSelectionKind.SINGLE_DATE, (value,))
+
+    @classmethod
+    def date_range(cls, start: date, end: date) -> DateSelection:
+        return cls(DateSelectionKind.DATE_RANGE, (start, end))
+
+    @classmethod
+    def explicit_dates(cls, values: Sequence[date]) -> DateSelection:
+        return cls(DateSelectionKind.EXPLICIT_DATES, tuple(values))
+
+    @classmethod
+    def from_mapping(cls, payload: Mapping[str, object]) -> DateSelection:
+        raw_kind = payload.get("kind")
+        if not isinstance(raw_kind, str):
+            raise ModelValidationError("date selection kind is required")
+        raw_dates = payload.get("dates", [])
+        if not isinstance(raw_dates, list) or not all(
+            isinstance(value, str) for value in raw_dates
+        ):
+            raise ModelValidationError("date selection dates must be a list of ISO dates")
+        try:
+            dates = tuple(date.fromisoformat(value) for value in raw_dates)
+        except ValueError as exc:
+            raise ModelValidationError("date selection dates must be ISO calendar dates") from exc
+        try:
+            kind = DateSelectionKind(raw_kind)
+        except ValueError as exc:
+            raise ModelValidationError("unsupported date selection kind") from exc
+        return cls(kind, dates)
+
+    def to_mapping(self) -> dict[str, object]:
+        return {
+            "kind": self.kind.value,
+            "dates": [value.isoformat() for value in self.dates],
+        }
+
+    def selected_dates(self) -> tuple[date, ...]:
+        if self.kind == DateSelectionKind.LATEST_AVAILABLE:
+            return ()
+        if self.kind == DateSelectionKind.DATE_RANGE:
+            start, end = self.dates
+            days = (end - start).days
+            return tuple(start + timedelta(days=offset) for offset in range(days + 1))
+        return self.dates
+
+    def canonical_key(self) -> str:
+        return json.dumps(self.to_mapping(), sort_keys=True, separators=(",", ":"))
+
+    def display_label(self) -> str:
+        if self.kind == DateSelectionKind.LATEST_AVAILABLE:
+            return "Latest available source date"
+        if self.kind == DateSelectionKind.SINGLE_DATE:
+            return self.dates[0].isoformat()
+        if self.kind == DateSelectionKind.DATE_RANGE:
+            return f"{self.dates[0].isoformat()} to {self.dates[1].isoformat()}"
+        return ", ".join(value.isoformat() for value in self.dates)
+
+
+def _coerce_date(value: date) -> date:
+    if isinstance(value, datetime):
+        return source_date_from_datetime(value)
+    if not isinstance(value, date):
+        raise ModelValidationError("date selection values must be dates")
+    return value
+
+
+def _normalize_date_selection_dates(
+    kind: DateSelectionKind,
+    dates: tuple[date, ...],
+) -> tuple[date, ...]:
+    if kind == DateSelectionKind.LATEST_AVAILABLE:
+        if dates:
+            raise ModelValidationError("latest available date selection must not include dates")
+        return ()
+    if kind == DateSelectionKind.SINGLE_DATE:
+        if len(dates) != 1:
+            raise ModelValidationError("single date selection requires exactly one date")
+        return dates
+    if kind == DateSelectionKind.DATE_RANGE:
+        if len(dates) != 2:
+            raise ModelValidationError("date range selection requires start and end dates")
+        start, end = dates
+        if start > end:
+            raise ModelValidationError("date range start must be on or before end")
+        return (start, end)
+    if kind == DateSelectionKind.EXPLICIT_DATES:
+        normalized = tuple(sorted(set(dates)))
+        if not normalized:
+            raise ModelValidationError("explicit date selection requires at least one date")
+        return normalized
+    raise ModelValidationError(f"unsupported date selection kind: {kind}")
 
 
 @dataclass(frozen=True)

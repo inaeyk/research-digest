@@ -17,6 +17,7 @@ from research_digest.config import (
     ConfigError,
     load_config,
 )
+from research_digest.models import DateSelectionKind
 
 
 class ConfigTests(unittest.TestCase):
@@ -40,6 +41,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.config_dir.name, "config")
         self.assertEqual(config.config_version, CONFIG_VERSION)
         self.assertEqual(config.config_path, Path(tmp) / "config" / DEFAULT_CONFIG_FILENAME)
+        self.assertEqual(config.default_date_selection.kind, DateSelectionKind.LATEST_AVAILABLE)
         self.assertTrue(config_file_exists)
 
     def test_openai_provider_selection_preserves_api_key_config(self) -> None:
@@ -79,6 +81,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.openai_model, "stored-openai-model")
         self.assertEqual(config.codex_model, "stored-codex-model")
         self.assertEqual(config.codex_timeout_seconds, 33)
+        self.assertEqual(config.default_date_selection.kind, DateSelectionKind.LATEST_AVAILABLE)
         self.assertIsNone(config.last_config_backup_path)
 
     def test_old_supported_config_upgrades_with_backup(self) -> None:
@@ -108,6 +111,10 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(upgraded["config_version"], CONFIG_VERSION)
         self.assertEqual(upgraded["analyzer_provider"], "openai")
         self.assertEqual(upgraded["openai_model"], "legacy-model")
+        self.assertEqual(
+            upgraded["default_date_selection"],
+            {"kind": "LATEST_AVAILABLE", "dates": []},
+        )
         self.assertNotIn("OPENAI_API_KEY", json.dumps(upgraded))
 
     def test_unknown_future_config_version_fails_clearly(self) -> None:

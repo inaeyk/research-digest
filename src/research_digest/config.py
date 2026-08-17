@@ -7,15 +7,17 @@ import os
 import shutil
 import sqlite3
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
+
+from research_digest.models import DateSelection, ModelValidationError
 
 AnalyzerProvider = Literal["codex", "openai"]
 
 DEFAULT_DB_FILENAME = "research_digest.sqlite3"
 DEFAULT_CONFIG_FILENAME = "config.json"
-CONFIG_VERSION = 1
+CONFIG_VERSION = 2
 APP_NAME = "Research Digest"
 APP_AUTHOR = "Research Digest"
 DEFAULT_ANALYZER_PROVIDER: AnalyzerProvider = "codex"
@@ -31,6 +33,7 @@ CONFIG_KEYS = {
     "openai_model",
     "codex_model",
     "codex_timeout_seconds",
+    "default_date_selection",
 }
 SECRET_CONFIG_KEYS = {
     "OPENAI_API_KEY",
@@ -52,6 +55,7 @@ class PersistedConfig:
     openai_model: str
     codex_model: str | None
     codex_timeout_seconds: float
+    default_date_selection: DateSelection
 
 
 @dataclass(frozen=True)
@@ -69,6 +73,7 @@ class AppConfig:
     config_version: int = CONFIG_VERSION
     config_path: Path | None = None
     last_config_backup_path: Path | None = None
+    default_date_selection: DateSelection = field(default_factory=DateSelection.latest_available)
 
 
 def load_config() -> AppConfig:
@@ -98,6 +103,7 @@ def load_config() -> AppConfig:
         config_version=persisted_config.config_version,
         config_path=config_dir / DEFAULT_CONFIG_FILENAME,
         last_config_backup_path=backup_path,
+        default_date_selection=persisted_config.default_date_selection,
     )
 
 
@@ -150,6 +156,7 @@ def _default_persisted_config() -> PersistedConfig:
         openai_model=DEFAULT_OPENAI_MODEL,
         codex_model=None,
         codex_timeout_seconds=DEFAULT_CODEX_TIMEOUT_SECONDS,
+        default_date_selection=DateSelection.latest_available(),
     )
 
 
@@ -205,6 +212,7 @@ def _persisted_config_from_payload(payload: dict[str, Any]) -> PersistedConfig:
             payload.get("codex_timeout_seconds"),
             field_name="codex_timeout_seconds",
         ),
+        default_date_selection=_coerce_date_selection(payload.get("default_date_selection")),
     )
 
 
@@ -213,7 +221,7 @@ def _upgrade_persisted_config(
     *,
     from_version: int,
 ) -> PersistedConfig:
-    if from_version != 0:
+    if from_version not in {0, 1}:
         raise ConfigError(f"unsupported configuration version: {from_version}")
 
     defaults = _default_persisted_config()
@@ -226,6 +234,10 @@ def _upgrade_persisted_config(
             "codex_timeout_seconds",
             defaults.codex_timeout_seconds,
         ),
+        "default_date_selection": payload.get(
+            "default_date_selection",
+            defaults.default_date_selection.to_mapping(),
+        ),
     }
     return _persisted_config_from_payload(upgraded_payload)
 
@@ -237,6 +249,7 @@ def _write_persisted_config(path: Path, config: PersistedConfig) -> None:
         "openai_model": config.openai_model,
         "codex_model": config.codex_model,
         "codex_timeout_seconds": config.codex_timeout_seconds,
+        "default_date_selection": config.default_date_selection.to_mapping(),
     }
     temporary = path.with_name(path.name + ".tmp")
     try:
@@ -290,6 +303,17 @@ def _coerce_positive_float(value: object, *, field_name: str) -> float:
     if number <= 0:
         raise ConfigError(f"{field_name} must be positive")
     return number
+
+
+def _coerce_date_selection(value: object) -> DateSelection:
+    if value is None:
+        return DateSelection.latest_available()
+    if not isinstance(value, dict):
+        raise ConfigError("default_date_selection must be an object")
+    try:
+        return DateSelection.from_mapping(value)
+    except (ModelValidationError, ValueError) as exc:
+        raise ConfigError("default_date_selection is invalid") from exc
 
 
 def _resolve_db_path(data_dir: Path) -> Path:
