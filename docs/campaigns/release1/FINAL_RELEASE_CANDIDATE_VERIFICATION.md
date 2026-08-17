@@ -4,7 +4,9 @@ Status: final release audit pending.
 
 Verification workspace: `/tmp/research-digest-rc.Q4O1FA`.
 
-Proposed release-candidate commit before final-audit MINOR documentation follow-up: `f8d87eda5048c111d5d754c2e089ef3a33254508`.
+Final release-candidate commit after final-audit MINOR documentation follow-up: `eadedb71b7a64302edb6ac6b7d1fbfe1d6bfbe95`.
+
+Release-candidate packet commit before final-audit MINOR documentation follow-up: `f8d87eda5048c111d5d754c2e089ef3a33254508`.
 
 M7-I qualified base: `efc4c88a689d06dc0e4b4428605c05836ddb7374` (`m7i-qualified`).
 
@@ -129,3 +131,5 @@ MINOR follow-up applied after audit:
 
 - corrected release bookkeeping to distinguish the M7-I base from the actual release-candidate commit.
 - clarified README and human packet upgrade/backup sequencing for older repo-local M2 development databases.
+
+Final human-stop state records `eadedb71b7a64302edb6ac6b7d1fbfe1d6bfbe95` as the exact release-candidate commit.

@@ -1,11 +1,12 @@
 # Release 1 Campaign State
 
-- current_substage: release-candidate closeout bookkeeping
-- status: ACTIVE
-- current_git_head: f8d87eda5048c111d5d754c2e089ef3a33254508
+- current_substage: RELEASE_CANDIDATE_COMPLETE_AWAITING_HUMAN
+- status: RELEASE_CANDIDATE_COMPLETE_AWAITING_HUMAN
+- current_git_head: final bookkeeping commit containing this state; verify with `git rev-parse HEAD`
+- release_candidate_commit: eadedb71b7a64302edb6ac6b7d1fbfe1d6bfbe95
 - current_tags_at_head: none
 - current_branch: master
-- local_remote_tracking: `master` tracks `origin/master`; local branch is 14 commits ahead after release-candidate packet commit
+- local_remote_tracking: `master` tracks `origin/master`; local branch is 16 commits ahead after final human-stop bookkeeping
 - online_remote_verification: attempted `git ls-remote --heads --tags origin`; blocked by DNS resolution failure for `github.com` even after network escalation
 - baseline_m1_qualified_commit: 36bd1cbe60f95d588e8ccdd41bfce914e9b1d7da
 - baseline_m1_qualified_tag: m1-qualified
@@ -58,14 +59,14 @@
 - m7i_qualified_tag_object: ec016b565fe84857b8053c51822290025b50c0db
 - skipped_campaigns: M3 additional source types; M5 full-paper reading; M6 long-term research memory
 - active_campaign_scope: M4 automatic daily operation; M7 release engineering, upgradeability, and productization; first release candidate
-- qualification_status: FINAL_RELEASE_AUDIT_PASS_WITH_MINOR_FINDINGS_CLOSEOUT_ACTIVE
+- qualification_status: RELEASE_CANDIDATE_COMPLETE_AWAITING_HUMAN
 - audit_repair_round: 1
 - last_deterministic_verification: Final RC gate: full `pytest` 145 passed; `ruff check .` PASS; strict `mypy --strict src tests` PASS; `python -m compileall -q src tests` PASS; `git diff --check` PASS; targeted recovery/cache/migration/backup slice 51 passed.
 - last_live_verification: Final RC package/install/CLI/backup smokes PASS from `/tmp/research-digest-rc.Q4O1FA`; live arXiv digest, Codex model transport, WSL scheduler, and serve listener remain environment-blocked with sanitized bounded failures even after escalation where applicable.
 - migration_data_safety_status: M7-B candidate adds explicit schema version metadata, ordered migrations, backup before schema-changing upgrades of existing DBs, rollback on failed migration, and visible migration backup path. Repo-local `research_digest.sqlite3` remains ignored and was not used for upgrade testing.
-- deferred_minor_optional_findings: final release Auditor found two MINOR documentation/bookkeeping findings; both are being repaired before final human stop.
-- next_permitted_action: run docs/light verification for final-audit MINOR repairs, commit closeout bookkeeping locally, set `RELEASE_CANDIDATE_COMPLETE_AWAITING_HUMAN`, and stop
-- human_stop_reason: none
+- deferred_minor_optional_findings: none; final release Auditor reported two MINOR documentation/bookkeeping findings and both were repaired before human stop.
+- next_permitted_action: human decision only; no autonomous release, push, public tag, GitHub release, package publication, M3, M5, or M6 work.
+- human_stop_reason: final release-candidate gate reached
 
 ## Restored Release Campaign Charter Authority
 
@@ -1125,6 +1126,32 @@ Final audit:
 - fresh independent final release Auditor over `m2-qualified..f8d87eda5048c111d5d754c2e089ef3a33254508`: PASS WITH MINOR FINDINGS.
 - MINOR: release bookkeeping pointed at M7-I base rather than actual RC commit; corrected in closeout docs.
 - MINOR: upgrade/backup instructions needed clearer sequence for older repo-local M2 databases; corrected in README and human packet.
+
+Final release-candidate closeout:
+
+- exact RC commit: `eadedb71b7a64302edb6ac6b7d1fbfe1d6bfbe95`.
+- final human-stop state is committed after the exact RC commit as bookkeeping; use `git rev-parse HEAD` to inspect that final bookkeeping commit.
+- suggested release version/tag: `0.1.0` / `v0.1.0`.
+- qualification summary: M4-A through M4-D and M7-A through M7-I are locally qualified and tagged; M3, M5, and M6 were not started.
+- final audit result: PASS WITH MINOR FINDINGS; both MINOR findings repaired before final human stop.
+- fresh-install evidence: package wheel and editable installs pass in isolated venvs; installed CLI `status --json` initializes schema 4/config 1 under isolated data/config paths.
+- M2-upgrade evidence: M7-I representative M2-qualified SQL fixture verifies adoption/migration, pre-migration backup, semantic counts, fingerprint preservation, repeated startup, and backup/export.
+- live Codex evidence: Codex CLI exists and reports `codex-cli 0.147.0`, but final model probe is environment-blocked by OpenAI websocket/HTTPS transport errors even after escalation.
+- scheduler evidence: deterministic scheduler tests pass; live WSL Task Scheduler status is environment-blocked by `UtilBindVsockAnyPort ... socket failed 1`.
+- migration/backup evidence: deterministic migration failure/recovery tests pass; final installed backup/export smoke passes with SQLite integrity `ok` and valid JSON export.
+- known limitations: arXiv-only source pool; abstract-level analysis; no M6 long-term semantic memory; local single-user app; WSL2/Windows scheduler backend; live arXiv/Codex/scheduler/serve probes environment-blocked in this session.
+- deferred MINOR/OPTIONAL findings: none.
+- exact proposed human release commands:
+
+```bash
+git status
+git log --oneline --decorate -n 8
+git tag -a v0.1.0 -m "Research Digest 0.1.0"
+git push origin master
+git push origin m7g-qualified m7h-qualified m7i-qualified v0.1.0
+```
+
+No final public release tag, remote push, GitHub release, package publication, or public release operation was performed by the campaign.
 
 Historical M7-G freeze record:
 

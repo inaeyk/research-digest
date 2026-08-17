@@ -837,6 +837,8 @@ Final-audit MINOR follow-up:
 
 - corrected CAMPAIGN_STATE and final verification docs to distinguish the M7-I qualified base from the actual release-candidate commit.
 - clarified README and release-candidate packet upgrade instructions: back up an already-current active DB with `research-digest backup --export-json`; for an older repo-local M2 database, first keep a separate copy of the SQLite file, let startup adopt/migrate the copied legacy DB and create the pre-migration backup, then use `research-digest backup --export-json` against the current active DB after migration.
+- final release-candidate commit after MINOR follow-up: `eadedb71b7a64302edb6ac6b7d1fbfe1d6bfbe95`.
+- final campaign state set to `RELEASE_CANDIDATE_COMPLETE_AWAITING_HUMAN`; no public release tag, push, GitHub release, package publication, or public release operation was performed.
 
 Data-safety note:
 

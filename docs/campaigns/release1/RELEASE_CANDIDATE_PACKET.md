@@ -9,6 +9,7 @@ This packet is release-candidate material only. It does not authorize a public r
 - package version in `pyproject.toml`: `0.1.0`
 - runtime version in `src/research_digest/__init__.py`: `0.1.0`
 - existing public-style version tags: none found by `git tag --list 'v*'`
+- release-candidate commit: `eadedb71b7a64302edb6ac6b7d1fbfe1d6bfbe95`
 - suggested final public release tag for human review: `v0.1.0`
 
 The release campaign has local qualification tags through `m7i-qualified`; the final public version tag has not been created.
