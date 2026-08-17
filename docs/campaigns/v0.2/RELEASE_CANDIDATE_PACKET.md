@@ -14,7 +14,10 @@ push.
 - released baseline: annotated tag `v0.1.0` targets
   `905f3133b58b6248fe4d3714c19f8bcdf9dde4cf`
 - current qualification branch: `feature/v0.2-date-native-scheduler-ui`
-- release-candidate commit: `29d3f6b9d5ef0a83155f79f405b6244d67786766`
+- qualified release code commit: `37cc990dd5e793a2ac84d9d2591b34037638ec9c`
+- final campaign bookkeeping commits after the qualified code commit only
+  update campaign state/report/packet records; they do not change package
+  runtime code, tests, README, schema/config logic, or release behavior
 - suggested final public release tag for human review: `v0.2.0`
 
 ## Release Notes

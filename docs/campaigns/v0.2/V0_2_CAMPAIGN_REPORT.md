@@ -625,8 +625,10 @@ Initial final RC audit:
 - Auditor checks otherwise passed: full pytest, targeted RC tests, ruff,
   strict mypy, diff hygiene, clean worktree, no local `v0.2*` tag, and no
   tracked secrets/auth/SQLite artifacts.
-- Repair round 1: RC packet now identifies current repair commit
-  `29d3f6b9d5ef0a83155f79f405b6244d67786766`; campaign state now records that
-  current HEAD for the repair round.
+- Repair round 1: RC packet now identifies the stable qualified release code
+  commit `37cc990dd5e793a2ac84d9d2591b34037638ec9c` and explicitly notes that
+  later campaign bookkeeping commits only update campaign state/report/packet
+  records. Campaign state no longer tries to embed the SHA of the commit that
+  contains the state file; use `git rev-parse HEAD` for that literal value.
 
 Status: focused final RC re-audit pending.

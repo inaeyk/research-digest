@@ -2,7 +2,8 @@
 
 - campaign_state: FINAL_RC_AUDIT_PENDING
 - current_substage: Final v0.2 Release Candidate Gate
-- current_git_head: 29d3f6b9d5ef0a83155f79f405b6244d67786766
+- current_git_head: see `git rev-parse HEAD` for the commit containing this state file
+- qualified_release_code_commit: 37cc990dd5e793a2ac84d9d2591b34037638ec9c
 - current_branch: feature/v0.2-date-native-scheduler-ui
 - released_baseline_tag: v0.1.0
 - released_baseline_commit: 905f3133b58b6248fe4d3714c19f8bcdf9dde4cf
@@ -14,7 +15,7 @@
 - schema_version: 6
 - config_version: 3
 - worktree_state_at_campaign_start: clean tracked worktree; ignored runtime files include `.env`, local SQLite, virtualenv, caches, and local agent/runtime directories.
-- qualification_state: final RC audit repair round 1; RC target bookkeeping updated to latest repair commit; focused final re-audit pending.
+- qualification_state: final RC audit repair round 1; RC packet now distinguishes qualified release code from final campaign bookkeeping commits; focused final re-audit pending.
 - audit_round: 1
 - deterministic_checks: baseline `pytest` 149 passed; U2-A post-repair `pytest` 166 passed; U2-B post-repair `pytest` 174 passed; U2-C repair round 1 `pytest` 184 passed; U2-D repair round 1 `pytest` 195 passed; U2-E candidate `pytest` 202 passed; U2-F candidate `pytest` 204 passed; U2-G candidate `pytest` 210 passed; U2-H post-repair `pytest` 212 passed; `ruff check .` PASS; `mypy --strict src tests` PASS; `python -m compileall -q src tests` PASS; `git diff --check` PASS; package wheel build PASS from current source; isolated wheel install plus installed `research-digest --version` and `status --json` smokes PASS with expected fresh-environment warnings only.
 - live_checks: U2-A live arXiv latest-available smoke blocked by DNS resolution failure for `export.arxiv.org` before and after network escalation. U2-C Streamlit serve smoke blocked by local socket `Operation not permitted` before and after escalation. U2-D disposable live arXiv automatic headless smoke blocked by DNS resolution failure for `export.arxiv.org` before and after network escalation. U2-E Streamlit serve smoke blocked by local socket `Operation not permitted` before and after escalation. U2-E Windows Task Scheduler status smoke blocked by WSL `UtilBindVsockAnyPort` socket failure before and after escalation. U2-G Streamlit serve smoke blocked by local socket `Operation not permitted` before and after escalation. U2-H live arXiv latest-available smoke blocked by DNS resolution failure for `export.arxiv.org` before and after network escalation; U2-H Streamlit serve smoke blocked by local socket `Operation not permitted` before and after escalation; U2-H Windows Task Scheduler status smoke blocked by WSL `UtilBindVsockAnyPort` socket failure before and after escalation.
