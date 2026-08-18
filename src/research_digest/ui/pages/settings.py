@@ -635,6 +635,7 @@ def _run_automatic_now(config: AppConfig, db: Database) -> None:
                 db=db,
                 source=source,
                 analyzer=analyzer,
+                use_configured_preselector=True,
             )
         except Exception as exc:
             status.update(label="Run now failed", state="error")

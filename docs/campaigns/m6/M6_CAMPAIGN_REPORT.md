@@ -1550,3 +1550,49 @@ Known limitations:
   connections remain suggestions rather than scientific facts.
 - Public release, package publication, and public `v0.3.0` tag remain blocked
   pending final human authority.
+
+## Final Integrated Audit Repair
+
+The final independent Auditor reviewed the complete M6/v0.3 delta from
+`m6f-qualified` and found one IMPORTANT issue:
+
+- Settings -> Automation -> Run now could bypass configured model-based
+  Stage-1 preselection when an analyzer was available, because the UI did not
+  pass `use_configured_preselector=True` into the shared automatic digest
+  service.
+
+Repair:
+
+- Settings Run now now calls the shared automatic digest service with
+  `use_configured_preselector=True`.
+- Added deterministic regression coverage for that Settings Run-now boundary.
+- The deterministic injected-analyzer seam remains intact for tests.
+- CLI/headless scheduled execution already used the configured-preselector path
+  and remains unchanged.
+
+Closure audit:
+
+- Fresh read-only Auditor PASS: no BLOCKER or IMPORTANT findings.
+
+Final post-repair qualification:
+
+- `pytest -q`: PASS, 394 passed and 9 subtests passed.
+- `ruff check .`: PASS.
+- `mypy --strict src tests`: PASS, 100 source files checked.
+- `python -m compileall src tests`: PASS.
+- `git diff --check`: PASS.
+- Wheel build: PASS, `research_digest-0.3.0-py3-none-any.whl`.
+- Isolated no-deps wheel install: PASS.
+- Installed CLI `research-digest --version`: PASS, reported
+  `research-digest 0.3.0`.
+- Installed CLI `status --json`: PASS with isolated data/config, schema `16`
+  and config `5`.
+- Installed CLI `backup --json`: PASS with isolated data/config, schema `16`.
+- Streamlit AppTest smoke: PASS, 17 passed.
+
+Final release boundary:
+
+- Package/runtime version is `0.3.0`.
+- SQLite schema version is `16`.
+- JSON config version is `5`.
+- No public tag, push, package publication, or GitHub release was created.

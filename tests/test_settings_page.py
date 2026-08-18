@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import tempfile
 import unittest
 from datetime import date
@@ -60,6 +61,11 @@ class SettingsPageTests(unittest.TestCase):
         self.assertIn("Cached analyses are reused", summary)
         self.assertIn("abstract-level model preselection", summary)
         self.assertNotIn("deterministic abstract preselection", summary)
+
+    def test_run_now_uses_configured_stage1_preselector(self) -> None:
+        source = inspect.getsource(settings._run_automatic_now)
+
+        self.assertIn("use_configured_preselector=True", source)
 
     def test_backup_result_message_shows_backup_and_optional_export(self) -> None:
         backup = BackupResult(

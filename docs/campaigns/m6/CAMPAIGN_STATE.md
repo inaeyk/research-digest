@@ -1,7 +1,7 @@
 # M6 Campaign State
 
-- campaign_state: M6_RELEASE_VERSION_COMMIT_IN_PROGRESS_AWAITING_FINAL_CHECKS
-- current_substage: Complete integrated M6/v0.3 feature candidate frozen locally; v0.3.0 release-version commit in progress
+- campaign_state: M6_FINAL_INTEGRATED_FREEZE_IN_PROGRESS
+- current_substage: Final integrated M6/v0.3 audit repair qualified; local final freeze in progress
 - current_branch: feature/m6-scientific-library-memory
 - baseline_branch: master
 - baseline_commit: fe92e77a3fce4037c0bf4ecbb0a7ce964763eb8b
@@ -21,15 +21,15 @@
 - candidate_schema_version: 16
 - config_version: 5
 - codegraph_state: no `.codegraph/` directory exists at repository root.
-- current_qualification_state: Complete integrated M6/v0.3 feature candidate PASS after final human smoke. Final deterministic/package gate recorded `pytest` 393 passed and 9 subtests passed, `ruff check .` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, `git diff --check` PASS, wheel build PASS, isolated no-deps wheel install PASS, installed CLI version/status smoke PASS, and Streamlit AppTest smoke PASS. Final Model-effort UX smoke passed. Stage-1 benchmark follow-up Auditor passed with no BLOCKER/IMPORTANT findings. Stale-run, scheduler-state, startup-side-effect, feedback/calibration/cost, and M6 Library repairs remain accepted.
-- audit_round: Final M6/v0.3 Stage-1 benchmark/default-effort focused Auditor PASS. Final M6/v0.3 stale-run recovery repair round 1 PASS. Final M6/v0.3 scheduler state repair initial candidate had one IMPORTANT CLI status fallback issue; repaired before focused closure Auditor, which then passed. Final M6/v0.3 startup side-effect repair round 1 PASS. Final M6/v0.3 refinement audit repair round 1 PASS after focused follow-up repairs. M6-F audit repair round 1 PASS. M6-E audit repair round 1 PASS. M6-D audit repair round 1 PASS. M6-B audit repair round 1 PASS. M6-A initial candidate PASS; no M6-A audit-driven repair rounds used.
+- current_qualification_state: Complete integrated M6/v0.3 feature candidate PASS after final human smoke and final audit repair. Final integrated Auditor over the complete delta from `m6f-qualified` found one IMPORTANT Settings Run-now preselector wiring issue; repair added `use_configured_preselector=True` and regression coverage. Fresh closure Auditor PASS with no BLOCKER/IMPORTANT findings. Final deterministic/package gate after repair recorded `pytest` 394 passed and 9 subtests passed, `ruff check .` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, `git diff --check` PASS, wheel build PASS, isolated no-deps wheel install PASS, installed CLI version/status/backup smoke PASS, and Streamlit AppTest smoke PASS. Final Model-effort UX smoke passed. Stale-run, scheduler-state, startup-side-effect, feedback/calibration/cost, Stage-1 benchmark, and M6 Library repairs remain accepted.
+- audit_round: Final integrated M6/v0.3 audit repair round 1 PASS. Final integrated Auditor initially found one IMPORTANT Settings Run-now preselector wiring issue; closure Auditor found no BLOCKER/IMPORTANT findings after repair. Final M6/v0.3 Stage-1 benchmark/default-effort focused Auditor PASS. Final M6/v0.3 stale-run recovery repair round 1 PASS. Final M6/v0.3 scheduler state repair initial candidate had one IMPORTANT CLI status fallback issue; repaired before focused closure Auditor, which then passed. Final M6/v0.3 startup side-effect repair round 1 PASS. Final M6/v0.3 refinement audit repair round 1 PASS after focused follow-up repairs. M6-F audit repair round 1 PASS. M6-E audit repair round 1 PASS. M6-D audit repair round 1 PASS. M6-B audit repair round 1 PASS. M6-A initial candidate PASS; no M6-A audit-driven repair rounds used.
 - deterministic_checks: final v0.2 freeze gate recorded `pytest` 262 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-A final gate recorded `pytest` 268 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-B candidate recorded `pytest` 283 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-B repair round 1 recorded `pytest` 284 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-C candidate recorded `pytest` 290 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-D candidate recorded `pytest` 300 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-D repair round 1 recorded `pytest` 302 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-E candidate recorded `pytest` 310 passed after an implementation test repair, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-E repair round 1 recorded `pytest` 312 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-F final repaired gate recorded `pytest` 315 passed, `ruff check .` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, `git diff --check` PASS, package wheel build PASS, isolated wheel install PASS, installed CLI `--version` PASS, installed CLI `status --json` PASS, installed CLI backup PASS, and Streamlit Library AppTest smoke PASS.
 - live_checks: v0.2 live smoke was accepted by the human before the M6 branch. M6-B synthetic live Codex tag smoke reached the Codex CLI but exited non-zero with the sanitized authentication/usage-limits message; record as environment/provider limitation for later human live smoke, not deterministic code failure. M6-D synthetic live Codex connection smoke reached the Codex CLI but failed before model work because the CLI could not initialize in the read-only runtime; record as environment/provider limitation for later human live smoke, not deterministic code failure. M6-E synthetic live Codex context smoke reached the Codex CLI but failed before model work because the CLI could not initialize in the read-only runtime; record as environment/provider limitation for later human live smoke, not deterministic code failure. M6-F installed status smoke reported unsupported Windows Task Scheduler backend in this Linux/WSL sandbox; this is the expected environment limitation and not a scheduler code failure.
 - schema_config_migration_state: v0.2 baseline uses ordered SQLite migrations through schema 8 and JSON config 3. M6-A adds additive SQLite schema 9 with `library_articles`; JSON config is unchanged. M6-B adds additive SQLite schema 10 for Library tags, tag assignments, and AI tag suppressions; JSON config is unchanged. M6-C adds additive SQLite schema 11 for article notes, collections/projects, and collection memberships; JSON config is unchanged. M6-D adds additive SQLite schema 12 for rebuildable Library search documents and article relationship suggestions with soft dismissal; JSON config is unchanged. M6-E adds additive SQLite schema 13 for per-new-paper Library context suggestions and collection intelligence snapshots; JSON config is unchanged. Final feedback refinement adds SQLite schema 14 for two-axis feedback and suggested interests plus JSON config 4 for the automatic Library-context threshold. Final cost/calibration/progress refinement adds SQLite schema 15 for quantitative relevance calibration and app-run progress, plus JSON config 5 for automatic Library connection enablement, model-effort/preselection fraction, and calibration prompt probability. Final model-based Stage-1 persistence advances SQLite schema to 16 with durable per-run preselection decisions; JSON config remains 5.
 - qualified_local_commit: final local commit tagged `m6f-qualified` after this document update.
 - qualified_local_tag: annotated local tag `m6f-qualified` is the M6 release-candidate qualification tag. Prior local tags: `m6e-qualified` targets `fad6b8425bc14a956fb22f26f68cc485e46f71b9`; `m6d-qualified` targets `82c323d56c9ed9fbbdb8c36f602d03bd9d3d34b0`; `m6c-qualified` targets `7208191b3aa66c21863ec63d21e7d1f60ebe82b0`; `m6b-qualified` targets `104780a0ba9c98cd9663ef8d1088cb9472d53e09`; `m6a-qualified` targets `17e047c325bb61008cf39b9a135bea02bb63a968`.
 - deferred_minor_optional_findings: M6-B repair Auditor noted regeneration replacement is not a single DB transaction after provider success; current supported paths are covered, but a future atomic replace helper would be safer if the persistence path broadens. M6-C Auditor noted tag filter options may include tags retained only for AI suppression/tombstone history, which can yield no-result filter options. M6-E repair Auditor noted context candidate eligibility can still spend prompt budget on a candidate whose only existing suggestion is collection-scoped and will later be skipped during assignment; no incorrect mutation occurs. M6 live Codex smokes require a runtime where Codex can initialize and authenticate; sandbox attempts reached the CLI but could not complete model work.
-- next_permitted_action: finish the authorized local v0.3.0 release-version commit and re-run release checks; do not push, publish, create a public release, or create a public v0.3.0 tag without human authority.
+- next_permitted_action: create/update the authorized local final qualification commit/tag; do not push, publish, create a public release, or create a public v0.3.0 tag without human authority.
 - human_stop_reason: final human release decision required after local freeze/version commit.
 
 ## Recovered v0.2 Baseline
@@ -1896,3 +1896,52 @@ Post-version-bump release checks:
   SQLite schema `16` and JSON config `5`; Windows scheduler status was
   unavailable in the Linux/WSL sandbox with a sanitized WSL socket message.
 - Streamlit AppTest smoke: PASS, 17 passed.
+
+## Final Integrated Audit Repair
+
+Final Auditor:
+
+- Scope: complete delta from `m6f-qualified` to the current M6/v0.3 candidate.
+- Result: one IMPORTANT finding, no BLOCKER findings.
+- Finding: Settings -> Automation -> Run now used the configured analyzer but
+  did not pass `use_configured_preselector=True`, so that UI path could bypass
+  configured model-based Stage-1 preselection and persist fail-open
+  preselection evidence.
+
+Repair:
+
+- Settings Run now now invokes the shared automatic digest service with
+  `use_configured_preselector=True`.
+- Added deterministic regression coverage for the Settings Run-now Stage-1
+  preselector boundary.
+- Injected-analyzer test seams remain unchanged for deterministic tests.
+- CLI/headless scheduled paths remain configured-preselector paths.
+
+Closure Auditor:
+
+- PASS, no BLOCKER or IMPORTANT findings.
+
+Final post-repair qualification:
+
+- `pytest -q`: PASS, 394 passed and 9 subtests passed.
+- `ruff check .`: PASS.
+- `mypy --strict src tests`: PASS, 100 source files checked.
+- `python -m compileall src tests`: PASS.
+- `git diff --check`: PASS.
+- Wheel build: PASS, generated `research_digest-0.3.0-py3-none-any.whl`.
+- Isolated no-deps wheel install: PASS.
+- Installed CLI `research-digest --version`: PASS, reported
+  `research-digest 0.3.0`.
+- Installed CLI `status --json`: PASS with isolated data/config, initialized
+  SQLite schema `16` and JSON config `5`; Windows scheduler status was
+  unavailable in the Linux/WSL sandbox with a sanitized WSL socket message.
+- Installed CLI `backup --json`: PASS with isolated data/config, schema `16`.
+- Streamlit AppTest smoke: PASS, 17 passed.
+
+Release boundary:
+
+- Package/runtime version is already `0.3.0`.
+- No separate version-only commit is required after this final integrated
+  repair because the authoritative version declarations are already `0.3.0`.
+- No public `v0.3.0` tag, push, package publication, or public release is
+  authorized before final human release authority.
