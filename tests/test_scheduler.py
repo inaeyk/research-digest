@@ -95,6 +95,10 @@ class SchedulerTests(unittest.TestCase):
         self.assertEqual(request.wsl_distro, "Ubuntu")
         self.assertTrue(request.db_path.is_absolute())
         self.assertEqual(request.environment["RESEARCH_DIGEST_DB"], str(request.db_path))
+        self.assertEqual(
+            request.environment["RESEARCH_DIGEST_CONFIG_DIR"],
+            str(config(Path("runtime.sqlite3")).config_dir),
+        )
         self.assertEqual(request.environment["RESEARCH_DIGEST_ANALYZER"], "codex")
         self.assertEqual(request.environment["RESEARCH_DIGEST_CODEX_MODEL"], "codex-test")
         self.assertEqual(
@@ -105,6 +109,7 @@ class SchedulerTests(unittest.TestCase):
         scheduled_text = request.windows_action_arguments
         self.assertIn("research-digest run", scheduled_text)
         self.assertIn("RESEARCH_DIGEST_DB=", scheduled_text)
+        self.assertIn("RESEARCH_DIGEST_CONFIG_DIR=", scheduled_text)
         self.assertIn("/home/me/.nvm/versions/node/v22.22.2/bin", scheduled_text)
         self.assertNotIn("OPENAI_API_KEY", scheduled_text)
         self.assertNotIn("CODEX_API_KEY", scheduled_text)
@@ -249,6 +254,46 @@ class SchedulerTests(unittest.TestCase):
         self.assertEqual(status.state, "Ready")
         self.assertEqual(status.last_task_result, 0)
         self.assertEqual(status.execute, "wsl.exe")
+
+    def test_windows_status_accepts_large_unsigned_task_result(self) -> None:
+        runner = FakeRunner(
+            stdout=json.dumps(
+                {
+                    "installed": True,
+                    "state": "Ready",
+                    "last_task_result": 3221225786,
+                    "last_run_time": "2026-08-18T06:00:01.0000000",
+                    "next_run_time": "2026-08-19T06:00:00.0000000",
+                    "execute": "wsl.exe",
+                    "arguments": "-d Ubuntu --exec research-digest run",
+                }
+            )
+        )
+        backend = WindowsTaskSchedulerBackend(powershell_path="powershell.exe", runner=runner)
+
+        status = backend.status(task_name=DEFAULT_TASK_NAME)
+
+        self.assertTrue(status.installed)
+        self.assertEqual(status.state, "Ready")
+        self.assertEqual(status.last_task_result, 3221225786)
+        self.assertEqual(status.next_run_time, "2026-08-19T06:00:00.0000000")
+
+    def test_windows_status_script_uses_64_bit_last_task_result(self) -> None:
+        runner = FakeRunner(
+            stdout=json.dumps(
+                {
+                    "installed": False,
+                    "message": "Schedule is not installed.",
+                }
+            )
+        )
+        backend = WindowsTaskSchedulerBackend(powershell_path="powershell.exe", runner=runner)
+
+        backend.status(task_name=DEFAULT_TASK_NAME)
+
+        script = runner.calls[0][-1]
+        self.assertIn("[int64]$info.LastTaskResult", script)
+        self.assertNotIn("[int]$info.LastTaskResult", script)
 
     def test_windows_backend_sanitizes_nonzero_failure_at_cli_layer(self) -> None:
         runner = FakeRunner(returncode=1, stderr="failed with OPENAI_API_KEY=sk-secret123456789")

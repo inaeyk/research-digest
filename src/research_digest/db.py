@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from research_digest.errors import sanitize_error_text
 from research_digest.models import (
@@ -21,6 +21,7 @@ from research_digest.models import (
     CollectionIntelligenceSnapshot,
     ConnectionOrigin,
     DateSelection,
+    FeedbackAnswer,
     FeedbackLabel,
     InterestProfile,
     LibraryCollection,
@@ -34,18 +35,25 @@ from research_digest.models import (
     LibrarySearchDocument,
     LibraryTag,
     LibraryTagAssignment,
+    QuantitativeCalibrationState,
+    QuantitativeRelevanceCalibration,
     ReadingPriority,
     RunOrigin,
+    SuggestedInterestProfile,
     TagOrigin,
     datetime_from_db,
     datetime_to_db,
     utc_now,
 )
+from research_digest.run_locks import RunOwnerState, process_run_owner_state
+
+if TYPE_CHECKING:
+    from research_digest.preselection import AbstractPreselectionDecision
 
 SOURCE_ARXIV = "arxiv"
 SCHEMA_VERSION_KEY = "schema_version"
 LAST_MIGRATION_BACKUP_KEY = "last_migration_backup_path"
-CURRENT_SCHEMA_VERSION = 13
+CURRENT_SCHEMA_VERSION = 16
 APP_RUN_STARTING = "STARTING"
 APP_RUN_RUNNING = "RUNNING"
 APP_RUN_COMPLETED = "COMPLETED"
@@ -76,6 +84,21 @@ class RunLock:
     name: str
     owner: str
     acquired_at: datetime
+
+
+@dataclass(frozen=True)
+class AbandonedRunRecovery:
+    run_id: int
+    recovered: bool
+    status_before: str
+    status_after: str
+    retrieved_count: int
+    stored_count: int
+    preselected_count: int
+    skipped_analysis_count: int
+    analyzed_count: int
+    relevant_count: int
+    message: str
 
 
 @dataclass(frozen=True)
@@ -1321,28 +1344,256 @@ class Database:
             ).fetchall()
         return [_feedback_from_row(row) for row in rows]
 
+    def get_quantitative_calibration_for_run(
+        self,
+        run_id: int,
+    ) -> QuantitativeRelevanceCalibration | None:
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM quantitative_relevance_calibrations WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+        return _quantitative_calibration_from_row(row) if row is not None else None
+
+    def list_quantitative_calibrations(
+        self,
+        *,
+        profile_id: int | None = None,
+        state: str | None = None,
+    ) -> list[QuantitativeRelevanceCalibration]:
+        clauses: list[str] = []
+        params: list[object] = []
+        if profile_id is not None:
+            clauses.append("profile_id = ?")
+            params.append(profile_id)
+        if state is not None:
+            clauses.append("state = ?")
+            params.append(state)
+        where = "WHERE " + " AND ".join(clauses) if clauses else ""
+        with self._connection() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT *
+                FROM quantitative_relevance_calibrations
+                {where}
+                ORDER BY created_at DESC, id DESC
+                """,
+                tuple(params),
+            ).fetchall()
+        return [_quantitative_calibration_from_row(row) for row in rows]
+
+    def has_completed_quantitative_calibration(
+        self,
+        *,
+        article_id: int,
+        profile_id: int,
+    ) -> bool:
+        with self._connection() as conn:
+            row = conn.execute(
+                """
+                SELECT 1
+                FROM quantitative_relevance_calibrations
+                WHERE article_id = ?
+                    AND profile_id = ?
+                    AND state = 'COMPLETED'
+                LIMIT 1
+                """,
+                (article_id, profile_id),
+            ).fetchone()
+        return row is not None
+
+    def create_quantitative_calibration_skipped(
+        self,
+        *,
+        run_id: int,
+        profile_id: int,
+        profile_fingerprint: str,
+    ) -> QuantitativeRelevanceCalibration:
+        now = datetime_to_db(utc_now())
+        with self._connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO quantitative_relevance_calibrations (
+                    run_id, profile_id, profile_fingerprint, state, created_at
+                )
+                VALUES (?, ?, ?, 'SKIPPED', ?)
+                ON CONFLICT(run_id) DO NOTHING
+                """,
+                (run_id, profile_id, profile_fingerprint, now),
+            )
+            row = conn.execute(
+                "SELECT * FROM quantitative_relevance_calibrations WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+        if row is None:
+            raise RuntimeError("failed to load calibration sampling decision")
+        return _quantitative_calibration_from_row(row)
+
+    def create_quantitative_calibration_prompt(
+        self,
+        *,
+        run_id: int,
+        article_id: int,
+        profile_id: int,
+        profile_fingerprint: str,
+        model_relevance_score: float,
+    ) -> QuantitativeRelevanceCalibration:
+        if model_relevance_score < 0 or model_relevance_score > 1:
+            raise ValueError("model relevance score must be between 0 and 1")
+        now = datetime_to_db(utc_now())
+        with self._connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO quantitative_relevance_calibrations (
+                    run_id, article_id, profile_id, profile_fingerprint,
+                    model_relevance_score, state, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, 'PENDING', ?)
+                ON CONFLICT(run_id) DO NOTHING
+                """,
+                (
+                    run_id,
+                    article_id,
+                    profile_id,
+                    profile_fingerprint,
+                    model_relevance_score,
+                    now,
+                ),
+            )
+            row = conn.execute(
+                "SELECT * FROM quantitative_relevance_calibrations WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+        if row is None:
+            raise RuntimeError("failed to load calibration prompt")
+        return _quantitative_calibration_from_row(row)
+
+    def complete_quantitative_calibration(
+        self,
+        *,
+        calibration_id: int,
+        user_relevance_score: float,
+    ) -> QuantitativeRelevanceCalibration:
+        if user_relevance_score < 0 or user_relevance_score > 1:
+            raise ValueError("user relevance score must be between 0 and 1")
+        completed_at = datetime_to_db(utc_now())
+        with self._connection() as conn:
+            conn.execute(
+                """
+                UPDATE quantitative_relevance_calibrations
+                SET state = 'COMPLETED',
+                    user_relevance_score = ?,
+                    completed_at = ?
+                WHERE id = ? AND state = 'PENDING'
+                """,
+                (user_relevance_score, completed_at, calibration_id),
+            )
+            row = conn.execute(
+                "SELECT * FROM quantitative_relevance_calibrations WHERE id = ?",
+                (calibration_id,),
+            ).fetchone()
+        if row is None:
+            raise ValueError(f"calibration {calibration_id} does not exist")
+        return _quantitative_calibration_from_row(row)
+
+    def dismiss_quantitative_calibration(
+        self,
+        *,
+        calibration_id: int,
+    ) -> QuantitativeRelevanceCalibration:
+        completed_at = datetime_to_db(utc_now())
+        with self._connection() as conn:
+            conn.execute(
+                """
+                UPDATE quantitative_relevance_calibrations
+                SET state = 'DISMISSED',
+                    completed_at = ?
+                WHERE id = ? AND state = 'PENDING'
+                """,
+                (completed_at, calibration_id),
+            )
+            row = conn.execute(
+                "SELECT * FROM quantitative_relevance_calibrations WHERE id = ?",
+                (calibration_id,),
+            ).fetchone()
+        if row is None:
+            raise ValueError(f"calibration {calibration_id} does not exist")
+        return _quantitative_calibration_from_row(row)
+
     def upsert_article_feedback(
         self,
         *,
         article_id: int,
         profile_id: int,
         profile_fingerprint: str,
-        feedback_label: FeedbackLabel,
+        feedback_label: FeedbackLabel | None = None,
+        profile_match: FeedbackAnswer | None = None,
+        personal_interest: FeedbackAnswer | None = None,
+        clear_profile_match: bool = False,
+        clear_personal_interest: bool = False,
     ) -> ArticleFeedback:
+        if clear_profile_match and (feedback_label is not None or profile_match is not None):
+            raise ValueError("profile match cannot be both answered and cleared")
+        if clear_personal_interest and personal_interest is not None:
+            raise ValueError("personal interest cannot be both answered and cleared")
+        if profile_match is None and feedback_label is not None:
+            profile_match = "YES" if feedback_label == "RELEVANT" else "NO"
+        if feedback_label is None and profile_match is not None:
+            feedback_label = "RELEVANT" if profile_match == "YES" else "NOT_RELEVANT"
+        if (
+            feedback_label is None
+            and profile_match is None
+            and personal_interest is None
+            and not clear_profile_match
+            and not clear_personal_interest
+        ):
+            raise ValueError("at least one feedback answer is required")
         now = datetime_to_db(utc_now())
         with self._connection() as conn:
             conn.execute(
                 """
                 INSERT INTO article_feedback (
                     article_id, profile_id, profile_fingerprint, feedback_label,
-                    created_at, updated_at
+                    profile_match, personal_interest, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(article_id, profile_id, profile_fingerprint) DO UPDATE SET
-                    feedback_label = excluded.feedback_label,
+                    feedback_label = CASE
+                        WHEN ? THEN NULL
+                        ELSE COALESCE(
+                            excluded.feedback_label,
+                            article_feedback.feedback_label
+                        )
+                    END,
+                    profile_match = CASE
+                        WHEN ? THEN NULL
+                        ELSE COALESCE(
+                            excluded.profile_match,
+                            article_feedback.profile_match
+                        )
+                    END,
+                    personal_interest = CASE
+                        WHEN ? THEN NULL
+                        ELSE COALESCE(
+                            excluded.personal_interest,
+                            article_feedback.personal_interest
+                        )
+                    END,
                     updated_at = excluded.updated_at
                 """,
-                (article_id, profile_id, profile_fingerprint, feedback_label, now, now),
+                (
+                    article_id,
+                    profile_id,
+                    profile_fingerprint,
+                    feedback_label,
+                    profile_match,
+                    personal_interest,
+                    now,
+                    now,
+                    int(clear_profile_match),
+                    int(clear_profile_match),
+                    int(clear_personal_interest),
+                ),
             )
             feedback = _get_article_feedback(
                 conn,
@@ -1353,6 +1604,143 @@ class Database:
         if feedback is None:
             raise RuntimeError("failed to load saved article feedback")
         return feedback
+
+    def list_new_interest_feedback(
+        self,
+        *,
+        profile_id: int,
+        profile_fingerprint: str,
+        limit: int | None = None,
+    ) -> list[ArticleFeedback]:
+        if limit is not None and limit <= 0:
+            raise ValueError("new-interest feedback limit must be positive")
+        limit_clause = "" if limit is None else "LIMIT ?"
+        params: list[object] = [profile_id, profile_fingerprint]
+        if limit is not None:
+            params.append(limit)
+        with self._connection() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT * FROM article_feedback
+                WHERE profile_id = ?
+                  AND profile_fingerprint = ?
+                  AND profile_match = 'NO'
+                  AND personal_interest = 'YES'
+                ORDER BY updated_at DESC, id DESC
+                {limit_clause}
+                """,
+                tuple(params),
+            ).fetchall()
+        return [_feedback_from_row(row) for row in rows]
+
+    def upsert_suggested_interest_profile(
+        self,
+        *,
+        profile_id: int,
+        profile_fingerprint: str,
+        suggested_name: str,
+        suggested_description: str,
+        evidence_article_ids: Sequence[int],
+        explanation: str,
+        suggestion_key: str,
+        provenance: dict[str, object],
+    ) -> SuggestedInterestProfile:
+        now = datetime_to_db(utc_now())
+        with self._connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO suggested_interest_profiles (
+                    profile_id, profile_fingerprint, suggested_name,
+                    suggested_description, evidence_article_ids_json, explanation,
+                    suggestion_key, provenance_json, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(profile_id, profile_fingerprint, suggestion_key) DO UPDATE SET
+                    suggested_name = excluded.suggested_name,
+                    suggested_description = excluded.suggested_description,
+                    evidence_article_ids_json = excluded.evidence_article_ids_json,
+                    explanation = excluded.explanation,
+                    provenance_json = excluded.provenance_json
+                WHERE suggested_interest_profiles.dismissed_at IS NULL
+                  AND suggested_interest_profiles.accepted_profile_id IS NULL
+                """,
+                (
+                    profile_id,
+                    profile_fingerprint,
+                    suggested_name,
+                    suggested_description,
+                    json.dumps(list(evidence_article_ids)),
+                    explanation,
+                    suggestion_key,
+                    json.dumps(provenance, sort_keys=True),
+                    now,
+                ),
+            )
+            suggestion = _get_suggested_interest_profile(
+                conn,
+                profile_id=profile_id,
+                profile_fingerprint=profile_fingerprint,
+                suggestion_key=suggestion_key,
+            )
+        if suggestion is None:
+            raise RuntimeError("failed to load suggested interest profile")
+        return suggestion
+
+    def list_suggested_interest_profiles(
+        self,
+        *,
+        profile_id: int,
+        profile_fingerprint: str,
+        include_dismissed: bool = False,
+    ) -> list[SuggestedInterestProfile]:
+        where = "profile_id = ? AND profile_fingerprint = ?"
+        params: list[object] = [profile_id, profile_fingerprint]
+        if not include_dismissed:
+            where += " AND dismissed_at IS NULL AND accepted_profile_id IS NULL"
+        with self._connection() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT *
+                FROM suggested_interest_profiles
+                WHERE {where}
+                ORDER BY created_at DESC, id DESC
+                """,
+                tuple(params),
+            ).fetchall()
+        return [_suggested_interest_profile_from_row(row) for row in rows]
+
+    def dismiss_suggested_interest_profile(self, suggestion_id: int) -> None:
+        if suggestion_id <= 0:
+            raise ValueError("suggestion id must be positive")
+        with self._connection() as conn:
+            conn.execute(
+                """
+                UPDATE suggested_interest_profiles
+                SET dismissed_at = ?
+                WHERE id = ?
+                """,
+                (datetime_to_db(utc_now()), suggestion_id),
+            )
+
+    def accept_suggested_interest_profile(
+        self,
+        *,
+        suggestion_id: int,
+        accepted_profile_id: int,
+    ) -> None:
+        if suggestion_id <= 0:
+            raise ValueError("suggestion id must be positive")
+        if accepted_profile_id <= 0:
+            raise ValueError("accepted profile id must be positive")
+        with self._connection() as conn:
+            conn.execute(
+                """
+                UPDATE suggested_interest_profiles
+                SET accepted_profile_id = ?
+                WHERE id = ?
+                """,
+                (accepted_profile_id, suggestion_id),
+            )
 
     def create_app_run(
         self,
@@ -1391,8 +1779,42 @@ class Database:
     def mark_app_run_running(self, run_id: int) -> None:
         with self._connection() as conn:
             conn.execute(
-                "UPDATE app_runs SET status = ? WHERE id = ?",
-                (APP_RUN_RUNNING, run_id),
+                "UPDATE app_runs SET status = ?, progress_stage = ? WHERE id = ?",
+                (APP_RUN_RUNNING, "running", run_id),
+            )
+
+    def update_app_run_progress(
+        self,
+        run_id: int,
+        *,
+        progress_stage: str,
+        retrieved_count: int | None = None,
+        stored_count: int | None = None,
+        preselected_count: int | None = None,
+        skipped_analysis_count: int | None = None,
+        analyzed_count: int | None = None,
+        relevant_count: int | None = None,
+        progress_message: str | None = None,
+    ) -> None:
+        assignments = ["progress_stage = ?", "progress_message = ?"]
+        params: list[object] = [progress_stage, progress_message]
+        for column, value in (
+            ("retrieved_count", retrieved_count),
+            ("stored_count", stored_count),
+            ("preselected_count", preselected_count),
+            ("skipped_analysis_count", skipped_analysis_count),
+            ("analyzed_count", analyzed_count),
+            ("relevant_count", relevant_count),
+        ):
+            if value is None:
+                continue
+            assignments.append(f"{column} = ?")
+            params.append(value)
+        params.append(run_id)
+        with self._connection() as conn:
+            conn.execute(
+                f"UPDATE app_runs SET {', '.join(assignments)} WHERE id = ?",
+                tuple(params),
             )
 
     def finish_app_run(
@@ -1423,7 +1845,8 @@ class Database:
                     relevant_count = ?, error_message = ?,
                     requested_source_dates_json = ?, covered_source_dates_json = ?,
                     empty_source_dates_json = ?, incomplete_source_dates_json = ?,
-                    retrieval_complete = ?, retrieval_safety_limit = ?
+                    retrieval_complete = ?, retrieval_safety_limit = ?,
+                    progress_stage = ?, progress_message = ?
                 WHERE id = ?
                 """,
                 (
@@ -1442,6 +1865,8 @@ class Database:
                     json.dumps(list(incomplete_source_dates)),
                     int(retrieval_complete),
                     retrieval_safety_limit,
+                    status.lower(),
+                    error_message,
                     run_id,
                 ),
             )
@@ -1479,10 +1904,12 @@ class Database:
                         covered_source_dates_json,
                         empty_source_dates_json,
                         incomplete_source_dates_json,
-                        retrieval_complete,
-                        retrieval_safety_limit
-                    FROM app_runs
-                    ORDER BY id DESC
+                    retrieval_complete,
+                    retrieval_safety_limit,
+                    progress_stage,
+                    progress_message
+                FROM app_runs
+                ORDER BY id DESC
                     """,
                     (
                         APP_RUN_RUNNING,
@@ -1492,6 +1919,18 @@ class Database:
                     ),
                 ).fetchall()
             )
+
+    def get_app_run(self, run_id: int) -> sqlite3.Row | None:
+        with self._connection() as conn:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM app_runs
+                WHERE id = ?
+                """,
+                (run_id,),
+            ).fetchone()
+        return cast(sqlite3.Row | None, row)
 
     def mark_source_date_covered(
         self,
@@ -1600,12 +2039,97 @@ class Database:
             ).fetchone()
         return cast(sqlite3.Row | None, row)
 
+    def save_preselection_decisions(
+        self,
+        *,
+        run_id: int,
+        profile_id: int,
+        profile_fingerprint: str,
+        source_name: str,
+        source_fingerprint: str | None,
+        article_by_key: Mapping[str, Article],
+        decisions: Sequence[AbstractPreselectionDecision],
+    ) -> None:
+        if not decisions:
+            return
+        now_text = datetime_to_db(utc_now())
+        rows: list[tuple[object, ...]] = []
+        for decision in decisions:
+            article = article_by_key.get(decision.article_id)
+            if article is None or article.id is None:
+                continue
+            rows.append(
+                (
+                    run_id,
+                    article.id,
+                    profile_id,
+                    profile_fingerprint,
+                    source_name,
+                    source_fingerprint,
+                    decision.preselection_score,
+                    decision.preselection_threshold,
+                    int(decision.selected),
+                    decision.stage,
+                    decision.decision_origin,
+                    decision.preselector_version,
+                    decision.reason,
+                    now_text,
+                )
+            )
+        if not rows:
+            return
+        with self._connection() as conn:
+            conn.executemany(
+                """
+                INSERT INTO preselection_decisions (
+                    run_id, article_id, profile_id, profile_fingerprint,
+                    source_name, source_fingerprint, preselection_score,
+                    preselection_threshold, passed, stage, decision_origin,
+                    preselector_version, reason, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(run_id, article_id) DO UPDATE SET
+                    profile_id = excluded.profile_id,
+                    profile_fingerprint = excluded.profile_fingerprint,
+                    source_name = excluded.source_name,
+                    source_fingerprint = excluded.source_fingerprint,
+                    preselection_score = excluded.preselection_score,
+                    preselection_threshold = excluded.preselection_threshold,
+                    passed = excluded.passed,
+                    stage = excluded.stage,
+                    decision_origin = excluded.decision_origin,
+                    preselector_version = excluded.preselector_version,
+                    reason = excluded.reason
+                """,
+                rows,
+            )
+
+    def list_preselection_decisions(self, *, run_id: int) -> list[sqlite3.Row]:
+        with self._connection() as conn:
+            return list(
+                conn.execute(
+                    """
+                    SELECT
+                        pd.*,
+                        a.source,
+                        a.source_article_id,
+                        a.title
+                    FROM preselection_decisions AS pd
+                    JOIN articles AS a ON a.id = pd.article_id
+                    WHERE pd.run_id = ?
+                    ORDER BY pd.id ASC
+                    """,
+                    (run_id,),
+                ).fetchall()
+            )
+
     def acquire_run_lock(
         self,
         *,
         owner: str,
         stale_after_seconds: float,
         now: datetime | None = None,
+        owner_state_checker: Callable[[str], RunOwnerState] = process_run_owner_state,
     ) -> RunLock:
         acquired_at = utc_now() if now is None else now
         stale_cutoff = acquired_at - timedelta(seconds=stale_after_seconds)
@@ -1617,7 +2141,10 @@ class Database:
             ).fetchone()
             if row is not None:
                 locked_at = datetime_from_db(str(row["acquired_at"]))
-                if locked_at > stale_cutoff:
+                owner_state = owner_state_checker(str(row["owner"]))
+                if owner_state == RunOwnerState.ALIVE:
+                    raise RunAlreadyActiveError("another digest run is already active")
+                if owner_state == RunOwnerState.UNKNOWN and locked_at > stale_cutoff:
                     raise RunAlreadyActiveError("another digest run is already active")
                 _mark_unfinished_runs_failed(conn, completed_at=acquired_at_text)
                 conn.execute("DELETE FROM run_locks WHERE name = ?", (DIGEST_RUN_LOCK,))
@@ -1636,6 +2163,95 @@ class Database:
                 (DIGEST_RUN_LOCK, owner, acquired_at_text, acquired_at_text),
             )
         return RunLock(name=DIGEST_RUN_LOCK, owner=owner, acquired_at=acquired_at)
+
+    def get_run_lock(self) -> RunLock | None:
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM run_locks WHERE name = ?",
+                (DIGEST_RUN_LOCK,),
+            ).fetchone()
+        if row is None:
+            return None
+        return RunLock(
+            name=str(row["name"]),
+            owner=str(row["owner"]),
+            acquired_at=datetime_from_db(str(row["acquired_at"])),
+        )
+
+    def recover_abandoned_run(
+        self,
+        *,
+        run_id: int,
+        force_uninspectable_owner: bool = False,
+        now: datetime | None = None,
+        owner_state_checker: Callable[[str], RunOwnerState] = process_run_owner_state,
+    ) -> AbandonedRunRecovery:
+        completed_at = datetime_to_db(utc_now() if now is None else now)
+        message = "Digest run was recovered after its owner process stopped before completion."
+        with self._immediate_connection() as conn:
+            run = conn.execute("SELECT * FROM app_runs WHERE id = ?", (run_id,)).fetchone()
+            if run is None:
+                raise ValueError(f"app run {run_id} does not exist")
+            status_before = str(run["status"])
+            if run["completed_at"] is not None or status_before not in (
+                APP_RUN_STARTING,
+                APP_RUN_RUNNING,
+                "running",
+            ):
+                return AbandonedRunRecovery(
+                    run_id=run_id,
+                    recovered=False,
+                    status_before=status_before,
+                    status_after=status_before,
+                    retrieved_count=int(run["retrieved_count"]),
+                    stored_count=int(run["stored_count"]),
+                    preselected_count=int(run["preselected_count"]),
+                    skipped_analysis_count=int(run["skipped_analysis_count"]),
+                    analyzed_count=int(run["analyzed_count"]),
+                    relevant_count=int(run["relevant_count"]),
+                    message="Digest run is already terminal.",
+                )
+
+            lock = conn.execute(
+                "SELECT * FROM run_locks WHERE name = ?",
+                (DIGEST_RUN_LOCK,),
+            ).fetchone()
+            if lock is not None:
+                owner_state = owner_state_checker(str(lock["owner"]))
+                if owner_state == RunOwnerState.ALIVE:
+                    raise RunAlreadyActiveError("another digest run is still active")
+                if owner_state == RunOwnerState.UNKNOWN and not force_uninspectable_owner:
+                    raise RunLockError(
+                        "digest run owner cannot be verified; use explicit recovery only "
+                        "after confirming the owner process is gone"
+                    )
+
+            _mark_unfinished_runs_failed(
+                conn,
+                completed_at=completed_at,
+                message=message,
+                run_id=run_id,
+            )
+            conn.execute("DELETE FROM run_locks WHERE name = ?", (DIGEST_RUN_LOCK,))
+            recovered = conn.execute(
+                "SELECT * FROM app_runs WHERE id = ?",
+                (run_id,),
+            ).fetchone()
+            if recovered is None:
+                raise RuntimeError("recovered app run disappeared")
+            return AbandonedRunRecovery(
+                run_id=run_id,
+                recovered=True,
+                status_before=status_before,
+                status_after=str(recovered["status"]),
+                retrieved_count=int(recovered["retrieved_count"]),
+                stored_count=int(recovered["stored_count"]),
+                preselected_count=int(recovered["preselected_count"]),
+                skipped_analysis_count=int(recovered["skipped_analysis_count"]),
+                analyzed_count=int(recovered["analyzed_count"]),
+                relevant_count=int(recovered["relevant_count"]),
+                message=message,
+            )
 
     def release_run_lock(self, *, owner: str) -> None:
         with self._connection() as conn:
@@ -1794,6 +2410,12 @@ def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
         (table_name,),
     ).fetchone()
     return row is not None
+
+
+def _table_columns(conn: sqlite3.Connection, table_name: str) -> set[str]:
+    if not _table_exists(conn, table_name):
+        return set()
+    return {str(row["name"]) for row in conn.execute(f"PRAGMA table_info({table_name})")}
 
 
 def _ensure_default_source_config(conn: sqlite3.Connection) -> None:
@@ -2204,6 +2826,191 @@ def _migration_library_context_intelligence(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migration_feedback_interests(conn: sqlite3.Connection) -> None:
+    if _table_exists(conn, "article_feedback"):
+        columns = _table_columns(conn, "article_feedback")
+        needs_rebuild = (
+            "profile_match" not in columns
+            or "personal_interest" not in columns
+            or _feedback_label_is_not_null(conn)
+        )
+        if needs_rebuild:
+            conn.execute("ALTER TABLE article_feedback RENAME TO article_feedback_old")
+            _create_article_feedback_table_v14(conn)
+            old_columns = _table_columns(conn, "article_feedback_old")
+            profile_match_sql = (
+                "profile_match"
+                if "profile_match" in old_columns
+                else """
+                CASE feedback_label
+                    WHEN 'RELEVANT' THEN 'YES'
+                    WHEN 'NOT_RELEVANT' THEN 'NO'
+                    ELSE NULL
+                END
+                """
+            )
+            personal_interest_sql = (
+                "personal_interest" if "personal_interest" in old_columns else "NULL"
+            )
+            conn.execute(
+                f"""
+                INSERT INTO article_feedback (
+                    id, article_id, profile_id, profile_fingerprint, feedback_label,
+                    profile_match, personal_interest, created_at, updated_at
+                )
+                SELECT
+                    id, article_id, profile_id, profile_fingerprint, feedback_label,
+                    {profile_match_sql}, {personal_interest_sql}, created_at, updated_at
+                FROM article_feedback_old
+                """
+            )
+            conn.execute("DROP TABLE article_feedback_old")
+    else:
+        _create_article_feedback_table_v14(conn)
+
+    _execute_schema_statements(
+        conn,
+        (
+            """
+            CREATE TABLE IF NOT EXISTS suggested_interest_profiles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            profile_id INTEGER NOT NULL,
+            profile_fingerprint TEXT NOT NULL,
+            suggested_name TEXT NOT NULL,
+            suggested_description TEXT NOT NULL,
+            evidence_article_ids_json TEXT NOT NULL,
+            explanation TEXT NOT NULL,
+            suggestion_key TEXT NOT NULL,
+            provenance_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            dismissed_at TEXT,
+            accepted_profile_id INTEGER,
+            UNIQUE(profile_id, profile_fingerprint, suggestion_key),
+            FOREIGN KEY(profile_id) REFERENCES interest_profiles(id) ON DELETE CASCADE,
+            FOREIGN KEY(accepted_profile_id) REFERENCES interest_profiles(id) ON DELETE SET NULL
+            )
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_suggested_interest_profiles_profile
+            ON suggested_interest_profiles(profile_id, profile_fingerprint, dismissed_at)
+            """,
+        ),
+    )
+
+
+def _migration_quantitative_calibration_and_progress(conn: sqlite3.Connection) -> None:
+    if _table_exists(conn, "app_runs"):
+        columns = _table_columns(conn, "app_runs")
+        if "progress_stage" not in columns:
+            conn.execute("ALTER TABLE app_runs ADD COLUMN progress_stage TEXT")
+        if "progress_message" not in columns:
+            conn.execute("ALTER TABLE app_runs ADD COLUMN progress_message TEXT")
+    _execute_schema_statements(
+        conn,
+        (
+            """
+            CREATE TABLE IF NOT EXISTS quantitative_relevance_calibrations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id INTEGER NOT NULL UNIQUE,
+                article_id INTEGER,
+                profile_id INTEGER NOT NULL,
+                profile_fingerprint TEXT NOT NULL,
+                model_relevance_score REAL,
+                state TEXT NOT NULL,
+                user_relevance_score REAL,
+                created_at TEXT NOT NULL,
+                completed_at TEXT,
+                CHECK(state IN ('PENDING', 'COMPLETED', 'DISMISSED', 'SKIPPED')),
+                CHECK(model_relevance_score IS NULL OR (
+                    model_relevance_score >= 0 AND model_relevance_score <= 1
+                )),
+                CHECK(user_relevance_score IS NULL OR (
+                    user_relevance_score >= 0 AND user_relevance_score <= 1
+                )),
+                FOREIGN KEY(run_id) REFERENCES app_runs(id) ON DELETE CASCADE,
+                FOREIGN KEY(article_id) REFERENCES articles(id) ON DELETE CASCADE,
+                FOREIGN KEY(profile_id) REFERENCES interest_profiles(id) ON DELETE CASCADE
+            )
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_quantitative_calibrations_profile_article
+            ON quantitative_relevance_calibrations(profile_id, article_id, state)
+            """,
+        ),
+    )
+
+
+def _feedback_label_is_not_null(conn: sqlite3.Connection) -> bool:
+    for row in conn.execute("PRAGMA table_info(article_feedback)").fetchall():
+        if str(row["name"]) == "feedback_label":
+            return bool(row["notnull"])
+    return False
+
+
+def _create_article_feedback_table_v14(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE article_feedback (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        article_id INTEGER NOT NULL,
+        profile_id INTEGER NOT NULL,
+        profile_fingerprint TEXT NOT NULL,
+        feedback_label TEXT,
+        profile_match TEXT,
+        personal_interest TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(article_id, profile_id, profile_fingerprint),
+        FOREIGN KEY(article_id) REFERENCES articles(id) ON DELETE CASCADE,
+        FOREIGN KEY(profile_id) REFERENCES interest_profiles(id) ON DELETE CASCADE
+        )
+        """
+    )
+
+
+def _migration_preselection_decisions(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS preselection_decisions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id INTEGER NOT NULL,
+            article_id INTEGER NOT NULL,
+            profile_id INTEGER NOT NULL,
+            profile_fingerprint TEXT NOT NULL,
+            source_name TEXT NOT NULL,
+            source_fingerprint TEXT,
+            preselection_score REAL,
+            preselection_threshold REAL,
+            passed INTEGER NOT NULL,
+            stage TEXT NOT NULL,
+            decision_origin TEXT NOT NULL,
+            preselector_version TEXT NOT NULL,
+            reason TEXT,
+            created_at TEXT NOT NULL,
+            UNIQUE(run_id, article_id),
+            FOREIGN KEY(run_id) REFERENCES app_runs(id) ON DELETE CASCADE,
+            FOREIGN KEY(article_id) REFERENCES articles(id) ON DELETE CASCADE,
+            FOREIGN KEY(profile_id) REFERENCES interest_profiles(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_preselection_decisions_run
+        ON preselection_decisions(run_id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_preselection_decisions_scope
+        ON preselection_decisions(
+            profile_id, profile_fingerprint, source_name, source_fingerprint,
+            preselector_version
+        )
+        """
+    )
+
+
 MIGRATIONS: Sequence[SchemaMigration] = (
     SchemaMigration(1, "core m1/m2 tables", _migration_core_tables),
     SchemaMigration(2, "profile-fingerprinted relevance analyses", _migration_profile_fingerprints),
@@ -2234,6 +3041,21 @@ MIGRATIONS: Sequence[SchemaMigration] = (
         "library context intelligence",
         _migration_library_context_intelligence,
     ),
+    SchemaMigration(
+        14,
+        "feedback interests and suggested profiles",
+        _migration_feedback_interests,
+    ),
+    SchemaMigration(
+        15,
+        "quantitative calibration and run progress",
+        _migration_quantitative_calibration_and_progress,
+    ),
+    SchemaMigration(
+        16,
+        "preselection decision evidence",
+        _migration_preselection_decisions,
+    ),
 )
 
 
@@ -2250,11 +3072,15 @@ def _mark_unfinished_runs_failed(
     *,
     completed_at: str,
     started_before: str | None = None,
+    message: str = "Previous digest run appears to have stopped before completion.",
+    run_id: int | None = None,
 ) -> None:
     params: list[object] = [
         completed_at,
         APP_RUN_FAILED,
-        "Previous digest run appears to have stopped before completion.",
+        message,
+        APP_RUN_FAILED.lower(),
+        message,
         APP_RUN_STARTING,
         APP_RUN_RUNNING,
         "running",
@@ -2263,11 +3089,16 @@ def _mark_unfinished_runs_failed(
     if started_before is not None:
         started_clause = " AND started_at <= ?"
         params.append(started_before)
+    run_clause = ""
+    if run_id is not None:
+        run_clause = " AND id = ?"
+        params.append(run_id)
     conn.execute(
         f"""
         UPDATE app_runs
-        SET completed_at = ?, status = ?, error_message = ?
-        WHERE completed_at IS NULL AND status IN (?, ?, ?){started_clause}
+        SET completed_at = ?, status = ?, error_message = ?,
+            progress_stage = ?, progress_message = ?
+        WHERE completed_at IS NULL AND status IN (?, ?, ?){started_clause}{run_clause}
         """,
         tuple(params),
     )
@@ -2670,6 +3501,24 @@ def _get_article_feedback(
     return _feedback_from_row(row) if row is not None else None
 
 
+def _get_suggested_interest_profile(
+    conn: sqlite3.Connection,
+    *,
+    profile_id: int,
+    profile_fingerprint: str,
+    suggestion_key: str,
+) -> SuggestedInterestProfile | None:
+    row = conn.execute(
+        """
+        SELECT *
+        FROM suggested_interest_profiles
+        WHERE profile_id = ? AND profile_fingerprint = ? AND suggestion_key = ?
+        """,
+        (profile_id, profile_fingerprint, suggestion_key),
+    ).fetchone()
+    return _suggested_interest_profile_from_row(row) if row is not None else None
+
+
 def _profile_from_row(row: sqlite3.Row) -> InterestProfile:
     return InterestProfile(
         id=int(row["id"]),
@@ -2915,12 +3764,76 @@ def _collection_intelligence_snapshot_from_row(
 
 
 def _feedback_from_row(row: sqlite3.Row) -> ArticleFeedback:
+    columns = set(row.keys())
+    profile_match = row["profile_match"] if "profile_match" in columns else None
+    personal_interest = row["personal_interest"] if "personal_interest" in columns else None
+    feedback_label = row["feedback_label"] if "feedback_label" in columns else None
     return ArticleFeedback(
         id=int(row["id"]),
         article_id=int(row["article_id"]),
         profile_id=int(row["profile_id"]),
         profile_fingerprint=str(row["profile_fingerprint"]),
-        feedback_label=cast(FeedbackLabel, str(row["feedback_label"])),
+        feedback_label=(
+            cast(FeedbackLabel, str(feedback_label)) if feedback_label is not None else None
+        ),
+        profile_match=(
+            cast(FeedbackAnswer, str(profile_match)) if profile_match is not None else None
+        ),
+        personal_interest=(
+            cast(FeedbackAnswer, str(personal_interest))
+            if personal_interest is not None
+            else None
+        ),
         created_at=datetime_from_db(str(row["created_at"])),
         updated_at=datetime_from_db(str(row["updated_at"])),
+    )
+
+
+def _quantitative_calibration_from_row(
+    row: sqlite3.Row,
+) -> QuantitativeRelevanceCalibration:
+    article_id = row["article_id"]
+    model_score = row["model_relevance_score"]
+    user_score = row["user_relevance_score"]
+    completed_at = row["completed_at"]
+    return QuantitativeRelevanceCalibration(
+        id=int(row["id"]),
+        run_id=int(row["run_id"]),
+        article_id=int(article_id) if article_id is not None else None,
+        profile_id=int(row["profile_id"]),
+        profile_fingerprint=str(row["profile_fingerprint"]),
+        model_relevance_score=float(model_score) if model_score is not None else None,
+        state=cast(QuantitativeCalibrationState, str(row["state"])),
+        user_relevance_score=float(user_score) if user_score is not None else None,
+        created_at=datetime_from_db(str(row["created_at"])),
+        completed_at=(
+            datetime_from_db(str(completed_at)) if completed_at is not None else None
+        ),
+    )
+
+
+def _suggested_interest_profile_from_row(row: sqlite3.Row) -> SuggestedInterestProfile:
+    evidence = json.loads(str(row["evidence_article_ids_json"]))
+    if not isinstance(evidence, list):
+        evidence = []
+    provenance = json.loads(str(row["provenance_json"]))
+    if not isinstance(provenance, dict):
+        provenance = {"invalid_provenance": True}
+    dismissed_at = row["dismissed_at"]
+    accepted_profile_id = row["accepted_profile_id"]
+    return SuggestedInterestProfile(
+        id=int(row["id"]),
+        profile_id=int(row["profile_id"]),
+        profile_fingerprint=str(row["profile_fingerprint"]),
+        suggested_name=str(row["suggested_name"]),
+        suggested_description=str(row["suggested_description"]),
+        evidence_article_ids=tuple(int(value) for value in evidence),
+        explanation=str(row["explanation"]),
+        suggestion_key=str(row["suggestion_key"]),
+        provenance=cast(dict[str, object], provenance),
+        created_at=datetime_from_db(str(row["created_at"])),
+        dismissed_at=datetime_from_db(str(dismissed_at)) if dismissed_at is not None else None,
+        accepted_profile_id=(
+            int(accepted_profile_id) if accepted_profile_id is not None else None
+        ),
     )

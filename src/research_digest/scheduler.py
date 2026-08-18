@@ -302,6 +302,7 @@ def validate_time_of_day(value: str) -> None:
 def _scheduled_environment(config: AppConfig, db_path: Path) -> dict[str, str]:
     values = {
         "RESEARCH_DIGEST_DB": str(db_path),
+        "RESEARCH_DIGEST_CONFIG_DIR": str(config.config_dir),
         "RESEARCH_DIGEST_ANALYZER": config.analyzer_provider,
         "OPENAI_MODEL": config.openai_model,
         "RESEARCH_DIGEST_CODEX_TIMEOUT_SECONDS": str(config.codex_timeout_seconds),
@@ -429,7 +430,7 @@ def _status_script(task_name: str) -> str:
             "@{",
             "  installed = $true",
             "  state = [string]$task.State",
-            "  last_task_result = [int]$info.LastTaskResult",
+            "  last_task_result = [int64]$info.LastTaskResult",
             "  last_run_time = $info.LastRunTime.ToString('o')",
             "  next_run_time = $info.NextRunTime.ToString('o')",
             "  execute = [string]$action.Execute",

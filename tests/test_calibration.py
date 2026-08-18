@@ -10,6 +10,7 @@ from research_digest.models import (
     Article,
     ArticleFeedback,
     DigestItem,
+    FeedbackAnswer,
 )
 
 
@@ -56,6 +57,25 @@ def _feedback(article_id: int, label: str) -> ArticleFeedback:
     )
 
 
+def _two_question_feedback(
+    article_id: int,
+    *,
+    profile_match: FeedbackAnswer | None,
+    personal_interest: FeedbackAnswer | None,
+) -> ArticleFeedback:
+    return ArticleFeedback(
+        id=article_id,
+        article_id=article_id,
+        profile_id=1,
+        profile_fingerprint="fingerprint",
+        feedback_label=None,
+        profile_match=profile_match,
+        personal_interest=personal_interest,
+        created_at=datetime(2026, 8, 14, 12, 0, tzinfo=UTC),
+        updated_at=datetime(2026, 8, 14, 12, 0, tzinfo=UTC),
+    )
+
+
 class CalibrationTests(unittest.TestCase):
     def test_build_calibration_summary_counts_threshold_outcomes(self) -> None:
         items = [
@@ -86,6 +106,47 @@ class CalibrationTests(unittest.TestCase):
         self.assertEqual(summary.true_negative_count, 1)
         self.assertEqual(summary.precision, 0.5)
         self.assertEqual(summary.recall, 0.5)
+
+    def test_calibration_uses_profile_match_not_personal_interest(self) -> None:
+        items = [
+            _item(1, "2608.00001", 0.9),
+            _item(2, "2608.00002", 0.8),
+            _item(3, "2608.00003", 0.4),
+            _item(4, "2608.00004", 0.2),
+        ]
+        feedback = {
+            1: _two_question_feedback(1, profile_match="YES", personal_interest="YES"),
+            2: _two_question_feedback(2, profile_match="YES", personal_interest="NO"),
+            3: _two_question_feedback(3, profile_match="NO", personal_interest="YES"),
+            4: _two_question_feedback(4, profile_match="NO", personal_interest="NO"),
+        }
+
+        summary = build_calibration_summary(
+            items=items,
+            feedback_by_article_id=feedback,
+            threshold=0.6,
+        )
+
+        self.assertEqual(summary.feedback_count, 4)
+        self.assertEqual(summary.true_positive_count, 2)
+        self.assertEqual(summary.false_positive_count, 0)
+        self.assertEqual(summary.false_negative_count, 0)
+        self.assertEqual(summary.true_negative_count, 2)
+
+    def test_unanswered_profile_match_is_not_calibration_evidence(self) -> None:
+        summary = build_calibration_summary(
+            items=[_item(1, "2608.00001", 0.9)],
+            feedback_by_article_id={
+                1: _two_question_feedback(
+                    1,
+                    profile_match=None,
+                    personal_interest="YES",
+                )
+            },
+            threshold=0.6,
+        )
+
+        self.assertEqual(summary.feedback_count, 0)
 
     def test_precision_and_recall_are_absent_when_denominator_is_zero(self) -> None:
         summary = build_calibration_summary(

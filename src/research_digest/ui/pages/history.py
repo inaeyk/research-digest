@@ -12,6 +12,7 @@ from research_digest.db import (
     Database,
 )
 from research_digest.history import RunHistoryEntry, get_run_snapshot, list_run_history
+from research_digest.models import InterestProfile, profile_semantic_fingerprint
 from research_digest.ui.abstracts import render_abstract_control
 from research_digest.ui.common import get_database
 from research_digest.ui.library_controls import render_library_control_for_source_identity
@@ -44,7 +45,7 @@ def render() -> None:
 def _run_label(entry: RunHistoryEntry) -> str:
     return (
         f"{history_period_label(entry)} | {origin_label(entry)} | "
-        f"{history_status_label(entry)} | {entry.preselected_count} preselected | "
+        f"{history_status_label(entry)} | {entry.preselected_count} passed preselection | "
         f"{entry.relevant_count} relevant"
     )
 
@@ -58,9 +59,13 @@ def _render_entry(entry: RunHistoryEntry) -> None:
         col1, col2, col3, col4, col5 = st.columns(5)
         col1.metric("Status", history_status_label(entry))
         col2.metric("Retrieved", entry.retrieved_count)
-        col3.metric("Preselected", entry.preselected_count)
-        col4.metric("Analyzed", entry.analyzed_count)
+        col3.metric("Passed preselection", entry.preselected_count)
+        col4.metric("Total analyzed", entry.analyzed_count)
         col5.metric("Relevant", entry.relevant_count)
+        st.caption(
+            f"Preselected out: {entry.skipped_analysis_count}. "
+            "Total analyzed includes reused full analyses from earlier runs."
+        )
         st.caption(
             f"Started: {entry.started_at}. "
             f"Completed: {entry.completed_at or '-'}. "
@@ -84,6 +89,10 @@ def _render_entry(entry: RunHistoryEntry) -> None:
 def _render_snapshot(snapshot: dict[str, object], db: Database) -> None:
     import streamlit as st
 
+    profile = _snapshot_profile(db, snapshot)
+    profile_fingerprint_value = (
+        profile_semantic_fingerprint(profile) if profile is not None else None
+    )
     synthesis = snapshot.get("synthesis")
     if isinstance(synthesis, dict):
         with st.container(border=True):
@@ -138,6 +147,8 @@ def _render_snapshot(snapshot: dict[str, object], db: Database) -> None:
                         f"history:{snapshot.get('run_id', 'unknown')}:library:"
                         f"{source}:{source_article_id}"
                     ),
+                    profile=profile,
+                    profile_fingerprint_value=profile_fingerprint_value,
                 )
 
     skipped_articles = snapshot.get("skipped_articles")
@@ -170,6 +181,8 @@ def _render_snapshot(snapshot: dict[str, object], db: Database) -> None:
                         f"history:{snapshot.get('run_id', 'unknown')}:preselected:library:"
                         f"{source}:{source_article_id}"
                     ),
+                    profile=profile,
+                    profile_fingerprint_value=profile_fingerprint_value,
                 )
 
     unresolved_articles = snapshot.get("unresolved_articles")
@@ -202,7 +215,16 @@ def _render_snapshot(snapshot: dict[str, object], db: Database) -> None:
                         f"history:{snapshot.get('run_id', 'unknown')}:unresolved:library:"
                         f"{source}:{source_article_id}"
                     ),
+                    profile=profile,
+                    profile_fingerprint_value=profile_fingerprint_value,
                 )
+
+
+def _snapshot_profile(db: Database, snapshot: dict[str, object]) -> InterestProfile | None:
+    profile_id = snapshot.get("profile_id")
+    if not isinstance(profile_id, int):
+        return None
+    return db.get_interest_profile(profile_id)
 
 
 def _snapshot_source_identity(
@@ -224,6 +246,8 @@ def _render_snapshot_library_control(
     source: str,
     source_article_id: str,
     context: str,
+    profile: InterestProfile | None = None,
+    profile_fingerprint_value: str | None = None,
 ) -> None:
     if source == "unknown" or source_article_id == "unknown":
         return
@@ -232,6 +256,8 @@ def _render_snapshot_library_control(
         source=source,
         source_article_id=source_article_id,
         context=context,
+        profile=profile,
+        profile_fingerprint_value=profile_fingerprint_value,
     )
 
 

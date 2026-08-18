@@ -14,9 +14,11 @@ from research_digest.connections import (
 from research_digest.db import Database
 from research_digest.library_search import search_tokens
 from research_digest.models import (
+    AnalysisOrigin,
     AnalysisResult,
     Article,
     CollectionIntelligenceSnapshot,
+    DigestResult,
     LibraryCollection,
     LibraryContextOrigin,
     LibraryContextSuggestion,
@@ -164,6 +166,37 @@ def generate_library_context_for_item(
         ),
         revive=regenerate,
     )
+
+
+def generate_automatic_library_context_for_digest(
+    db: Database,
+    *,
+    digest: DigestResult,
+    generator: LibraryContextGenerator,
+    threshold: float,
+    max_candidates: int = DEFAULT_MAX_CONTEXT_CANDIDATES,
+    max_suggestions: int = DEFAULT_MAX_CONTEXT_SUGGESTIONS,
+) -> list[LibraryContextSuggestion]:
+    if threshold < 0 or threshold > 1:
+        raise ValueError("automatic Library context threshold must be between 0 and 1")
+    persisted: list[LibraryContextSuggestion] = []
+    for item in digest.items:
+        if item.analysis_origin != AnalysisOrigin.NEW_THIS_RUN:
+            continue
+        if item.analysis.relevance_score < threshold:
+            continue
+        persisted.extend(
+            generate_library_context_for_item(
+                db,
+                run_id=digest.run_id,
+                article=item.article,
+                analysis=item.analysis,
+                generator=generator,
+                max_candidates=max_candidates,
+                max_suggestions=max_suggestions,
+            )
+        )
+    return persisted
 
 
 def assign_library_context_suggestions(

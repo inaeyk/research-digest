@@ -28,7 +28,11 @@ from research_digest.models import (
     profile_semantic_fingerprint,
 )
 from research_digest.pipeline import run_digest
-from research_digest.preselection import TermOverlapPreselector
+from research_digest.preselection import (
+    AbstractPreselectionDecision,
+    AbstractPreselectionResult,
+    TermOverlapPreselector,
+)
 
 
 class StaticSource:
@@ -206,6 +210,60 @@ class ScriptedBatchAnalyzer:
         if isinstance(script, Mapping):
             return script
         raise AssertionError(f"unknown script: {script!r}")
+
+
+class ScorePreselector:
+    def __init__(
+        self,
+        scores: Mapping[str, float],
+        *,
+        preselection_fraction: float = 0.70,
+        version: str = "fake_model_abstract_v1",
+    ) -> None:
+        self.scores = scores
+        self.preselection_fraction = preselection_fraction
+        self.preselector_version = version
+        self.calls: list[tuple[str, ...]] = []
+
+    def preselect(
+        self,
+        *,
+        profile: InterestProfile,
+        articles: Sequence[Article],
+    ) -> AbstractPreselectionResult:
+        threshold = profile.relevance_threshold * self.preselection_fraction
+        decisions = []
+        self.calls.append(tuple(article.source_article_id for article in articles))
+        for item in articles:
+            key = article_analysis_key(item)
+            score = self.scores[key]
+            decisions.append(
+                AbstractPreselectionDecision(
+                    article_id=key,
+                    selected=score >= threshold,
+                    stage="model_abstract",
+                    matched_terms=(),
+                    reason="fake model score",
+                    preselection_score=score,
+                    preselection_threshold=threshold,
+                    preselector_version=self.preselector_version,
+                )
+            )
+        return AbstractPreselectionResult(tuple(decisions))
+
+
+class RaisingPreselector:
+    preselection_fraction = 0.70
+    preselector_version = "fake_model_abstract_v1"
+
+    def preselect(
+        self,
+        *,
+        profile: InterestProfile,
+        articles: Sequence[Article],
+    ) -> AbstractPreselectionResult:
+        del profile, articles
+        raise RuntimeError("stage one unavailable")
 
 
 def article(source_article_id: str, title: str, published_hour: int) -> Article:
@@ -590,6 +648,13 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(result.analyzed_count, 1)
         self.assertEqual(result.new_analysis_count, 1)
         self.assertEqual(analyzer.calls, ["2608.00001"])
+        self.assertIsNone(
+            self.db.get_analysis(
+                article_id=result.skipped_articles[0].id or 0,
+                profile_id=self.profile.id or 0,
+                profile_fingerprint=profile_semantic_fingerprint(self.profile),
+            )
+        )
         self.assertEqual(
             [item.article.source_article_id for item in result.items],
             ["2608.00001"],
@@ -598,6 +663,193 @@ class PipelineTests(unittest.TestCase):
             [article.source_article_id for article in result.skipped_articles],
             ["2608.00999"],
         )
+
+    def test_all_preselected_out_run_has_no_full_analysis_or_summary(self) -> None:
+        analyzer = FakeAnalyzer(self.analysis_payloads)
+        irrelevant = Article(
+            id=None,
+            source="arxiv",
+            source_article_id="2608.01999",
+            title="Detector calibration constants",
+            authors=["Grace Hopper"],
+            abstract="A procedure for measuring pixel gains in an accelerator detector.",
+            categories=["physics.ins-det"],
+            published_at=datetime(2026, 8, 14, 7, 0, tzinfo=UTC),
+            updated_at=datetime(2026, 8, 14, 7, 10, tzinfo=UTC),
+            abstract_url="http://arxiv.org/abs/2608.01999",
+            pdf_url=None,
+        )
+
+        result = run_digest(
+            db=self.db,
+            source=StaticSource([irrelevant]),
+            analyzer=analyzer,
+            profile_id=self.profile.id,
+            preselector=TermOverlapPreselector(),
+        )
+
+        self.assertEqual(result.preselected_count, 0)
+        self.assertEqual(result.skipped_analysis_count, 1)
+        self.assertEqual(result.items, [])
+        self.assertEqual(result.skipped_articles[0].abstract, irrelevant.abstract)
+        self.assertEqual(analyzer.calls, [])
+
+    def test_model_preselection_low_score_rejects_without_full_analysis(self) -> None:
+        analyzer = FakeAnalyzer(self.analysis_payloads)
+        candidate = article("2608.02001", "Detector calibration constants", 7)
+        key = article_analysis_key(candidate)
+        preselector = ScorePreselector({key: 0.41})
+
+        result = run_digest(
+            db=self.db,
+            source=StaticSource([candidate]),
+            analyzer=analyzer,
+            profile_id=self.profile.id,
+            preselector=preselector,
+        )
+
+        self.assertEqual(result.preselected_count, 0)
+        self.assertEqual(result.skipped_analysis_count, 1)
+        self.assertEqual(result.analyzed_count, 0)
+        self.assertEqual(analyzer.calls, [])
+        rows = self.db.list_preselection_decisions(run_id=result.run_id)
+        self.assertEqual(len(rows), 1)
+        self.assertAlmostEqual(float(rows[0]["preselection_score"]), 0.41)
+        self.assertAlmostEqual(float(rows[0]["preselection_threshold"]), 0.42)
+        self.assertEqual(int(rows[0]["passed"]), 0)
+        self.assertEqual(str(rows[0]["preselector_version"]), "fake_model_abstract_v1")
+        self.assertEqual(result.preselection_evidence[0].article_id, key)
+
+    def test_model_preselection_threshold_score_passes_to_full_analysis(self) -> None:
+        analyzer = FakeAnalyzer(self.analysis_payloads)
+        candidate = article("2608.00001", "Warped spin-2 compactifications", 10)
+        key = article_analysis_key(candidate)
+        preselector = ScorePreselector({key: 0.42})
+
+        result = run_digest(
+            db=self.db,
+            source=StaticSource([candidate]),
+            analyzer=analyzer,
+            profile_id=self.profile.id,
+            preselector=preselector,
+        )
+
+        self.assertEqual(result.preselected_count, 1)
+        self.assertEqual(result.skipped_analysis_count, 0)
+        self.assertEqual(result.new_analysis_count, 1)
+        self.assertEqual(analyzer.calls, ["2608.00001"])
+
+    def test_preselector_failure_fails_open_to_full_analysis(self) -> None:
+        analyzer = FakeAnalyzer(self.analysis_payloads)
+        candidate = article("2608.00001", "Warped spin-2 compactifications", 10)
+
+        result = run_digest(
+            db=self.db,
+            source=StaticSource([candidate]),
+            analyzer=analyzer,
+            profile_id=self.profile.id,
+            preselector=RaisingPreselector(),
+        )
+
+        self.assertEqual(result.preselected_count, 1)
+        self.assertEqual(result.skipped_analysis_count, 0)
+        self.assertEqual(result.new_analysis_count, 1)
+        self.assertEqual(analyzer.calls, ["2608.00001"])
+        rows = self.db.list_preselection_decisions(run_id=result.run_id)
+        self.assertEqual(str(rows[0]["decision_origin"]), "UNAVAILABLE_FAIL_OPEN")
+        self.assertIsNone(rows[0]["preselection_score"])
+
+    def test_reused_full_analysis_bypasses_current_preselection(self) -> None:
+        saved, _ = self.db.upsert_article(article("2608.00001", "Warped spin-2", 10))
+        assert saved.id is not None
+        assert self.profile.id is not None
+        self.db.upsert_analysis(
+            article_id=saved.id,
+            profile_id=self.profile.id,
+            profile_fingerprint=profile_semantic_fingerprint(self.profile),
+            analysis=_scripted_analysis(saved),
+        )
+        analyzer = FakeAnalyzer(self.analysis_payloads)
+        preselector = ScorePreselector({article_analysis_key(saved): 0.0})
+
+        result = run_digest(
+            db=self.db,
+            source=StaticSource([saved]),
+            analyzer=analyzer,
+            profile_id=self.profile.id,
+            preselector=preselector,
+        )
+
+        self.assertEqual(result.reused_analysis_count, 1)
+        self.assertEqual(result.new_analysis_count, 0)
+        self.assertEqual(preselector.calls, [])
+        self.assertEqual(analyzer.calls, [])
+        rows = self.db.list_preselection_decisions(run_id=result.run_id)
+        self.assertEqual(str(rows[0]["decision_origin"]), "REUSED_ANALYSIS_BYPASS")
+
+    def test_old_preselector_decision_is_not_reused_as_new_stage_one_cache(self) -> None:
+        analyzer = FakeAnalyzer(self.analysis_payloads)
+        candidate = article("2608.00001", "Warped spin-2 compactifications", 10)
+        saved, _ = self.db.upsert_article(candidate)
+        assert saved.id is not None
+        assert self.profile.id is not None
+        old_run = self.db.create_app_run(
+            profile_id=self.profile.id,
+            profile_fingerprint=profile_semantic_fingerprint(self.profile),
+            source_name="arxiv",
+            source_fingerprint="source-v1",
+        )
+        self.db.save_preselection_decisions(
+            run_id=old_run,
+            profile_id=self.profile.id,
+            profile_fingerprint=profile_semantic_fingerprint(self.profile),
+            source_name="arxiv",
+            source_fingerprint="source-v1",
+            article_by_key={article_analysis_key(saved): saved},
+            decisions=(
+                AbstractPreselectionDecision(
+                    article_id=article_analysis_key(saved),
+                    selected=False,
+                    stage="abstract",
+                    matched_terms=(),
+                    reason="old rejected",
+                    preselection_score=0.0,
+                    preselection_threshold=0.42,
+                    preselector_version="term_overlap_v1",
+                ),
+            ),
+        )
+        preselector = ScorePreselector({article_analysis_key(candidate): 0.8})
+
+        result = run_digest(
+            db=self.db,
+            source=StaticSource([candidate]),
+            analyzer=analyzer,
+            profile_id=self.profile.id,
+            preselector=preselector,
+        )
+
+        self.assertEqual(result.new_analysis_count, 1)
+        self.assertEqual(analyzer.calls, ["2608.00001"])
+        self.assertEqual(preselector.calls, [("2608.00001",)])
+
+    def test_app_run_progress_updates_stage_counts_before_terminal_state(self) -> None:
+        analyzer = FakeAnalyzer(self.analysis_payloads)
+
+        result = run_digest(
+            db=self.db,
+            source=StaticSource(self.articles[:2]),
+            analyzer=analyzer,
+            profile_id=self.profile.id,
+            analysis_chunk_size=1,
+        )
+
+        run = self.db.get_app_runs()[0]
+        self.assertEqual(result.run_status, "COMPLETED")
+        self.assertEqual(run["retrieved_count"], 2)
+        self.assertEqual(run["preselected_count"], 2)
+        self.assertEqual(run["analyzed_count"], 2)
+        self.assertEqual(run["progress_stage"], "completed")
 
     def test_preselection_preserves_reused_analysis_for_later_obvious_non_candidate(
         self,

@@ -27,6 +27,7 @@ from research_digest.models import (
     DigestItem,
     DigestResult,
     InterestProfile,
+    PreselectionEvidence,
     RunOrigin,
     is_above_threshold,
     profile_semantic_fingerprint,
@@ -34,7 +35,13 @@ from research_digest.models import (
     source_date_from_datetime,
     utc_now,
 )
-from research_digest.preselection import AbstractPreselector, TermOverlapPreselector
+from research_digest.preselection import (
+    AbstractPreselectionDecision,
+    AbstractPreselector,
+    TermOverlapPreselector,
+    fail_open_preselection_result,
+    reused_analysis_preselection_decision,
+)
 from research_digest.sources.base import DateNativeSourceAdapter, SourceAdapter
 from research_digest.sources.registry import SourceRunRequest
 
@@ -115,6 +122,7 @@ def run_digest(
     all_items: list[DigestItem] = []
     skipped_articles: list[Article] = []
     unresolved_articles: list[Article] = []
+    preselection_decisions: list[AbstractPreselectionDecision] = []
     status = APP_RUN_COMPLETED
     error_message: str | None = None
     requested_source_dates: tuple[str, ...] = (
@@ -159,10 +167,19 @@ def run_digest(
         retrieved_count = len(fetched)
         saved_articles, stored_count = db.upsert_articles(fetched)
         saved_articles = _unique_articles(saved_articles)
+        db.update_app_run_progress(
+            run_id,
+            progress_stage="retrieval",
+            retrieved_count=retrieved_count,
+            stored_count=stored_count,
+            progress_message=f"Retrieved {retrieved_count} paper(s).",
+        )
 
+        active_preselector = preselector or TermOverlapPreselector()
         analyses_by_key: dict[str, AnalysisResult] = {}
         origins_by_key: dict[str, AnalysisOrigin] = {}
         missing_articles: list[Article] = []
+        article_by_key = {article_analysis_key(article): article for article in saved_articles}
         for article in saved_articles:
             if article.id is None or profile.id is None:
                 raise DigestPipelineError("saved articles and profiles must have ids")
@@ -177,11 +194,31 @@ def run_digest(
             else:
                 analyses_by_key[key] = analysis
                 origins_by_key[key] = AnalysisOrigin.REUSED
+                preselection_decisions.append(
+                    reused_analysis_preselection_decision(
+                        article=article,
+                        profile=profile,
+                        preselection_fraction=active_preselector.preselection_fraction,
+                        preselector_version=active_preselector.preselector_version,
+                    )
+                )
 
         analysis_candidates = missing_articles
         if missing_articles and analyzer is not None:
-            active_preselector = preselector or TermOverlapPreselector()
-            preselection = active_preselector.preselect(profile=profile, articles=missing_articles)
+            try:
+                preselection = active_preselector.preselect(
+                    profile=profile,
+                    articles=missing_articles,
+                )
+            except Exception as exc:
+                preselection = fail_open_preselection_result(
+                    profile=profile,
+                    articles=missing_articles,
+                    preselection_fraction=active_preselector.preselection_fraction,
+                    preselector_version=active_preselector.preselector_version,
+                    reason=f"Model preselection failed: {sanitize_error(exc)}",
+                )
+            preselection_decisions.extend(preselection.decisions)
             selected_ids = preselection.selected_ids
             analysis_candidates = [
                 article
@@ -195,6 +232,39 @@ def run_digest(
                 for article in missing_articles
                 if article_analysis_key(article) not in selected_ids
             ]
+            db.update_app_run_progress(
+                run_id,
+                progress_stage="preselection",
+                retrieved_count=retrieved_count,
+                stored_count=stored_count,
+                preselected_count=preselected_count,
+                skipped_analysis_count=skipped_analysis_count,
+                progress_message=(
+                    f"Preselected {preselected_count} of {len(missing_articles)} "
+                    "cache-miss paper(s)."
+                ),
+            )
+            if profile.id is None:
+                raise DigestPipelineError("profile id is required for preselection persistence")
+            db.save_preselection_decisions(
+                run_id=run_id,
+                profile_id=profile.id,
+                profile_fingerprint=profile_fingerprint,
+                source_name=active_source_request.source_name,
+                source_fingerprint=source_fingerprint,
+                article_by_key=article_by_key,
+                decisions=preselection_decisions,
+            )
+        elif preselection_decisions and profile.id is not None:
+            db.save_preselection_decisions(
+                run_id=run_id,
+                profile_id=profile.id,
+                profile_fingerprint=profile_fingerprint,
+                source_name=active_source_request.source_name,
+                source_fingerprint=source_fingerprint,
+                article_by_key=article_by_key,
+                decisions=preselection_decisions,
+            )
 
         if analysis_candidates and analyzer is not None:
             bounded = _analyze_candidates_with_bounded_retries(
@@ -204,6 +274,7 @@ def run_digest(
                 profile_fingerprint=profile_fingerprint,
                 articles=analysis_candidates,
                 chunk_size=analysis_chunk_size,
+                run_id=run_id,
             )
             for key, analysis in bounded.analyses.items():
                 analyses_by_key[key] = analysis
@@ -234,6 +305,16 @@ def run_digest(
         )
         above_threshold_count = sum(
             is_above_threshold(item, profile.relevance_threshold) for item in all_items
+        )
+        db.update_app_run_progress(
+            run_id,
+            progress_stage="analysis",
+            analyzed_count=analyzed_count,
+            relevant_count=above_threshold_count,
+            progress_message=(
+                f"Analysis available for {analyzed_count} paper(s); "
+                f"{above_threshold_count} above threshold."
+            ),
         )
         analysis_complete = not unresolved_articles
         if unresolved_articles:
@@ -288,9 +369,25 @@ def run_digest(
             incomplete_source_dates=_source_date_tuple(incomplete_source_dates),
             retrieval_complete=retrieval_complete,
             retrieval_safety_limit=retrieval_safety_limit,
+            preselection_evidence=_preselection_evidence_tuple(preselection_decisions),
         )
-    except Exception as exc:
-        error_message = sanitize_error(exc)
+    except BaseException as exc:
+        error_message = (
+            "Digest interrupted before completion."
+            if isinstance(exc, (KeyboardInterrupt, SystemExit))
+            else sanitize_error(exc)
+        )
+        current_run = db.get_app_run(run_id)
+        if current_run is not None:
+            retrieved_count = max(retrieved_count, int(current_run["retrieved_count"]))
+            stored_count = max(stored_count, int(current_run["stored_count"]))
+            preselected_count = max(preselected_count, int(current_run["preselected_count"]))
+            skipped_analysis_count = max(
+                skipped_analysis_count,
+                int(current_run["skipped_analysis_count"]),
+            )
+            analyzed_count = max(analyzed_count, int(current_run["analyzed_count"]))
+            above_threshold_count = max(above_threshold_count, int(current_run["relevant_count"]))
         failed_incomplete_dates = incomplete_source_dates
         if date_selection is not None and not retrieval_returned:
             failed_incomplete_dates = requested_source_dates
@@ -319,6 +416,24 @@ def run_digest(
 
 def _source_date_tuple(values: tuple[str, ...]) -> tuple[date, ...]:
     return tuple(date.fromisoformat(value) for value in values)
+
+
+def _preselection_evidence_tuple(
+    decisions: Sequence[AbstractPreselectionDecision],
+) -> tuple[PreselectionEvidence, ...]:
+    return tuple(
+        PreselectionEvidence(
+            article_id=decision.article_id,
+            preselection_score=decision.preselection_score,
+            preselection_threshold=decision.preselection_threshold,
+            passed=decision.selected,
+            stage=decision.stage,
+            decision_origin=decision.decision_origin,
+            preselector_version=decision.preselector_version,
+            reason=decision.reason or None,
+        )
+        for decision in decisions
+    )
 
 
 def _select_profile(db: Database, profile_id: int | None) -> InterestProfile:
@@ -356,6 +471,7 @@ def _analyze_candidates_with_bounded_retries(
     profile_fingerprint: str,
     articles: Sequence[Article],
     chunk_size: int,
+    run_id: int,
 ) -> _BoundedAnalysisResult:
     if chunk_size <= 0:
         raise DigestPipelineError("analysis chunk size must be positive")
@@ -365,11 +481,23 @@ def _analyze_candidates_with_bounded_retries(
     remaining = list(articles)
     analyses: dict[str, AnalysisResult] = {}
     error_messages: list[str] = []
+    total = len(remaining)
     for active_chunk_size in _analysis_retry_chunk_sizes(chunk_size):
         if not remaining:
             break
         next_remaining: list[Article] = []
-        for chunk in _chunks(remaining, active_chunk_size):
+        chunks = _chunks(remaining, active_chunk_size)
+        for chunk_index, chunk in enumerate(chunks, start=1):
+            db.update_app_run_progress(
+                run_id,
+                progress_stage="analysis",
+                analyzed_count=len(analyses),
+                progress_message=(
+                    f"Full analysis {len(analyses)} / {total}; "
+                    f"Codex batch {chunk_index} / {len(chunks)} "
+                    f"(size {active_chunk_size})."
+                ),
+            )
             chunk_result = _analyze_chunk(analyzer=analyzer, profile=profile, articles=chunk)
             error_messages.extend(chunk_result.error_messages)
             for article in chunk:
@@ -387,6 +515,12 @@ def _analyze_candidates_with_bounded_retries(
                     analysis=analysis,
                 )
                 analyses[key] = analysis
+            db.update_app_run_progress(
+                run_id,
+                progress_stage="analysis",
+                analyzed_count=len(analyses),
+                progress_message=f"Full analysis {len(analyses)} / {total}.",
+            )
         remaining = next_remaining
     return _BoundedAnalysisResult(
         analyses=analyses,

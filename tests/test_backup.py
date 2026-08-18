@@ -24,6 +24,8 @@ from research_digest.models import (
     RunOrigin,
     profile_semantic_fingerprint,
 )
+from research_digest.preselection import AbstractPreselectionDecision
+from research_digest.suggested_interests import refresh_suggested_interests
 from research_digest.tags import add_user_tag, assign_ai_tags, remove_ai_tag
 
 
@@ -198,8 +200,11 @@ class BackupTests(unittest.TestCase):
             article_id=article.id,
             profile_id=profile.id,
             profile_fingerprint=profile_semantic_fingerprint(profile),
-            feedback_label="RELEVANT",
+            profile_match="NO",
+            personal_interest="YES",
         )
+        suggestion = refresh_suggested_interests(self.db, profile=profile, min_evidence=1)[0]
+        assert suggestion.id is not None
         run_id = self.db.create_app_run(profile_id=profile.id, source_name="arxiv")
         self.db.finish_app_run(
             run_id,
@@ -219,6 +224,26 @@ class BackupTests(unittest.TestCase):
             source_date=date(2026, 8, 14),
             run_id=run_id,
             run_origin=RunOrigin.SCHEDULED,
+        )
+        self.db.save_preselection_decisions(
+            run_id=run_id,
+            profile_id=profile.id,
+            profile_fingerprint=profile_semantic_fingerprint(profile),
+            source_name="arxiv",
+            source_fingerprint="source-a",
+            article_by_key={f"{article.source}:{article.source_article_id}": article},
+            decisions=(
+                AbstractPreselectionDecision(
+                    article_id=f"{article.source}:{article.source_article_id}",
+                    selected=True,
+                    stage="model_abstract",
+                    matched_terms=(),
+                    reason="fake model score",
+                    preselection_score=0.51,
+                    preselection_threshold=0.49,
+                    preselector_version="fake_model_abstract_v1",
+                ),
+            ),
         )
         self.db.save_run_snapshot(
             run_id=run_id,
@@ -269,10 +294,23 @@ class BackupTests(unittest.TestCase):
         self.assertEqual(payload["export_version"], 1)
         self.assertEqual(payload["profiles"][0]["name"], "Gravity")
         self.assertEqual(payload["source_settings"][0]["categories"], ["hep-th"])
-        self.assertEqual(payload["feedback"][0]["feedback_label"], "RELEVANT")
+        self.assertEqual(payload["feedback"][0]["feedback_label"], "NOT_RELEVANT")
+        self.assertEqual(payload["feedback"][0]["profile_match"], "NO")
+        self.assertEqual(payload["feedback"][0]["personal_interest"], "YES")
         self.assertEqual(payload["runs"][0]["status"], APP_RUN_COMPLETED)
+        self.assertEqual(payload["runs"][0]["progress_stage"], APP_RUN_COMPLETED.lower())
+        self.assertIsNone(payload["runs"][0]["progress_message"])
         self.assertEqual(payload["run_snapshots"][0]["snapshot"]["profile_name"], "Gravity")
         self.assertEqual(payload["source_date_coverage"][0]["source_date"], "2026-08-14")
+        self.assertEqual(
+            payload["preselection_decisions"][0]["preselector_version"],
+            "fake_model_abstract_v1",
+        )
+        self.assertEqual(payload["preselection_decisions"][0]["preselection_score"], 0.51)
+        self.assertEqual(
+            payload["suggested_interest_profiles"][0]["suggested_name"],
+            suggestion.suggested_name,
+        )
         self.assertEqual(payload["library_articles"][0]["article"]["title"], "Backup export title")
         self.assertTrue(payload["library_articles"][0]["saved"])
         self.assertEqual(payload["library_tags"][0]["display_name"], "Black branes")

@@ -464,7 +464,8 @@ class TodayStateTests(unittest.TestCase):
                 profile=profile,
                 profile_fingerprint_value=profile_semantic_fingerprint(profile),
                 current_feedback=None,
-                selected="NOT_RELEVANT",
+                profile_match="NO",
+                personal_interest="YES",
             )
             feedback_by_article_id = load_feedback_by_article_id(db, result)
             summary = build_calibration_summary(
@@ -477,6 +478,107 @@ class TodayStateTests(unittest.TestCase):
             self.assertEqual(summary.feedback_count, 1)
             self.assertEqual(summary.false_positive_count, 1)
             self.assertEqual(summary.precision, 0.0)
+            self.assertEqual(
+                [
+                    feedback.article_id
+                    for feedback in db.list_new_interest_feedback(
+                        profile_id=profile.id or 0,
+                        profile_fingerprint=profile_semantic_fingerprint(profile),
+                    )
+                ],
+                [article.id],
+            )
+
+    def test_changing_one_feedback_answer_preserves_the_other(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = Database(Path(tmpdir) / "test.sqlite3")
+            profile = db.create_interest_profile(
+                name="Gravity",
+                description="Higher-dimensional gravity.",
+                relevance_threshold=0.6,
+            )
+            article, _ = db.upsert_article(_article("2608.03001", "High score", 10))
+            item = DigestItem(
+                article=article,
+                analysis=_analysis(0.9),
+                analysis_origin=AnalysisOrigin.NEW_THIS_RUN,
+            )
+            fingerprint = profile_semantic_fingerprint(profile)
+
+            persist_feedback_selection(
+                item=item,
+                db=db,
+                profile=profile,
+                profile_fingerprint_value=fingerprint,
+                current_feedback=None,
+                profile_match="YES",
+            )
+            first = db.get_article_feedback(
+                article_id=article.id or 0,
+                profile_id=profile.id or 0,
+                profile_fingerprint=fingerprint,
+            )
+            self.assertIsNotNone(first)
+            assert first is not None
+
+            persist_feedback_selection(
+                item=item,
+                db=db,
+                profile=profile,
+                profile_fingerprint_value=fingerprint,
+                current_feedback=first,
+                personal_interest="NO",
+            )
+            second = db.get_article_feedback(
+                article_id=article.id or 0,
+                profile_id=profile.id or 0,
+                profile_fingerprint=fingerprint,
+            )
+
+            self.assertIsNotNone(second)
+            assert second is not None
+            self.assertEqual(second.profile_match, "YES")
+            self.assertEqual(second.personal_interest, "NO")
+
+            self.assertTrue(
+                persist_feedback_selection(
+                    item=item,
+                    db=db,
+                    profile=profile,
+                    profile_fingerprint_value=fingerprint,
+                    current_feedback=second,
+                    clear_profile_match=True,
+                )
+            )
+            cleared_profile = db.get_article_feedback(
+                article_id=article.id or 0,
+                profile_id=profile.id or 0,
+                profile_fingerprint=fingerprint,
+            )
+            self.assertIsNotNone(cleared_profile)
+            assert cleared_profile is not None
+            self.assertIsNone(cleared_profile.profile_match)
+            self.assertEqual(cleared_profile.personal_interest, "NO")
+
+            self.assertTrue(
+                persist_feedback_selection(
+                    item=item,
+                    db=db,
+                    profile=profile,
+                    profile_fingerprint_value=fingerprint,
+                    current_feedback=cleared_profile,
+                    clear_personal_interest=True,
+                )
+            )
+            cleared_both = db.get_article_feedback(
+                article_id=article.id or 0,
+                profile_id=profile.id or 0,
+                profile_fingerprint=fingerprint,
+            )
+            self.assertIsNotNone(cleared_both)
+            assert cleared_both is not None
+            self.assertIsNone(cleared_both.profile_match)
+            self.assertIsNone(cleared_both.personal_interest)
 
 
 if __name__ == "__main__":

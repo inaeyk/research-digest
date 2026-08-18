@@ -79,6 +79,48 @@ class TermOverlapPreselectorTests(unittest.TestCase):
         self.assertEqual(result.skipped_count, 0)
         self.assertEqual(result.decisions[0].stage, "fallback")
 
+    def test_model_effort_full_selects_all_cache_misses(self) -> None:
+        profile = InterestProfile(
+            id=1,
+            name="Gravity",
+            description="Higher-dimensional gravity.",
+            relevance_threshold=0.6,
+        )
+        article = _article(
+            title="Detector calibration constants",
+            abstract="A procedure for measuring pixel gains.",
+            categories=["physics.ins-det"],
+        )
+
+        result = TermOverlapPreselector(preselection_fraction=0.0).preselect(
+            profile=profile,
+            articles=[article],
+        )
+
+        self.assertEqual(result.selected_count, 1)
+        self.assertEqual(result.skipped_count, 0)
+
+    def test_aggressive_preselection_skips_non_matching_cache_miss(self) -> None:
+        profile = InterestProfile(
+            id=1,
+            name="Gravity",
+            description="Higher-dimensional gravity.",
+            relevance_threshold=0.6,
+        )
+        article = _article(
+            title="Detector calibration constants",
+            abstract="A procedure for measuring pixel gains.",
+            categories=["physics.ins-det"],
+        )
+
+        result = TermOverlapPreselector(preselection_fraction=1.0).preselect(
+            profile=profile,
+            articles=[article],
+        )
+
+        self.assertEqual(result.selected_count, 0)
+        self.assertEqual(result.skipped_count, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

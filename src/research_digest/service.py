@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, cast
-from uuid import uuid4
 
 from research_digest.analysis.base import LLMAnalyzer
 from research_digest.calibration import CalibrationSummary, build_calibration_summary
@@ -17,6 +16,10 @@ from research_digest.coverage import (
 from research_digest.db import APP_RUN_COMPLETED, SOURCE_ARXIV, Database
 from research_digest.errors import sanitize_error
 from research_digest.history import persist_run_snapshot
+from research_digest.library_context import (
+    LibraryContextGenerator,
+    generate_automatic_library_context_for_digest,
+)
 from research_digest.models import (
     ArxivSourceConfig,
     DateSelection,
@@ -26,6 +29,11 @@ from research_digest.models import (
 )
 from research_digest.pipeline import DigestPipelineError, run_digest
 from research_digest.preselection import AbstractPreselector
+from research_digest.quantitative_calibration import (
+    RandomFloat,
+    maybe_create_quantitative_calibration_prompt,
+)
+from research_digest.run_locks import current_process_run_owner
 from research_digest.sources.base import LatestAvailableDateResolver, SourceAdapter
 from research_digest.sources.registry import ARXIV_SOURCE_DEFINITION, SourceRunRequest
 from research_digest.synthesis import (
@@ -118,6 +126,10 @@ def run_digest_for_profile(
     now: datetime | None = None,
     preselector: AbstractPreselector | None = None,
     synthesis_builder: CrossPaperSynthesizer | None = None,
+    library_context_generator: LibraryContextGenerator | None = None,
+    automatic_library_context_threshold: float | None = None,
+    relevance_calibration_prompt_probability: float = 0.0,
+    calibration_rng: RandomFloat | None = None,
     acquire_lock: bool = True,
     stale_lock_seconds: float = DEFAULT_RUN_LOCK_STALE_SECONDS,
 ) -> ProfileDigestRun:
@@ -138,6 +150,12 @@ def run_digest_for_profile(
                 now=now,
                 preselector=preselector,
                 synthesis_builder=synthesis_builder,
+                library_context_generator=library_context_generator,
+                automatic_library_context_threshold=automatic_library_context_threshold,
+                relevance_calibration_prompt_probability=(
+                    relevance_calibration_prompt_probability
+                ),
+                calibration_rng=calibration_rng,
                 acquire_lock=False,
                 stale_lock_seconds=stale_lock_seconds,
             )
@@ -160,11 +178,29 @@ def run_digest_for_profile(
         items=digest.items,
         threshold=digest.profile.relevance_threshold,
     )
+    if library_context_generator is not None:
+        if automatic_library_context_threshold is None:
+            raise DigestPipelineError("automatic Library context threshold is missing")
+        try:
+            generate_automatic_library_context_for_digest(
+                db,
+                digest=digest,
+                generator=library_context_generator,
+                threshold=automatic_library_context_threshold,
+            )
+        except Exception as exc:
+            _ = sanitize_error(exc)
     persist_run_snapshot(db=db, digest=digest, synthesis=synthesis)
     mark_digest_coverage(
         db=db,
         digest=digest,
         source_name=source_request.source_name if source_request is not None else SOURCE_ARXIV,
+    )
+    maybe_create_quantitative_calibration_prompt(
+        db,
+        digest=digest,
+        probability=relevance_calibration_prompt_probability,
+        rng=calibration_rng,
     )
     return ProfileDigestRun(
         digest=digest,
@@ -184,6 +220,9 @@ def run_digest_for_enabled_profiles(
     now: datetime | None = None,
     preselector: AbstractPreselector | None = None,
     synthesis_builder: CrossPaperSynthesizer | None = None,
+    library_context_generator: LibraryContextGenerator | None = None,
+    automatic_library_context_threshold: float | None = None,
+    relevance_calibration_prompt_probability: float = 0.0,
     stale_lock_seconds: float = DEFAULT_RUN_LOCK_STALE_SECONDS,
 ) -> HeadlessDigestRun:
     """Run the digest workflow for every enabled profile."""
@@ -201,6 +240,11 @@ def run_digest_for_enabled_profiles(
             now=now,
             preselector=preselector,
             synthesis_builder=synthesis_builder,
+            library_context_generator=library_context_generator,
+            automatic_library_context_threshold=automatic_library_context_threshold,
+            relevance_calibration_prompt_probability=(
+                relevance_calibration_prompt_probability
+            ),
             stale_lock_seconds=stale_lock_seconds,
         )
     finally:
@@ -218,6 +262,9 @@ def run_automatic_digest_for_enabled_profiles(
     now: datetime | None = None,
     preselector: AbstractPreselector | None = None,
     synthesis_builder: CrossPaperSynthesizer | None = None,
+    library_context_generator: LibraryContextGenerator | None = None,
+    automatic_library_context_threshold: float | None = None,
+    relevance_calibration_prompt_probability: float = 0.0,
     stale_lock_seconds: float = DEFAULT_RUN_LOCK_STALE_SECONDS,
 ) -> HeadlessDigestRun:
     """Run scheduled date-native catch-up for every enabled profile."""
@@ -235,6 +282,11 @@ def run_automatic_digest_for_enabled_profiles(
             now=now,
             preselector=preselector,
             synthesis_builder=synthesis_builder,
+            library_context_generator=library_context_generator,
+            automatic_library_context_threshold=automatic_library_context_threshold,
+            relevance_calibration_prompt_probability=(
+                relevance_calibration_prompt_probability
+            ),
             stale_lock_seconds=stale_lock_seconds,
         )
     finally:
@@ -252,6 +304,9 @@ def _run_automatic_digest_for_enabled_profiles_unlocked(
     now: datetime | None,
     preselector: AbstractPreselector | None,
     synthesis_builder: CrossPaperSynthesizer | None,
+    library_context_generator: LibraryContextGenerator | None,
+    automatic_library_context_threshold: float | None,
+    relevance_calibration_prompt_probability: float,
     stale_lock_seconds: float,
 ) -> HeadlessDigestRun:
     profiles = tuple(db.list_interest_profiles(enabled_only=True))
@@ -318,6 +373,11 @@ def _run_automatic_digest_for_enabled_profiles_unlocked(
                 now=now,
                 preselector=preselector,
                 synthesis_builder=synthesis_builder,
+                library_context_generator=library_context_generator,
+                automatic_library_context_threshold=automatic_library_context_threshold,
+                relevance_calibration_prompt_probability=(
+                    relevance_calibration_prompt_probability
+                ),
                 acquire_lock=False,
                 stale_lock_seconds=stale_lock_seconds,
             )
@@ -359,6 +419,9 @@ def _run_digest_for_enabled_profiles_unlocked(
     now: datetime | None,
     preselector: AbstractPreselector | None,
     synthesis_builder: CrossPaperSynthesizer | None,
+    library_context_generator: LibraryContextGenerator | None,
+    automatic_library_context_threshold: float | None,
+    relevance_calibration_prompt_probability: float,
     stale_lock_seconds: float,
 ) -> HeadlessDigestRun:
     profiles = db.list_interest_profiles(enabled_only=True)
@@ -381,6 +444,11 @@ def _run_digest_for_enabled_profiles_unlocked(
                 now=now,
                 preselector=preselector,
                 synthesis_builder=synthesis_builder,
+                library_context_generator=library_context_generator,
+                automatic_library_context_threshold=automatic_library_context_threshold,
+                relevance_calibration_prompt_probability=(
+                    relevance_calibration_prompt_probability
+                ),
                 acquire_lock=False,
                 stale_lock_seconds=stale_lock_seconds,
             )
@@ -424,7 +492,7 @@ def _profile_digest_error_message(digest: ProfileDigestRun) -> str:
 
 
 def _lock_owner() -> str:
-    return f"pid:{uuid4()}"
+    return current_process_run_owner()
 
 
 def _build_calibration(db: Database, digest: DigestResult) -> CalibrationSummary:

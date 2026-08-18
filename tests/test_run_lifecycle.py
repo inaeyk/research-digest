@@ -17,8 +17,18 @@ from research_digest.db import (
     APP_RUN_RUNNING,
     Database,
     RunAlreadyActiveError,
+    RunLockError,
 )
-from research_digest.models import AnalysisResult, Article, ArxivSourceConfig, InterestProfile
+from research_digest.models import (
+    AnalysisResult,
+    Article,
+    ArxivSourceConfig,
+    InterestProfile,
+    RunOrigin,
+    profile_semantic_fingerprint,
+)
+from research_digest.preselection import AbstractPreselectionDecision, AbstractPreselectionResult
+from research_digest.run_locks import RunOwnerState
 from research_digest.service import run_digest_for_enabled_profiles, run_digest_for_profile
 
 
@@ -66,6 +76,60 @@ class FailingAnalyzer:
             + "inaeyk/private with OPENAI_API_KEY=sk-"
             + "secret123456789"
         )
+
+
+class InterruptingBatchAnalyzer:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.fake = FakeAnalyzer()
+
+    def analyze(self, *, profile: InterestProfile, article: Article) -> AnalysisResult:
+        raise AssertionError("service should call analyze_many")
+
+    def analyze_many(
+        self,
+        *,
+        profile: InterestProfile,
+        articles: Sequence[Article],
+    ) -> Mapping[str, AnalysisResult]:
+        self.calls += 1
+        if self.calls > 1:
+            raise KeyboardInterrupt
+        return self.fake.analyze_many(profile=profile, articles=articles)
+
+
+class AllPreselector:
+    preselection_fraction = 0.50
+    preselector_version = "test_all_v1"
+
+    def preselect(
+        self,
+        *,
+        profile: InterestProfile,
+        articles: Sequence[Article],
+    ) -> AbstractPreselectionResult:
+        return AbstractPreselectionResult(
+            tuple(
+                AbstractPreselectionDecision(
+                    article_id=f"{article.source}:{article.source_article_id}",
+                    selected=True,
+                    stage="test",
+                    matched_terms=(),
+                    reason="test selects all",
+                    preselection_score=1.0,
+                    preselection_threshold=(
+                        profile.relevance_threshold * self.preselection_fraction
+                    ),
+                    preselector_version=self.preselector_version,
+                )
+                for article in articles
+            )
+        )
+
+
+class InterruptingSource(StaticSource):
+    def fetch(self, config: ArxivSourceConfig, *, now: datetime | None = None) -> list[Article]:
+        raise KeyboardInterrupt
 
 
 def article(source_article_id: str = "2608.lifecycle01") -> Article:
@@ -144,6 +208,16 @@ class RunLifecycleTests(unittest.TestCase):
                 """,
                 (self.profile.id, "arxiv", late_run_started.isoformat(), APP_RUN_RUNNING),
             )
+            run_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+            conn.execute(
+                """
+                UPDATE app_runs
+                SET progress_stage = 'analysis',
+                    progress_message = 'Full analysis 1 / 3.'
+                WHERE id = ?
+                """,
+                (run_id,),
+            )
             conn.execute(
                 """
                 INSERT INTO run_locks (name, owner, acquired_at, updated_at)
@@ -161,7 +235,232 @@ class RunLifecycleTests(unittest.TestCase):
 
         recovered = self.db.get_app_runs()[0]
         self.assertEqual(recovered["status"], APP_RUN_FAILED)
+        self.assertEqual(recovered["progress_stage"], APP_RUN_FAILED.lower())
+        self.assertIn("stopped before completion", recovered["progress_message"])
         self.assertIn("stopped before completion", recovered["error_message"])
+
+    def test_active_process_owner_blocks_overlap(self) -> None:
+        started = datetime(2026, 8, 14, 1, 0, tzinfo=UTC)
+        now = datetime(2026, 8, 14, 1, 1, tzinfo=UTC)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO app_runs (profile_id, source_name, started_at, status)
+                VALUES (?, ?, ?, ?)
+                """,
+                (self.profile.id, "arxiv", started.isoformat(), APP_RUN_RUNNING),
+            )
+            conn.execute(
+                """
+                INSERT INTO run_locks (name, owner, acquired_at, updated_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                ("digest", "process-owner", started.isoformat(), started.isoformat()),
+            )
+
+        with self.assertRaises(RunAlreadyActiveError):
+            self.db.acquire_run_lock(
+                owner="new-owner",
+                stale_after_seconds=60 * 60 * 6,
+                now=now,
+                owner_state_checker=lambda _owner: RunOwnerState.ALIVE,
+            )
+        self.assertEqual(self.db.get_app_runs()[0]["status"], APP_RUN_RUNNING)
+
+    def test_dead_process_owner_is_recovered_without_waiting_for_age_stale(self) -> None:
+        started = datetime(2026, 8, 14, 1, 0, tzinfo=UTC)
+        now = datetime(2026, 8, 14, 1, 1, tzinfo=UTC)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO app_runs (
+                    profile_id, source_name, started_at, status, retrieved_count,
+                    stored_count, preselected_count, skipped_analysis_count, analyzed_count
+                )
+                VALUES (?, ?, ?, ?, 198, 58, 177, 21, 70)
+                """,
+                (self.profile.id, "arxiv", started.isoformat(), APP_RUN_RUNNING),
+            )
+            conn.execute(
+                """
+                INSERT INTO run_locks (name, owner, acquired_at, updated_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                ("digest", "process-owner", started.isoformat(), started.isoformat()),
+            )
+
+        self.db.acquire_run_lock(
+            owner="new-owner",
+            stale_after_seconds=60 * 60 * 6,
+            now=now,
+            owner_state_checker=lambda _owner: RunOwnerState.DEAD,
+        )
+        self.db.release_run_lock(owner="new-owner")
+
+        recovered = self.db.get_app_runs()[0]
+        self.assertEqual(recovered["status"], APP_RUN_FAILED)
+        self.assertEqual(recovered["retrieved_count"], 198)
+        self.assertEqual(recovered["preselected_count"], 177)
+        self.assertEqual(recovered["analyzed_count"], 70)
+        self.assertIn("stopped before completion", recovered["error_message"])
+
+    def test_uninspectable_owner_requires_explicit_force_recovery(self) -> None:
+        started = datetime(2026, 8, 14, 1, 0, tzinfo=UTC)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO app_runs (profile_id, source_name, started_at, status)
+                VALUES (?, ?, ?, ?)
+                """,
+                (self.profile.id, "arxiv", started.isoformat(), APP_RUN_RUNNING),
+            )
+            run_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+            conn.execute(
+                """
+                INSERT INTO run_locks (name, owner, acquired_at, updated_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                ("digest", "pid:legacy-uuid", started.isoformat(), started.isoformat()),
+            )
+
+        with self.assertRaises(RunLockError):
+            self.db.recover_abandoned_run(run_id=run_id)
+
+        result = self.db.recover_abandoned_run(
+            run_id=run_id,
+            force_uninspectable_owner=True,
+        )
+
+        self.assertTrue(result.recovered)
+        self.assertEqual(result.status_before, APP_RUN_RUNNING)
+        self.assertEqual(result.status_after, APP_RUN_FAILED)
+        self.assertIsNone(self.db.get_run_lock())
+
+    def test_interrupted_scheduled_run_recovery_preserves_history(self) -> None:
+        started = datetime(2026, 8, 14, 1, 0, tzinfo=UTC)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO app_runs (
+                    profile_id, source_name, started_at, status, run_origin,
+                    retrieved_count, preselected_count, analyzed_count
+                )
+                VALUES (?, ?, ?, ?, ?, 198, 177, 70)
+                """,
+                (
+                    self.profile.id,
+                    "arxiv",
+                    started.isoformat(),
+                    APP_RUN_RUNNING,
+                    RunOrigin.SCHEDULED.value,
+                ),
+            )
+            run_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+            conn.execute(
+                """
+                INSERT INTO run_locks (name, owner, acquired_at, updated_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                ("digest", "dead-owner", started.isoformat(), started.isoformat()),
+            )
+
+        result = self.db.recover_abandoned_run(
+            run_id=run_id,
+            owner_state_checker=lambda _owner: RunOwnerState.DEAD,
+        )
+
+        self.assertTrue(result.recovered)
+        row = self.db.get_app_runs()[0]
+        self.assertEqual(row["id"], run_id)
+        self.assertEqual(row["status"], APP_RUN_FAILED)
+        self.assertEqual(row["run_origin"], RunOrigin.SCHEDULED.value)
+        self.assertEqual(row["retrieved_count"], 198)
+        self.assertEqual(row["preselected_count"], 177)
+        self.assertEqual(row["analyzed_count"], 70)
+
+    def test_recovery_permits_new_run_and_reuses_valid_analyses(self) -> None:
+        saved_article = self.db.upsert_articles([article()])[0][0]
+        assert saved_article.id is not None
+        assert self.profile.id is not None
+        self.db.upsert_analysis(
+            article_id=saved_article.id,
+            profile_id=self.profile.id,
+            profile_fingerprint=profile_semantic_fingerprint(self.profile),
+            analysis=FakeAnalyzer().analyze(profile=self.profile, article=saved_article),
+        )
+        started = datetime(2026, 8, 14, 1, 0, tzinfo=UTC)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO app_runs (
+                    profile_id, source_name, started_at, status, retrieved_count,
+                    preselected_count, analyzed_count
+                )
+                VALUES (?, ?, ?, ?, 1, 1, 1)
+                """,
+                (self.profile.id, "arxiv", started.isoformat(), APP_RUN_RUNNING),
+            )
+            run_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+            conn.execute(
+                """
+                INSERT INTO run_locks (name, owner, acquired_at, updated_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                ("digest", "dead-owner", started.isoformat(), started.isoformat()),
+            )
+
+        self.db.recover_abandoned_run(
+            run_id=run_id,
+            owner_state_checker=lambda _owner: RunOwnerState.DEAD,
+        )
+        analyzer = FakeAnalyzer()
+        retry = run_digest_for_profile(
+            db=self.db,
+            source=StaticSource([article()]),
+            analyzer=analyzer,
+            profile_id=self.profile.id,
+        )
+
+        self.assertEqual(retry.digest.reused_analysis_count, 1)
+        self.assertEqual(retry.digest.new_analysis_count, 0)
+        self.assertEqual(analyzer.calls, [])
+        runs = self.db.get_app_runs()
+        self.assertEqual(runs[0]["status"], APP_RUN_COMPLETED)
+        self.assertEqual(runs[1]["status"], APP_RUN_FAILED)
+
+    def test_keyboard_interrupt_marks_run_failed_and_releases_lock(self) -> None:
+        with self.assertRaises(KeyboardInterrupt):
+            run_digest_for_profile(
+                db=self.db,
+                source=InterruptingSource([]),
+                analyzer=FakeAnalyzer(),
+                profile_id=self.profile.id or 0,
+            )
+
+        row = self.db.get_app_runs()[0]
+        self.assertEqual(row["status"], APP_RUN_FAILED)
+        self.assertIn("interrupted", row["error_message"].lower())
+        self.assertIsNone(self.db.get_run_lock())
+
+    def test_keyboard_interrupt_preserves_durable_analysis_progress_counts(self) -> None:
+        articles = [article(f"2608.interrupt{i}") for i in range(6)]
+
+        with self.assertRaises(KeyboardInterrupt):
+            run_digest_for_profile(
+                db=self.db,
+                source=StaticSource(articles),
+                analyzer=InterruptingBatchAnalyzer(),
+                profile_id=self.profile.id or 0,
+                preselector=AllPreselector(),
+            )
+
+        row = self.db.get_app_runs()[0]
+        self.assertEqual(row["status"], APP_RUN_FAILED)
+        self.assertEqual(row["retrieved_count"], 6)
+        self.assertEqual(row["preselected_count"], 6)
+        self.assertEqual(row["analyzed_count"], 5)
+        self.assertIn("interrupted", row["error_message"].lower())
+        self.assertIsNone(self.db.get_run_lock())
 
     def test_analysis_unavailable_run_releases_lock_and_retry_reuses_cache(self) -> None:
         unavailable = run_digest_for_profile(

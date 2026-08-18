@@ -6,6 +6,7 @@ from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 
+from research_digest.automation import AutomationStatus
 from research_digest.backup import BackupResult
 from research_digest.db import APP_RUN_COMPLETED, Database
 from research_digest.doctor import DoctorCheck, DoctorReport, DoctorSeverity
@@ -57,7 +58,8 @@ class SettingsPageTests(unittest.TestCase):
         self.assertIn("retrieves all eligible articles", summary)
         self.assertIn("selected source dates", summary)
         self.assertIn("Cached analyses are reused", summary)
-        self.assertIn("preselection", summary)
+        self.assertIn("abstract-level model preselection", summary)
+        self.assertNotIn("deterministic abstract preselection", summary)
 
     def test_backup_result_message_shows_backup_and_optional_export(self) -> None:
         backup = BackupResult(
@@ -105,6 +107,57 @@ class SettingsPageTests(unittest.TestCase):
         self.assertEqual(settings.schedule_time_default(status), "07:30")
         self.assertEqual(settings.schedule_time_default(fallback), "06:15")
         self.assertEqual(settings.schedule_time_default(None), "07:30")
+
+    def test_schedule_enabled_state_distinguishes_enabled_disabled_and_unknown(self) -> None:
+        ready_zero = AutomationStatus(
+            ok=True,
+            schedule=ScheduleStatus(
+                backend="windows_task_scheduler",
+                task_name="Research Digest Test",
+                installed=True,
+                timezone=WINDOWS_LOCAL_TIME_DESCRIPTION,
+                state="Ready",
+                last_task_result=0,
+            ),
+        )
+        ready_nonzero = AutomationStatus(
+            ok=True,
+            schedule=ScheduleStatus(
+                backend="windows_task_scheduler",
+                task_name="Research Digest Test",
+                installed=True,
+                timezone=WINDOWS_LOCAL_TIME_DESCRIPTION,
+                state="Ready",
+                last_task_result=3221225786,
+                next_run_time="2026-08-19T06:00:00",
+            ),
+        )
+        disabled = AutomationStatus(
+            ok=True,
+            schedule=ScheduleStatus(
+                backend="windows_task_scheduler",
+                task_name="Research Digest Test",
+                installed=True,
+                timezone=WINDOWS_LOCAL_TIME_DESCRIPTION,
+                state="Disabled",
+            ),
+        )
+        missing = AutomationStatus(
+            ok=True,
+            schedule=ScheduleStatus(
+                backend="windows_task_scheduler",
+                task_name="Research Digest Test",
+                installed=False,
+                timezone=WINDOWS_LOCAL_TIME_DESCRIPTION,
+            ),
+        )
+        unknown = AutomationStatus(ok=False, schedule=None, error_message="parse failed")
+
+        self.assertTrue(settings.schedule_enabled_state(ready_zero))
+        self.assertTrue(settings.schedule_enabled_state(ready_nonzero))
+        self.assertFalse(settings.schedule_enabled_state(disabled))
+        self.assertFalse(settings.schedule_enabled_state(missing))
+        self.assertIsNone(settings.schedule_enabled_state(unknown))
 
     def test_schedule_operation_message_is_user_facing(self) -> None:
         installed = ScheduleOperationResult(

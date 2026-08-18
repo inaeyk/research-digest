@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from research_digest.db import Database
-from research_digest.models import Article, LibraryEntry, LibraryRelevanceContext
+from research_digest.models import Article, InterestProfile, LibraryEntry, LibraryRelevanceContext
 
 LibrarySort = Literal["saved_newest", "saved_oldest", "published_newest", "title"]
 
@@ -28,6 +28,26 @@ def save_article(db: Database, article_id: int) -> LibraryEntry:
     return db.save_library_article(article_id)
 
 
+def save_article_with_personal_interest(
+    db: Database,
+    *,
+    article_id: int,
+    profile: InterestProfile | None,
+    profile_fingerprint_value: str | None,
+) -> LibraryEntry:
+    """Save an article and, when profile context exists, record personal interest."""
+
+    entry = save_article(db, article_id)
+    if profile is not None and profile.id is not None and profile_fingerprint_value is not None:
+        db.upsert_article_feedback(
+            article_id=article_id,
+            profile_id=profile.id,
+            profile_fingerprint=profile_fingerprint_value,
+            personal_interest="YES",
+        )
+    return entry
+
+
 def unsave_article(db: Database, article_id: int) -> None:
     """Remove an article from the Library without deleting scientific history."""
 
@@ -44,6 +64,25 @@ def save_article_by_source_identity(
     if article is None or article.id is None:
         return None
     return save_article(db, article.id)
+
+
+def save_article_by_source_identity_with_personal_interest(
+    db: Database,
+    *,
+    source: str,
+    source_article_id: str,
+    profile: InterestProfile | None,
+    profile_fingerprint_value: str | None,
+) -> LibraryEntry | None:
+    article = db.get_article_by_source_id(source, source_article_id)
+    if article is None or article.id is None:
+        return None
+    return save_article_with_personal_interest(
+        db,
+        article_id=article.id,
+        profile=profile,
+        profile_fingerprint_value=profile_fingerprint_value,
+    )
 
 
 def unsave_article_by_source_identity(

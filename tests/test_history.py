@@ -246,7 +246,7 @@ class HistoryTests(unittest.TestCase):
             "Aug 12, 2026, Aug 17, 2026",
         )
         self.assertEqual(origin_label(entries[scheduled.digest.run_id]), "Scheduled")
-        self.assertIn("preselected", _run_label(entries[scheduled.digest.run_id]))
+        self.assertIn("passed preselection", _run_label(entries[scheduled.digest.run_id]))
 
     def test_history_labels_no_submission_and_legacy_runs(self) -> None:
         empty = run_digest_for_profile(

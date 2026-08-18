@@ -1,7 +1,7 @@
 # M6 Campaign State
 
-- campaign_state: M6_RELEASE_CANDIDATE_COMPLETE_AWAITING_HUMAN
-- current_substage: M6-F upgrade/end-to-end qualification complete; final human release decision required
+- campaign_state: M6_INTEGRATED_FEATURE_CANDIDATE_QUALIFIED_READY_FOR_LOCAL_FREEZE
+- current_substage: Complete integrated M6/v0.3 feature candidate human-smoked and deterministically qualified; local freeze in progress
 - current_branch: feature/m6-scientific-library-memory
 - baseline_branch: master
 - baseline_commit: fe92e77a3fce4037c0bf4ecbb0a7ce964763eb8b
@@ -18,19 +18,19 @@
 - package_version: 0.2.0
 - runtime_version: 0.2.0
 - baseline_schema_version: 8
-- candidate_schema_version: 13
-- config_version: 3
+- candidate_schema_version: 16
+- config_version: 5
 - codegraph_state: no `.codegraph/` directory exists at repository root.
-- current_qualification_state: M6-F deterministic qualification PASS; fresh final read-only Auditor found one IMPORTANT connection-batch atomicity issue; repair round 1 PASS; final local freeze/tag authorized but no public release/push performed.
-- audit_round: M6-F audit repair round 1 PASS. M6-E audit repair round 1 PASS. M6-D audit repair round 1 PASS. M6-B audit repair round 1 PASS. M6-A initial candidate PASS; no M6-A audit-driven repair rounds used.
+- current_qualification_state: Complete integrated M6/v0.3 feature candidate PASS after final human smoke. Final deterministic/package gate recorded `pytest` 393 passed and 9 subtests passed, `ruff check .` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, `git diff --check` PASS, wheel build PASS, isolated no-deps wheel install PASS, installed CLI version/status smoke PASS, and Streamlit AppTest smoke PASS. Final Model-effort UX smoke passed. Stage-1 benchmark follow-up Auditor passed with no BLOCKER/IMPORTANT findings. Stale-run, scheduler-state, startup-side-effect, feedback/calibration/cost, and M6 Library repairs remain accepted.
+- audit_round: Final M6/v0.3 Stage-1 benchmark/default-effort focused Auditor PASS. Final M6/v0.3 stale-run recovery repair round 1 PASS. Final M6/v0.3 scheduler state repair initial candidate had one IMPORTANT CLI status fallback issue; repaired before focused closure Auditor, which then passed. Final M6/v0.3 startup side-effect repair round 1 PASS. Final M6/v0.3 refinement audit repair round 1 PASS after focused follow-up repairs. M6-F audit repair round 1 PASS. M6-E audit repair round 1 PASS. M6-D audit repair round 1 PASS. M6-B audit repair round 1 PASS. M6-A initial candidate PASS; no M6-A audit-driven repair rounds used.
 - deterministic_checks: final v0.2 freeze gate recorded `pytest` 262 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-A final gate recorded `pytest` 268 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-B candidate recorded `pytest` 283 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-B repair round 1 recorded `pytest` 284 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-C candidate recorded `pytest` 290 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-D candidate recorded `pytest` 300 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-D repair round 1 recorded `pytest` 302 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-E candidate recorded `pytest` 310 passed after an implementation test repair, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-E repair round 1 recorded `pytest` 312 passed, `ruff check src tests` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, and `git diff --check` PASS. M6-F final repaired gate recorded `pytest` 315 passed, `ruff check .` PASS, `mypy --strict src tests` PASS, `python -m compileall src tests` PASS, `git diff --check` PASS, package wheel build PASS, isolated wheel install PASS, installed CLI `--version` PASS, installed CLI `status --json` PASS, installed CLI backup PASS, and Streamlit Library AppTest smoke PASS.
 - live_checks: v0.2 live smoke was accepted by the human before the M6 branch. M6-B synthetic live Codex tag smoke reached the Codex CLI but exited non-zero with the sanitized authentication/usage-limits message; record as environment/provider limitation for later human live smoke, not deterministic code failure. M6-D synthetic live Codex connection smoke reached the Codex CLI but failed before model work because the CLI could not initialize in the read-only runtime; record as environment/provider limitation for later human live smoke, not deterministic code failure. M6-E synthetic live Codex context smoke reached the Codex CLI but failed before model work because the CLI could not initialize in the read-only runtime; record as environment/provider limitation for later human live smoke, not deterministic code failure. M6-F installed status smoke reported unsupported Windows Task Scheduler backend in this Linux/WSL sandbox; this is the expected environment limitation and not a scheduler code failure.
-- schema_config_migration_state: v0.2 baseline uses ordered SQLite migrations through schema 8 and JSON config 3. M6-A adds additive SQLite schema 9 with `library_articles`; JSON config is unchanged. M6-B adds additive SQLite schema 10 for Library tags, tag assignments, and AI tag suppressions; JSON config is unchanged. M6-C adds additive SQLite schema 11 for article notes, collections/projects, and collection memberships; JSON config is unchanged. M6-D adds additive SQLite schema 12 for rebuildable Library search documents and article relationship suggestions with soft dismissal; JSON config is unchanged. M6-E candidate adds additive SQLite schema 13 for per-new-paper Library context suggestions and collection intelligence snapshots; JSON config is unchanged.
+- schema_config_migration_state: v0.2 baseline uses ordered SQLite migrations through schema 8 and JSON config 3. M6-A adds additive SQLite schema 9 with `library_articles`; JSON config is unchanged. M6-B adds additive SQLite schema 10 for Library tags, tag assignments, and AI tag suppressions; JSON config is unchanged. M6-C adds additive SQLite schema 11 for article notes, collections/projects, and collection memberships; JSON config is unchanged. M6-D adds additive SQLite schema 12 for rebuildable Library search documents and article relationship suggestions with soft dismissal; JSON config is unchanged. M6-E adds additive SQLite schema 13 for per-new-paper Library context suggestions and collection intelligence snapshots; JSON config is unchanged. Final feedback refinement adds SQLite schema 14 for two-axis feedback and suggested interests plus JSON config 4 for the automatic Library-context threshold. Final cost/calibration/progress refinement adds SQLite schema 15 for quantitative relevance calibration and app-run progress, plus JSON config 5 for automatic Library connection enablement, model-effort/preselection fraction, and calibration prompt probability. Final model-based Stage-1 persistence advances SQLite schema to 16 with durable per-run preselection decisions; JSON config remains 5.
 - qualified_local_commit: final local commit tagged `m6f-qualified` after this document update.
 - qualified_local_tag: annotated local tag `m6f-qualified` is the M6 release-candidate qualification tag. Prior local tags: `m6e-qualified` targets `fad6b8425bc14a956fb22f26f68cc485e46f71b9`; `m6d-qualified` targets `82c323d56c9ed9fbbdb8c36f602d03bd9d3d34b0`; `m6c-qualified` targets `7208191b3aa66c21863ec63d21e7d1f60ebe82b0`; `m6b-qualified` targets `104780a0ba9c98cd9663ef8d1088cb9472d53e09`; `m6a-qualified` targets `17e047c325bb61008cf39b9a135bea02bb63a968`.
 - deferred_minor_optional_findings: M6-B repair Auditor noted regeneration replacement is not a single DB transaction after provider success; current supported paths are covered, but a future atomic replace helper would be safer if the persistence path broadens. M6-C Auditor noted tag filter options may include tags retained only for AI suppression/tombstone history, which can yield no-result filter options. M6-E repair Auditor noted context candidate eligibility can still spend prompt budget on a candidate whose only existing suggestion is collection-scoped and will later be skipped during assignment; no incorrect mutation occurs. M6 live Codex smokes require a runtime where Codex can initialize and authenticate; sandbox attempts reached the CLI but could not complete model work.
-- next_permitted_action: stop for final human release decision; do not push, publish, create a public release, or create a public M6 version tag without human authority.
-- human_stop_reason: M6 final human gate reached.
+- next_permitted_action: create the authorized local qualified feature commit, local M6 qualification tag, and separate local v0.3.0 release-version commit; do not push, publish, create a public release, or create a public v0.3.0 tag without human authority.
+- human_stop_reason: final human release decision required after local freeze/version commit.
 
 ## Recovered v0.2 Baseline
 
@@ -951,3 +951,911 @@ Final human stop:
   release commit derived from `m6f-qualified` that sets the chosen public
   package/runtime version. The current qualification commit intentionally still
   reports package/runtime version `0.2.0` pending that release decision.
+
+## Final RC Refinement - Feedback Semantics And Library-Context Cost Gate
+
+State updated: 2026-08-18.
+
+Current substage:
+
+- `M6_FINAL_RC_REFINEMENT_QUALIFIED_AWAITING_HUMAN_LIVE_SMOKE`.
+
+Baseline:
+
+- Started from the qualified M6 RC commit `d58a3c75d05c8fc1548ae7b211a66a81de3a528a`
+  (`m6f-qualified`) on branch `feature/m6-scientific-library-memory`.
+- No public release/tag/push was performed by this refinement.
+
+Implemented refinement scope:
+
+- Replaced binary paper feedback in the Today paper-card UI with independent
+  profile-fit and personal-interest questions.
+- Stored feedback as nullable `profile_match` and `personal_interest` answers
+  with explicit `YES`, `NO`, and `UNANSWERED` semantics.
+- Preserved legacy binary `feedback_label` compatibility while moving profile
+  calibration to the `profile_match` dimension only.
+- Migrated legacy feedback deterministically:
+  `RELEVANT -> profile_match YES, personal_interest NULL` and
+  `NOT_RELEVANT -> profile_match NO, personal_interest NULL`.
+- Added new-interest evidence queries for `profile_match NO` plus
+  `personal_interest YES`.
+- Added bounded deterministic Suggested Interests, explicit create/edit/dismiss
+  UI, durable theme-level dismissal, and no automatic profile modification.
+- Added config version `4` with
+  `automatic_library_context_threshold = 0.90`.
+- Wired automatic Library-context generation through Today/manual runs,
+  Automation Run Now, CLI/headless automation, and the shared service path.
+  Automatic expensive Library-context reasoning runs only for supplied
+  generators, newly analyzed articles, and relevance scores at or above the
+  configured threshold.
+- Manual `Find Library connections` remains available below the threshold.
+- JSON backup/export now includes suggested-interest profile records.
+
+Schema/config migration state:
+
+- SQLite schema advances from `13` to `14`.
+- JSON config advances from `3` to `4`.
+- Migrations are additive and idempotent in deterministic tests.
+- Historical binary feedback remains preserved through compatibility
+  `feedback_label`; personal-interest state is not guessed.
+
+Deterministic qualification:
+
+- `pytest`: PASS, 334 passed.
+- `ruff check .`: PASS.
+- `mypy --strict src tests`: PASS.
+- `python -m compileall src tests`: PASS.
+- `git diff --check`: PASS.
+- Package build: PASS via `python -m pip wheel . --no-deps`.
+- Isolated wheel install: PASS.
+- Installed CLI `--version`: PASS, reports `research-digest 0.2.0`.
+- Installed CLI `status --json`: PASS, initializes schema `14` and config `4`
+  in isolated `/tmp` data/config.
+- Installed CLI backup/export smoke: PASS.
+- Streamlit AppTest coverage: PASS for two-question feedback controls,
+  no default answers, persisted rerun state, explicit `UNANSWERED` clearing,
+  abstract toggles, manual Library-connection action below threshold, and
+  Settings threshold control.
+
+Audit state:
+
+- Fresh read-only refinement Auditor initially failed the candidate with one
+  BLOCKER and three IMPORTANT findings:
+  tri-state clearing was not persistable, suggestion dismissal was exact
+  evidence-keyed rather than theme-keyed, suggestion construction was
+  unbounded, and the automatic Library-context threshold was not wired into
+  production paths.
+- Repair round 1 closed those findings with explicit nullable clearing,
+  theme-keyed suggestion suppression, bounded SQL evidence reads, and
+  service/automation/UI threshold wiring.
+- Fresh read-only repair Auditor PASS: no BLOCKER, IMPORTANT, or MINOR
+  findings.
+
+Focused human/live smoke checklist:
+
+- Confirm a first-time user can understand and answer both feedback questions.
+- Verify neither feedback question is preselected for an unanswered paper.
+- Save each of the four combinations:
+  profile yes/interest yes, profile yes/interest no,
+  profile no/interest yes, profile no/interest no.
+- Change and clear each answer independently using `Unanswered`.
+- Confirm profile calibration follows only profile-fit answers.
+- Mark at least three coherent outside-profile-but-interesting papers and
+  inspect Suggested Interests.
+- Dismiss a suggested interest, add another article in the same theme, and
+  verify it does not reappear.
+- Review and create a suggested profile only after explicit approval and edits.
+- With about three saved Library papers and new digest scores below `0.90`,
+  verify automatic Library-context Codex calls are zero.
+- Verify a score at or above the configured threshold is eligible for automatic
+  Library-context reasoning.
+- Verify `Find Library connections` works manually below threshold.
+
+Next permitted action:
+
+- Return to human live smoke/review for this final refinement.
+- Do not commit, tag, push, publish, or release without explicit human
+  instruction.
+
+## Final RC Refinement - Cost, Calibration, Scoring, And Progress
+
+State updated: 2026-08-18.
+
+Current substage:
+
+- `M6_FINAL_RC_REFINEMENT_COST_CALIBRATION_PROGRESS_PACKAGE_PASS_AWAITING_AUDIT`.
+
+Baseline:
+
+- Continued from the uncommitted qualified M6/v0.3 refinement on
+  `feature/m6-scientific-library-memory`.
+- The underlying clean base remains `d58a3c75d05c8fc1548ae7b211a66a81de3a528a`
+  (`m6f-qualified`).
+- No commit, tag, push, package publication, public release, M3 work, or M5
+  work has been performed.
+
+Implemented refinement scope:
+
+- Preserved the qualified two-axis feedback model:
+  `profile_match` and `personal_interest`.
+- Preserved Suggested Interests as evidence from
+  `profile_match=NO` plus `personal_interest=YES`; quantitative human scores
+  alone do not create new interests.
+- Reaffirmed the preselected-out invariant: cache-miss papers that fail
+  Stage-1 preselection do not receive new full relevance analysis, generated
+  summary, why-it-matters, or Library-context reasoning for that run.
+- Added user-facing Model effort under Settings -> Analysis, mapped to the
+  existing internal `preselection_fraction` by
+  `model_effort = 1 - preselection_fraction`.
+- Added `automatic_library_connections_enabled`, default `true`. When disabled,
+  digest-time automatic Library-context model calls are skipped while manual
+  `Find Library connections` remains available.
+- Preserved `automatic_library_context_threshold`, default `0.90`, and clarified
+  that it gates extra model work for a new paper's final profile relevance
+  score.
+- Added quantitative human relevance calibration prompts with persisted
+  one-time sampling decisions per completed digest run. Sampling defaults to
+  `relevance_calibration_prompt_probability = 0.20`, creates at most one prompt
+  per run, prefers newly analyzed below-threshold papers, excludes
+  preselected-out/un-analyzed papers, and keeps model and human relevance scores
+  separate.
+- Saving an article to Library now records `personal_interest=YES` for the
+  current profile context when available, without altering `profile_match`.
+  Unsave does not set `personal_interest=NO`.
+- Added a Settings Scoring Guide that documents relevance score, profile
+  threshold, preselection score/threshold, Model effort mapping, automatic
+  Library threshold, Library connection confidence, and human calibration score
+  without claiming calibrated probabilities.
+- Added low-frequency durable progress updates for long digest runs so
+  `app_runs` counters and progress stage/message advance after retrieval,
+  preselection, analysis batches, and terminal completion/failure.
+- Backup/export now includes quantitative relevance calibration records.
+
+Schema/config migration state:
+
+- SQLite schema advances from `14` to `15`.
+- JSON config advances from `4` to `5`.
+- Additive database migration creates
+  `quantitative_relevance_calibrations` and adds nullable `progress_stage` and
+  `progress_message` fields to `app_runs`.
+- Additive config migration adds:
+  `automatic_library_connections_enabled`,
+  `preselection_fraction`, and
+  `relevance_calibration_prompt_probability`.
+- Migrations preserve profiles, articles, analyses, two-axis feedback, Library
+  state, tags, suppressions, notes, collections, connections, Suggested
+  Interests, coverage, history, scheduler config, and backup/export behavior.
+
+Deterministic qualification so far:
+
+- `pytest`: PASS, 346 passed and 9 subtests passed.
+- `ruff check .`: PASS.
+- `mypy --strict src tests`: PASS.
+- `python -m compileall src tests`: PASS.
+- `git diff --check`: PASS.
+- Package build: PASS via `python -m pip wheel . --no-deps`.
+- Dependency-resolving isolated wheel install: BLOCKED by environment DNS/PyPI
+  access for declared dependencies, including `openai>=1.99.0`, even after the
+  required network escalation retry.
+- No-deps isolated wheel install: PASS.
+- Installed CLI `--version`: PASS, reports `research-digest 0.2.0`.
+- Installed CLI `status --json`: PASS, initializes schema `15` and config `5`
+  in isolated `/tmp` data/config.
+- Installed CLI backup/export smoke: PASS.
+
+Audit state:
+
+- Fresh independent closure Auditor remains pending for this final refinement.
+
+Focused human/live smoke checklist:
+
+- Confirm preselected-out papers show source metadata, original abstract, and
+  Save to Library, without generated summaries or new full analysis.
+- Save a Today analyzed paper, a Today preselected-out paper, and a History
+  paper; verify `Personally interested` becomes `Yes` while profile match
+  remains independent.
+- Unsave a saved paper and verify personal-interest feedback is preserved.
+- Inspect Settings -> Analysis Model effort at 100%, 50%, and 0%; verify
+  displayed internal fraction and preselection threshold.
+- Turn Automatic Library connections OFF and run a small digest with saved
+  Library papers; verify automatic Library-context model calls are zero.
+- Turn Automatic Library connections ON at threshold 0.90 and run below-threshold
+  papers; verify automatic Library-context model calls are zero.
+- Manually click `Find Library connections` for a below-threshold paper and
+  verify one bounded explicit operation.
+- Trigger a calibration prompt, submit one human 0..1 score, and verify the
+  model score is only revealed after submission.
+- Inspect Settings -> Scoring Guide.
+- Run a multi-date digest and verify status/progress counters advance after
+  retrieval, preselection, and analysis.
+
+Next permitted action:
+
+- Run a fresh independent Auditor.
+- Return for human live smoke/review.
+- Do not commit, tag, push, publish, or release without explicit human
+  instruction.
+
+## Final RC Refinement Repair Round 1
+
+State updated: 2026-08-18.
+
+Fresh closure Auditor findings:
+
+- BLOCKER: none.
+- IMPORTANT: stale/crashed run recovery left `progress_stage`/`progress_message`
+  in the last nonterminal state.
+- IMPORTANT: JSON backup/export omitted the new app-run progress fields.
+- MINOR: top-level campaign-state header still reflected the earlier M6-F gate
+  rather than schema `15` / config `5` refinement state.
+
+Repairs:
+
+- `_mark_unfinished_runs_failed` now sets terminal failed progress stage/message
+  while marking stale unfinished runs failed.
+- Backup/export `_runs` now exports `progress_stage` and `progress_message`.
+- Campaign state header now reflects the current refinement, schema `15`, config
+  `5`, and repair-round status.
+
+Repair qualification:
+
+- Focused regression tests: PASS, `pytest tests/test_run_lifecycle.py
+  tests/test_backup.py tests/test_release_qualification_matrix.py -q`, 18
+  passed.
+- Full pytest: PASS, 346 passed and 9 subtests passed.
+- `ruff check .`: PASS.
+- `mypy --strict src tests`: PASS.
+- `python -m compileall src tests`: PASS.
+- `git diff --check`: PASS.
+- Repaired package build: PASS via `python -m pip wheel . --no-deps`.
+- Repaired no-deps isolated wheel install: PASS.
+- Repaired installed CLI `--version`: PASS, reports `research-digest 0.2.0`.
+- Repaired installed CLI `status --json`: PASS, initializes schema `15` and
+  config `5`.
+- Repaired installed CLI backup/export smoke: PASS.
+- Dependency-resolving isolated wheel install remains environment-blocked by
+  DNS/PyPI access for declared dependencies, including `openai>=1.99.0`, as
+  recorded above.
+
+Focused repair Auditor:
+
+- BLOCKER: none.
+- IMPORTANT: top-level `schema_config_migration_state` still stopped at schema
+  `13` / config unchanged despite the refinement now using schema `15` /
+  config `5`.
+- MINOR: backup export regression test asserted exported `progress_stage` but
+  not exported `progress_message`.
+
+Second repair:
+
+- Top-level migration-state summary now includes schema `14` / config `4` from
+  the feedback refinement and schema `15` / config `5` from the
+  cost/calibration/progress refinement.
+- Backup export regression test now asserts `progress_message` is exported.
+
+Final repair qualification:
+
+- Focused tests: PASS, `pytest tests/test_backup.py tests/test_release_docs.py
+  -q`, 8 passed.
+- Full pytest: PASS, 346 passed and 9 subtests passed.
+- `ruff check .`: PASS.
+- `mypy --strict src tests`: PASS.
+- `python -m compileall src tests`: PASS.
+- `git diff --check`: PASS.
+- Final package build: PASS via `python -m pip wheel . --no-deps`.
+- Final no-deps isolated wheel install: PASS.
+- Final installed CLI `--version`: PASS, reports `research-digest 0.2.0`.
+- Final installed CLI `status --json`: PASS, initializes schema `15` and config
+  `5`.
+- Final installed CLI backup/export smoke: PASS.
+
+Audit state:
+
+- Fresh closure Auditor and focused repair Auditor findings have been addressed.
+- Residual risks require human live smoke in the real Codex/browser/scheduler
+  environment.
+
+## Final RC Startup Side-Effect Repair
+
+State updated: 2026-08-18.
+
+Human live smoke found that `research-digest serve` appeared to start a
+`Legacy digest`, leaving the UI unable to run an explicit digest because another
+digest was already ongoing.
+
+Deterministic root-cause trace:
+
+- `research-digest serve`
+  -> `research_digest.cli._serve_command`
+  -> launches `streamlit run src/research_digest/ui/app.py`.
+- Streamlit default page:
+  -> `research_digest.ui.app.main`
+  -> `today.render`
+  -> `_render_date_selection_control`
+  -> `resolve_latest_available_source_date`
+  -> `ArxivSource.resolve_latest_available_date`
+  -> arXiv `_fetch_page`.
+- Settings/Automation page:
+  -> `_render_coverage_overview`
+  -> `build_automatic_coverage_plan`
+  -> `ArxivSource.resolve_latest_available_date`
+  -> arXiv `_fetch_page`.
+- Today page also constructed the analyzer and automatic Library-context
+  generator before the explicit `Run digest` click.
+
+Deterministic inspection found no supported UI startup path that directly calls
+`run_digest_for_profile`, `run_automatic_digest_now`, or acquires the run lock.
+The repair nevertheless enforces this boundary with AppTest coverage that fails
+on any startup-time source fetch, provider construction, run-service call, or
+`app_runs` insertion, and verifies the digest run lock remains free after
+startup render.
+
+Repair:
+
+- Today/latest-available mode no longer resolves the latest source date during
+  page render. It preserves `DateSelection.latest_available()` and resolves it
+  only inside the explicit run service after `Run digest`.
+- Today no longer builds the analyzer or automatic Library-context generator
+  during page render. Both are constructed only inside the explicit `Run digest`
+  path.
+- Settings/Automation no longer resolves latest available or pending catch-up
+  dates during page render. The overview is DB-only on load and states that
+  pending dates are checked when `Run now` starts.
+- `Run now` still computes pending dates and uses the shared automation service
+  only after the explicit button click.
+- Suggested Interests generation is no longer run during Settings render.
+  Settings lists stored suggestions read-only and generates/refetches
+  suggestions only after an explicit `Refresh suggested interests` click.
+- Manual `Find Library connections` no longer constructs the Library-context
+  generator during article-card render; generator construction and provider
+  checks happen only after the explicit button click.
+- History renders legacy-format rows as historical data only.
+
+Regression tests:
+
+- `tests/test_streamlit_startup_side_effects.py` verifies Today initial load,
+  Today refresh/rerun, Settings initial load, legacy History/Today display, run
+  lock freedom after startup render, and exactly-one service invocation after a
+  single `Run digest` click.
+- It also verifies Settings render does not refresh/create Suggested Interests
+  even when qualifying new-interest evidence exists.
+
+Startup repair deterministic qualification:
+
+- Focused startup tests: PASS, 6 passed.
+- Affected regression set: PASS, 76 passed.
+- Full `pytest`: PASS, 351 passed and 9 subtests passed.
+- `ruff check .`: PASS.
+- `mypy --strict src tests`: PASS.
+- `python -m compileall src tests`: PASS.
+- `git diff --check`: PASS.
+- Package build: PASS with `python -m pip wheel . --no-deps`.
+- No-deps isolated wheel install: PASS.
+- Installed CLI `--version`: PASS, reports `research-digest 0.2.0`.
+- Installed CLI `status --json`: PASS, schema `15`, config `5`.
+- Installed CLI backup smoke: PASS.
+
+Focused Auditor:
+
+- Initial focused Auditor found no BLOCKER issues and one IMPORTANT issue:
+  Settings render called `refresh_suggested_interests`, which could mutate
+  stored `suggested_interest_profiles` during ordinary page load when enough
+  new-interest evidence existed.
+- Repair round 1 moved Suggested Interests generation behind explicit refresh
+  and deferred manual Library-context generator construction until explicit
+  `Find Library connections`.
+- Focused repair Auditor found no BLOCKER or IMPORTANT findings.
+- MINOR/OPTIONAL: add an extra AppTest around existing result-card render to
+  prove manual Library-context generator construction remains deferred until
+  `Find Library connections`. Code inspection confirms the behavior; this is not
+  a release blocker.
+
+## Final RC Scheduler State Repair
+
+State updated: 2026-08-18.
+
+Human live smoke found Windows Task Scheduler reported:
+
+- Task name: `Research Digest Daily`
+- State: `Ready`
+- Last run: `2026-08-18 06:00:01`
+- Last task result: `3221225786`
+- Next run: `2026-08-19 06:00:00`
+
+Settings incorrectly rendered `Automatic daily digest = OFF` because scheduler
+inspection failed while converting the nonzero previous execution result to
+`System.Int32`.
+
+Root cause:
+
+- `_status_script` cast `$info.LastTaskResult` to `[int]`, which can overflow
+  for Windows task result codes such as `3221225786`.
+- Settings used `bool(status.schedule and status.schedule.installed)` for the
+  automation toggle, so any status inspection/parsing failure collapsed to an
+  OFF-looking toggle.
+
+Repair:
+
+- Windows status inspection now emits `[int64]$info.LastTaskResult`.
+- Settings uses explicit tri-state schedule interpretation:
+  - enabled: task installed and state is not `Disabled`;
+  - disabled: task missing or task state is `Disabled`;
+  - unknown: scheduler status inspection failed or no status object is
+    available.
+- A nonzero `LastTaskResult` is displayed as a previous-run warning only; it no
+  longer changes whether the schedule is shown as enabled.
+- Unknown scheduler status renders `Schedule state unavailable` and does not
+  render an OFF `Automatic daily digest` toggle. Schedule mutation controls are
+  disabled until inspection succeeds.
+- CLI status now preserves unknown scheduler state as `status_available=false`
+  and `installed=null` in JSON, and human-readable status says `Schedule:
+  status unavailable` instead of `installed=False`.
+- `Run now` remains an explicit separate operation.
+
+Regression tests:
+
+- `tests/test_scheduler.py` verifies large Windows task result parsing and that
+  the PowerShell status script uses `[int64]`.
+- `tests/test_settings_page.py` verifies enabled/disabled/unknown schedule
+  state interpretation, including Ready with result `3221225786`.
+- `tests/test_settings_ui_smoke.py` verifies Settings renders:
+  - Ready/result `0` as Automatic daily digest ON;
+  - Ready/result `3221225786` as ON with next run visible and prior-run warning;
+  - Disabled as OFF;
+  - status parsing failure as unavailable without an OFF toggle.
+- `tests/test_cli.py` verifies scheduler inspection failure is reported as an
+  unknown scheduler state in JSON and human output, never as installed/off
+  false.
+
+Scheduler-state repair deterministic qualification:
+
+- Focused scheduler/CLI/settings tests: PASS, 42 passed and 6 subtests passed.
+- Full `pytest`: PASS, 361 passed and 9 subtests passed.
+- `ruff check .`: PASS.
+- `mypy --strict src tests`: PASS.
+- `python -m compileall src tests`: PASS.
+- `git diff --check`: PASS.
+- Package build: PASS with `python -m pip wheel . --no-deps`.
+- No-deps isolated wheel install: PASS.
+- Installed CLI `--version`: PASS, reports `research-digest 0.2.0`.
+- Installed CLI `status --json`: PASS, schema `15`, config `5`. In this
+  sandbox, scheduler inspection is unavailable and the installed CLI reports
+  `status_available=false` with `installed=null`, which is the intended cautious
+  fallback.
+- Installed CLI backup smoke: PASS.
+
+Focused Auditor:
+
+- PASS.
+- BLOCKER: none.
+- IMPORTANT: none.
+- MINOR/OPTIONAL: none.
+- Auditor verification: `python -m pytest tests/test_scheduler.py
+  tests/test_settings_page.py tests/test_settings_ui_smoke.py
+  tests/test_cli.py tests/test_cli_schedule.py tests/test_automation.py` PASS,
+  52 passed.
+
+## Final RC Stale Run Recovery Repair
+
+State updated: 2026-08-18.
+
+Human live smoke confirmed run `#43` was created by the scheduled 06:00
+execution and remained `RUNNING` after Windows Task Scheduler reported the task
+process had ended with `0xC000013A` / `3221225786`.
+
+Live read-only state before repair:
+
+- Last run: `#43`, status `RUNNING`, origin `SCHEDULED`.
+- Counts: retrieved `198`, stored `58`, preselected `177`, skipped `21`,
+  analyzed `70`, relevant `0`.
+- Progress: `analysis`; message `Full analysis 70 / 177; Codex batch 15 / 36
+  (size 5).`
+- Durable run lock: `name=digest`, owner `pid:<legacy uuid>`, acquired
+  `2026-08-18T11:00:02.059131Z`.
+- The old owner string did not contain an actual PID or process start identity,
+  so process liveness could not be inspected. Repaired `status --json` now
+  reports this as `run_lock.owner_state = "unknown"`.
+
+Root cause:
+
+- Existing run-lock recovery was age-only. A dead owner process could block a
+  new explicit run until the six-hour stale threshold elapsed.
+- The lock owner string looked process-related but stored only a UUID, not a
+  PID, host, or process start identity.
+- `KeyboardInterrupt`/`SystemExit` could bypass pipeline finalization because
+  only ordinary `Exception` was caught.
+
+Repair:
+
+- New run-lock owners are process-aware JSON strings containing PID, host,
+  Linux `/proc/<pid>/stat` start ticks, and a nonce.
+- Lock acquisition now preserves overlap exclusion for owners that are
+  inspectably alive.
+- Lock acquisition immediately recovers inspectably dead owners, marks the
+  abandoned unfinished run terminal `FAILED`, preserves existing progress
+  counts, deletes stale ownership, and then acquires the new lock.
+- PID reuse is treated as dead when the recorded process start ticks differ
+  from the current process at that PID.
+- Unknown/uninspectable owners still obey the existing age-based stale cutoff
+  during automatic lock acquisition.
+- Added explicit app-level recovery command:
+  `research-digest recover-abandoned-run --run-id <ID>`.
+- For legacy/uninspectable owners, the command refuses to recover unless
+  `--force-uninspectable-owner` is provided after the human confirms no digest
+  owner process is alive.
+- CLI `status --json` now includes `run_lock` with owner state so recovery can
+  be inspected without SQLite editing.
+- Catchable interruptions now finalize the current run as `FAILED` with a
+  sanitized interrupted message and release ownership through existing
+  `finally` blocks.
+
+Regression tests:
+
+- `tests/test_run_locks.py` covers process-owner liveness, missing process,
+  PID reuse, legacy unknown owner, and cross-host unknown owner.
+- `tests/test_run_lifecycle.py` covers active owner blocking, dead-owner
+  recovery before age staleness, legacy owner forced recovery, interrupted
+  scheduled-run recovery preserving History/counts, retry after recovery
+  reusing valid analyses, catchable `KeyboardInterrupt` finalization, and
+  catchable interruption after a successful analysis chunk preserving the
+  durable analyzed count.
+- `tests/test_cli.py` covers `run_lock` status output and explicit
+  `recover-abandoned-run` behavior with and without the legacy-owner force flag.
+- Scheduler enabled/disabled/unknown repair tests remain passing.
+
+Deterministic qualification:
+
+- Focused stale-run/scheduler/CLI tests after repair round 1: PASS, 61 passed
+  and 6 subtests passed.
+- Full `pytest`: PASS, 376 passed and 9 subtests passed.
+- `ruff check .`: PASS.
+- `mypy --strict src tests`: PASS.
+- `python -m compileall src tests`: PASS.
+- `git diff --check`: PASS.
+- Package build: PASS with `python -m pip wheel . --no-deps`.
+- No-deps isolated wheel install: PASS.
+- Installed CLI `--version`: PASS, reports `research-digest 0.2.0`.
+- Installed CLI `status --json`: PASS, schema `15`, config `5`, `run_lock`
+  field present.
+- Installed CLI backup smoke: PASS.
+
+Pending:
+
+- Human live recovery smoke for run `#43`; no manual DB editing.
+
+Audit round 1:
+
+- Initial stale-run recovery Auditor found one IMPORTANT issue: catchable
+  interruption during full-analysis batching could overwrite already persisted
+  partial analysis progress with stale in-memory counters.
+- Repair: interruption finalization now reads the current durable run counters
+  and uses the maximum of durable and in-memory values before marking the run
+  terminal.
+- Added regression test for interruption after one successful analysis chunk;
+  the terminal failed run preserves `analyzed_count`.
+- MINOR/OPTIONAL boot-id strengthening was also implemented: new process-owner
+  records include Linux boot ID where available, reducing reboot/PID/start-tick
+  ambiguity.
+
+Focused closure Auditor:
+
+- PASS.
+- BLOCKER: none.
+- IMPORTANT: none.
+- MINOR/OPTIONAL: add a direct boot-ID mismatch test for the optional
+  hardening branch. The implementation was inspected and no release-blocking
+  issue remains.
+
+## v0.3 RC Preselection Calibration Repair
+
+State timestamp: 2026-08-18T15:38:19Z.
+
+Current HEAD before freeze: `d58a3c75d05c8fc1548ae7b211a66a81de3a528a`.
+
+Human live diagnostic for run `#46` established:
+
+- Model effort `30%`.
+- `preselection_fraction = 0.70`.
+- profile relevance threshold `0.70`.
+- preselection threshold `0.49`.
+- run accounting was correct: 31 retrieved, 5 reused, 26 screened, 21 passed
+  preselection, 5 preselected out, 21 new analyses, 26 total analyzed, 2
+  relevant.
+- every newly analyzed paper passed the Stage-1 gate, so the defect is
+  preselection-score calibration drift, not threshold-enforcement failure.
+
+Repair candidate:
+
+- Production Today and Automation/Run Now paths now build provider-backed
+  abstract preselectors through the configured analyzer provider.
+- Codex provider uses `CodexAbstractPreselector`.
+- OpenAI provider uses `OpenAIAbstractPreselector`.
+- `TermOverlapPreselector` remains available for deterministic tests/offline
+  fallback only and is no longer the ordinary production scientific
+  preselector.
+- Stage-1 prompt freezes the abstract-level question:
+  "From the title and abstract alone, how plausible is it that a deeper
+  relevance analysis would find this paper meaningfully relevant to the
+  selected Interest Profile?"
+- Stage-1 output is minimal: article id and `preselection_score` only.
+- Rubric is ordinal, not probabilistic:
+  0.00-0.19 no substantive plausible connection; 0.20-0.39 weak/general
+  adjacency; 0.40-0.59 plausible indirect connection; 0.60-0.79 strong
+  plausible relevance; 0.80-1.00 direct/core apparent match.
+- Bounded preselection chunks use default chunk size 20 with retry chunk sizes
+  20, 10, 1.
+- Missing/malformed/duplicate/unknown IDs are rejected and only unresolved IDs
+  are retried.
+- Stage-1 provider failure is explicit fail-open: affected papers receive full
+  analysis if the full analyzer remains available, with decision origin
+  `UNAVAILABLE_FAIL_OPEN`.
+- Rejected papers still receive no full relevance analysis, generated summary,
+  why-it-matters text, reading priority, or automatic Library context.
+- Cached valid full analyses still bypass Stage 1 and are recorded with origin
+  `REUSED_ANALYSIS_BYPASS`.
+
+Schema/config state:
+
+- Database schema bumped from 15 to 16.
+- Added additive table `preselection_decisions`.
+- No config-version bump required.
+- Preselection evidence records run id, article id, profile/source semantic
+  fingerprints, score, threshold, pass/reject, origin, stage, preselector
+  version, optional sanitized/internal reason, and creation time.
+- Run snapshots now include `preselection_decisions`.
+- JSON export includes `preselection_decisions`.
+
+Deterministic qualification:
+
+- `pytest -q`: PASS, 389 passed and 9 subtests passed.
+- `ruff check .`: PASS.
+- `mypy --strict src tests`: PASS.
+- `python -m compileall src tests`: PASS.
+- `git diff --check`: PASS.
+- Package build smoke: PASS via `pip wheel . --no-deps --wheel-dir
+  /tmp/research-digest-wheel`.
+- Isolated no-deps wheel install smoke: PASS.
+- Installed CLI `research-digest --help`: PASS.
+
+Run `#46` benchmark state:
+
+- Read-only reconstruction found the live default DB at
+  `/home/inaeyk/.local/share/research-digest/research_digest.sqlite3`, schema
+  15, with run `#46` and its immutable snapshot.
+- The 26 originally screened papers were reconstructed as 21 `NEW_THIS_RUN`
+  analyzed papers plus 5 preselected-out papers.
+- A sandboxed Codex preselection attempt failed before model execution because
+  Codex could not initialize its app-server client on the read-only filesystem.
+- An outside-sandbox benchmark was not run: the approval request was rejected
+  because it would send private article abstracts from the local database to
+  Codex/LLM without explicit human authorization for that payload.
+- Next permitted action: human may explicitly authorize the live run `#46`
+  Stage-1 benchmark, or perform it manually using the repaired code.
+
+Qualification state:
+
+- Deterministic candidate: PASS.
+- Live Codex run `#46` benchmark: BLOCKED pending explicit human approval.
+- Fresh focused Auditor: in progress.
+- Do not commit, tag, push, publish, or freeze v0.3 yet.
+
+Audit repair round 1:
+
+- Initial focused Auditor found one BLOCKER and one IMPORTANT issue.
+- BLOCKER: deterministic CLI/Automation tests that injected `FakeAnalyzer`
+  could still construct the real provider-backed Codex preselector and invoke
+  live Codex Stage 1.
+- Repair: `run_automatic_digest_now` and the CLI test seam now accept an
+  explicit `AbstractPreselector`. Deterministic tests inject a fail-open fake
+  preselector; production callers that omit the parameter still use
+  `build_configured_preselector`.
+- IMPORTANT: scheduled runs could lose UI-saved M6 analysis settings when a
+  custom config directory was in use.
+- Repair: scheduled environment now includes `RESEARCH_DIGEST_CONFIG_DIR`
+  alongside `RESEARCH_DIGEST_DB` and provider settings. Scheduler tests assert
+  the value is included and secrets remain excluded.
+
+Post-repair deterministic qualification:
+
+- `pytest -q`: PASS, 389 passed and 9 subtests passed.
+- `ruff check .`: PASS.
+- `mypy --strict src tests`: PASS.
+- `python -m compileall src tests`: PASS.
+- `git diff --check`: PASS.
+- Package build smoke: PASS via `pip wheel . --no-deps --wheel-dir
+  /tmp/research-digest-wheel-2`.
+- Isolated no-deps wheel install smoke: PASS.
+- Installed CLI `research-digest --help`: PASS.
+
+Focused closure Auditor:
+
+- In progress.
+
+Current next permitted action:
+
+- Wait for closure Auditor.
+- If PASS, return to human review for explicit live Codex benchmark authorization
+  or human-run benchmark/live smoke.
+
+Audit repair round 2:
+
+- Closure Auditor found one remaining IMPORTANT issue: direct calls to
+  `run_automatic_digest_now` with an injected fake analyzer but no injected
+  preselector could still build a configured Codex preselector.
+- Repair: `run_automatic_digest_now` now treats an injected analyzer with no
+  explicit preselector as a deterministic/test seam and uses
+  `UnavailableFailOpenPreselector` unless `use_configured_preselector=True` is
+  explicitly supplied.
+- Production CLI calls pass `use_configured_preselector=True`; installed CLI
+  and ordinary UI/Automation behavior still use provider-backed model
+  preselection by default.
+- Added direct Automation regression proving injected fake analyzer with no
+  preselector does not build the configured/live preselector.
+
+Final deterministic qualification after repair round 2:
+
+- `pytest -q`: PASS, 391 passed and 9 subtests passed.
+- `ruff check .`: PASS.
+- `mypy --strict src tests`: PASS.
+- `python -m compileall src tests`: PASS.
+- `git diff --check`: PASS.
+- Package build smoke: PASS via `pip wheel . --no-deps --wheel-dir
+  /tmp/research-digest-wheel-4`.
+- Isolated no-deps wheel install smoke: PASS.
+- Installed CLI `research-digest --help`: PASS.
+
+Current qualification state:
+
+- Deterministic repair candidate: PASS.
+- Audit repair budget used: initial candidate + 2 audit-driven repair rounds.
+- Final focused closure Auditor: PASS, 38 focused tests passed in auditor run.
+- Remaining human stop: live Codex run `#46` benchmark/live smoke requires
+  explicit human authorization because it sends local article abstracts to the
+  model provider.
+- Do not commit, tag, push, publish, or freeze v0.3 until human review.
+
+## Run #46 Live Benchmark Attempt
+
+State timestamp: 2026-08-18T16:14:27Z.
+
+Human authorized a read-only live Codex benchmark using the 26 saved run `#46`
+title/abstract records that originally required Stage-1 screening.
+
+Execution constraints:
+
+- SQLite was opened read-only.
+- No run `#46`, article, analysis, feedback, coverage, or Library records were
+  modified.
+- The benchmark used `CodexAbstractPreselector` with profile threshold `0.70`,
+  preselection fraction `0.70`, and cutoff `0.49`.
+- Known final relevance scores were not included in the Stage-1 prompt.
+
+Outcome:
+
+- Codex did not reach model execution.
+- `codex exec --ephemeral --sandbox read-only` failed during in-process
+  app-server initialization with a read-only filesystem error.
+- All 26 articles therefore received explicit `UNAVAILABLE_FAIL_OPEN`
+  preselection decisions.
+- New Stage-1 score distribution is unavailable.
+- Scientific benchmark metrics that require Stage-1 scores are undefined.
+- Fail-open behavior preserved the primary scientific safety property: no
+  known relevant article was rejected, but no full-analysis work would be
+  avoided under this failed-provider condition.
+
+Run `#46` fail-open aggregate:
+
+- total screened: 26.
+- passed via fail-open: 26.
+- rejected: 0.
+- known final relevance scores available: 21.
+- median known final relevance: 0.22.
+- known final `<= 0.20`: 10, all fail-open/pass.
+- known final `>= 0.70`: 1, fail-open/pass.
+- estimated full-analysis calls avoided versus old run `#46`: 0.
+
+Live new-paper smoke:
+
+- arXiv source-only smoke was attempted in the sandbox and outside the sandbox.
+- Both attempts failed DNS resolution for the arXiv API.
+- No disposable live digest could be completed in this environment.
+
+Current next permitted action:
+
+- Human live environment should repair/verify Codex CLI app-server state and
+  network/DNS, then rerun the benchmark/live smoke.
+- Do not release/freeze v0.3 based on this local live benchmark; it did not
+  produce model scores.
+
+## Human-Run Run #46 Stage-1 Benchmark
+
+Human subsequently ran the read-only benchmark from an ordinary WSL shell.
+
+Scientific result:
+
+- total screened: 26.
+- passed at Model effort 30%: 3.
+- rejected at Model effort 30%: 23.
+- pass rate at 30%: 11.5%.
+- Spearman Stage-1 vs final relevance: approximately 0.87.
+- all 10 papers with historical final relevance `<= 0.20` were rejected.
+- one known genuinely relevant paper was incorrectly rejected at 30% effort:
+  Stage-1 score `0.46`, historical final relevance `0.74`.
+- At relevance threshold `0.70`, 30% Model effort means preselection fraction
+  `0.70` and cutoff `0.49`.
+- The false negative was fifth-highest by Stage-1 score and only `0.03` below
+  the cutoff.
+
+Product refinement:
+
+- Stage-1 prompt/rubric remains unchanged.
+- Default Model effort for new/default configuration changes to 40%.
+- Default `preselection_fraction` changes to `0.60`, giving cutoff `0.42` at
+  relevance threshold `0.70`.
+- Existing explicitly saved user values are not overwritten.
+- Projected run `#46` behavior at 40% effort: 5/26 pass; the known relevant
+  paper is preserved; all known final `<= 0.20` papers remain rejected; 16 full
+  analyses avoided versus the old lexical preselector.
+
+Qualification:
+
+- `pytest -q`: PASS, 392 passed and 9 subtests passed.
+- `ruff check .`: PASS.
+- `mypy --strict src tests`: PASS, 100 source files checked.
+- `python -m compileall src tests`: PASS.
+- `git diff --check`: PASS.
+- Package wheel build with `python -m pip wheel . --no-deps`: PASS.
+- Isolated no-deps wheel install: PASS.
+- Installed CLI `research-digest --version`: PASS, reports
+  `research-digest 0.2.0`.
+- Fresh focused read-only Auditor PASS: no BLOCKER or IMPORTANT findings.
+
+Next permitted action:
+
+- Return for final human smoke of the 40% default Model effort refinement.
+- Do not commit, tag, push, publish, or release before human approval.
+
+## Final Integrated M6/v0.3 Feature Freeze
+
+State timestamp: 2026-08-18.
+
+Human live smoke:
+
+- PASS for Settings -> Model effort worked example.
+- PASS for dynamic use of relevance threshold, Model effort, and derived
+  Stage-1 cutoff.
+- PASS for updating the example after Model effort / relevance threshold
+  changes.
+- PASS for minimal Today and History preselected-out cards:
+  metadata, preselected-out state, arXiv/PDF, Show abstract, and Save to
+  Library, with no generated summary/relevance reason/priority/why-it-matters.
+- PASS for source abstract display with no analysis side effects.
+- PASS for previously accepted two-axis feedback, quantitative calibration,
+  automatic Library toggle/threshold, Model effort control, Scoring Guide,
+  Suggested Interests, Library/tags/notes/collections/connections, stale-run
+  recovery, and scheduler repairs.
+
+Final feature-candidate deterministic/package gate:
+
+- `pytest -q`: PASS, 393 passed and 9 subtests passed.
+- `ruff check .`: PASS.
+- `mypy --strict src tests`: PASS, 100 source files checked.
+- `python -m compileall src tests`: PASS.
+- `git diff --check`: PASS.
+- Wheel build: PASS, generated
+  `research_digest-0.2.0-py3-none-any.whl` before release-version bump.
+- Isolated no-deps wheel install: PASS.
+- Installed CLI `research-digest --version`: PASS, reported
+  `research-digest 0.2.0` before release-version bump.
+- Installed CLI `status --json`: PASS with isolated data/config, initialized
+  SQLite schema `16` and JSON config `5`; Windows scheduler status was
+  unavailable in the Linux/WSL sandbox with a sanitized WSL socket message.
+- Streamlit AppTest smoke: PASS, 17 passed.
+
+Freeze actions authorized by human:
+
+- Stage and commit the complete qualified feature state locally.
+- Create/update the local M6 qualification tag.
+- Create a separate minimal local v0.3.0 release-version commit.
+- Re-run release checks after the version bump.
+- Do not push, publish, create a public v0.3.0 tag, or create a public release.

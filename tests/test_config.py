@@ -13,10 +13,17 @@ from research_digest.analysis.base import AnalyzerUnavailable
 from research_digest.analysis.openai import OpenAIAnalyzer
 from research_digest.config import (
     CONFIG_VERSION,
+    DEFAULT_AUTOMATIC_LIBRARY_CONTEXT_THRESHOLD,
     DEFAULT_CONFIG_FILENAME,
     DEFAULT_DB_FILENAME,
+    DEFAULT_PRESELECTION_FRACTION,
+    DEFAULT_RELEVANCE_CALIBRATION_PROMPT_PROBABILITY,
     ConfigError,
     load_config,
+    model_effort_from_preselection_fraction,
+    preselection_fraction_from_model_effort,
+    preselection_threshold,
+    save_analysis_settings,
     save_automation_settings,
 )
 from research_digest.models import DateSelectionKind
@@ -46,6 +53,16 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.default_date_selection.kind, DateSelectionKind.LATEST_AVAILABLE)
         self.assertTrue(config.automatic_catch_up_enabled)
         self.assertIsInstance(config.automatic_coverage_start_date, date)
+        self.assertEqual(
+            config.automatic_library_context_threshold,
+            DEFAULT_AUTOMATIC_LIBRARY_CONTEXT_THRESHOLD,
+        )
+        self.assertTrue(config.automatic_library_connections_enabled)
+        self.assertEqual(config.preselection_fraction, DEFAULT_PRESELECTION_FRACTION)
+        self.assertEqual(
+            config.relevance_calibration_prompt_probability,
+            DEFAULT_RELEVANCE_CALIBRATION_PROMPT_PROBABILITY,
+        )
         self.assertTrue(config_file_exists)
 
     def test_openai_provider_selection_preserves_api_key_config(self) -> None:
@@ -88,6 +105,10 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.default_date_selection.kind, DateSelectionKind.LATEST_AVAILABLE)
         self.assertTrue(config.automatic_catch_up_enabled)
         self.assertIsInstance(config.automatic_coverage_start_date, date)
+        self.assertEqual(config.automatic_library_context_threshold, 0.90)
+        self.assertTrue(config.automatic_library_connections_enabled)
+        self.assertEqual(config.preselection_fraction, DEFAULT_PRESELECTION_FRACTION)
+        self.assertEqual(config.relevance_calibration_prompt_probability, 0.20)
         self.assertIsNone(config.last_config_backup_path)
 
     def test_old_supported_config_upgrades_with_backup(self) -> None:
@@ -123,7 +144,31 @@ class ConfigTests(unittest.TestCase):
         )
         self.assertIs(upgraded["automatic_catch_up_enabled"], True)
         self.assertIsInstance(upgraded["automatic_coverage_start_date"], str)
+        self.assertEqual(upgraded["automatic_library_context_threshold"], 0.90)
+        self.assertIs(upgraded["automatic_library_connections_enabled"], True)
+        self.assertEqual(upgraded["preselection_fraction"], DEFAULT_PRESELECTION_FRACTION)
+        self.assertEqual(upgraded["relevance_calibration_prompt_probability"], 0.20)
         self.assertNotIn("OPENAI_API_KEY", json.dumps(upgraded))
+
+    def test_old_config_upgrade_preserves_explicit_preselection_fraction(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config" / DEFAULT_CONFIG_FILENAME
+            _write_config_json(
+                config_path,
+                {
+                    "analyzer_provider": "openai",
+                    "openai_model": "legacy-model",
+                    "codex_timeout_seconds": 44,
+                    "preselection_fraction": 0.70,
+                },
+            )
+            with mock.patch.dict(os.environ, _isolated_env(tmp), clear=True):
+                config = load_config()
+
+            upgraded = _read_json(config_path)
+
+        self.assertEqual(config.preselection_fraction, 0.70)
+        self.assertEqual(upgraded["preselection_fraction"], 0.70)
 
     def test_version_2_config_upgrades_to_automatic_coverage_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -161,6 +206,66 @@ class ConfigTests(unittest.TestCase):
         )
         self.assertIs(upgraded["automatic_catch_up_enabled"], True)
         self.assertIsInstance(upgraded["automatic_coverage_start_date"], str)
+        self.assertEqual(upgraded["automatic_library_context_threshold"], 0.90)
+
+    def test_version_3_config_upgrades_to_library_context_threshold(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config" / DEFAULT_CONFIG_FILENAME
+            _write_config_json(
+                config_path,
+                {
+                    "config_version": 3,
+                    "analyzer_provider": "codex",
+                    "openai_model": "stored-openai-model",
+                    "codex_model": None,
+                    "codex_timeout_seconds": 55,
+                    "default_date_selection": {
+                        "kind": "SINGLE_DATE",
+                        "dates": ["2026-08-14"],
+                    },
+                    "automatic_catch_up_enabled": True,
+                    "automatic_coverage_start_date": "2026-08-17",
+                },
+            )
+            with mock.patch.dict(os.environ, _isolated_env(tmp), clear=True):
+                config = load_config()
+
+            upgraded = _read_json(config_path)
+
+        self.assertEqual(config.config_version, CONFIG_VERSION)
+        self.assertEqual(config.automatic_library_context_threshold, 0.90)
+        self.assertEqual(upgraded["automatic_library_context_threshold"], 0.90)
+
+    def test_save_analysis_settings_persists_analysis_controls(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(
+            os.environ,
+            _isolated_env(tmp),
+            clear=True,
+        ):
+            updated = save_analysis_settings(
+                automatic_library_context_threshold=0.75,
+                automatic_library_connections_enabled=False,
+                preselection_fraction=0.25,
+                relevance_calibration_prompt_probability=0.35,
+            )
+            reloaded = load_config()
+
+        self.assertEqual(updated.automatic_library_context_threshold, 0.75)
+        self.assertEqual(reloaded.automatic_library_context_threshold, 0.75)
+        self.assertFalse(reloaded.automatic_library_connections_enabled)
+        self.assertEqual(reloaded.preselection_fraction, 0.25)
+        self.assertEqual(reloaded.relevance_calibration_prompt_probability, 0.35)
+
+    def test_model_effort_mapping_preserves_internal_preselection_semantics(self) -> None:
+        self.assertEqual(preselection_fraction_from_model_effort(1.0), 0.0)
+        self.assertEqual(preselection_fraction_from_model_effort(0.0), 1.0)
+        self.assertEqual(preselection_fraction_from_model_effort(0.5), 0.5)
+        self.assertEqual(model_effort_from_preselection_fraction(0.0), 1.0)
+        self.assertEqual(model_effort_from_preselection_fraction(1.0), 0.0)
+        self.assertEqual(
+            preselection_threshold(relevance_threshold=0.65, preselection_fraction=0.5),
+            0.325,
+        )
 
     def test_unknown_future_config_version_fails_clearly(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

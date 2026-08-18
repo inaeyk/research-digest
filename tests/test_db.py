@@ -20,6 +20,7 @@ from research_digest.db import (
     MigrationError,
     SchemaMigration,
 )
+from research_digest.library import save_article_with_personal_interest, unsave_article
 from research_digest.models import (
     AnalysisResult,
     Article,
@@ -29,6 +30,7 @@ from research_digest.models import (
     RunOrigin,
     profile_semantic_fingerprint,
 )
+from research_digest.preselection import AbstractPreselectionDecision
 
 
 def sample_article(source_article_id: str = "2608.00001") -> Article:
@@ -105,6 +107,15 @@ class DatabaseTests(unittest.TestCase):
     def test_fresh_database_records_current_schema_version(self) -> None:
         self.assertEqual(self.db.get_schema_version(), CURRENT_SCHEMA_VERSION)
         self.assertIsNone(self.db.last_migration_backup_path)
+        with sqlite3.connect(self.db.path) as conn:
+            row = conn.execute(
+                """
+                SELECT name
+                FROM sqlite_master
+                WHERE type = 'table' AND name = 'preselection_decisions'
+                """
+            ).fetchone()
+        self.assertIsNotNone(row)
 
     def test_current_database_reopen_is_idempotent_without_backup(self) -> None:
         created = self.db.create_interest_profile(
@@ -118,6 +129,56 @@ class DatabaseTests(unittest.TestCase):
         self.assertIsNone(reopened.last_migration_backup_path)
         self.assertIsNone(reopened.get_last_migration_backup_path())
         self.assertEqual(reopened.list_interest_profiles(), [created])
+
+    def test_preselection_decision_persistence_is_idempotent(self) -> None:
+        profile = self.db.create_interest_profile(
+            name="Gravity",
+            description="Black branes.",
+            relevance_threshold=0.7,
+        )
+        saved, _ = self.db.upsert_article(sample_article())
+        assert saved.id is not None
+        assert profile.id is not None
+        run_id = self.db.create_app_run(
+            profile_id=profile.id,
+            profile_fingerprint=profile_semantic_fingerprint(profile),
+            source_name="arxiv",
+            source_fingerprint="source-v1",
+        )
+        decision = AbstractPreselectionDecision(
+            article_id=f"{saved.source}:{saved.source_article_id}",
+            selected=True,
+            stage="model_abstract",
+            matched_terms=(),
+            reason="fake score",
+            preselection_score=0.51,
+            preselection_threshold=0.49,
+            preselector_version="fake_model_abstract_v1",
+        )
+
+        self.db.save_preselection_decisions(
+            run_id=run_id,
+            profile_id=profile.id,
+            profile_fingerprint=profile_semantic_fingerprint(profile),
+            source_name="arxiv",
+            source_fingerprint="source-v1",
+            article_by_key={decision.article_id: saved},
+            decisions=(decision,),
+        )
+        self.db.save_preselection_decisions(
+            run_id=run_id,
+            profile_id=profile.id,
+            profile_fingerprint=profile_semantic_fingerprint(profile),
+            source_name="arxiv",
+            source_fingerprint="source-v1",
+            article_by_key={decision.article_id: saved},
+            decisions=(decision,),
+        )
+
+        rows = self.db.list_preselection_decisions(run_id=run_id)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(float(rows[0]["preselection_score"]), 0.51)
+        self.assertEqual(str(rows[0]["preselector_version"]), "fake_model_abstract_v1")
 
     def test_unknown_future_schema_version_fails_clearly(self) -> None:
         future_path = Path(self.tmpdir.name) / "future.sqlite3"
@@ -289,6 +350,8 @@ class DatabaseTests(unittest.TestCase):
 
         self.assertIsInstance(saved, ArticleFeedback)
         self.assertEqual(saved.feedback_label, "RELEVANT")
+        self.assertEqual(saved.profile_match, "YES")
+        self.assertIsNone(saved.personal_interest)
         self.assertEqual(
             self.db.get_article_feedback(
                 article_id=article.id,
@@ -314,6 +377,108 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(updated.id, saved.id)
         self.assertEqual(updated.created_at, saved.created_at)
         self.assertEqual(updated.feedback_label, "NOT_RELEVANT")
+        self.assertEqual(updated.profile_match, "NO")
+        self.assertIsNone(updated.personal_interest)
+
+        interest_updated = self.db.upsert_article_feedback(
+            article_id=article.id,
+            profile_id=profile.id,
+            profile_fingerprint=fingerprint,
+            personal_interest="YES",
+        )
+        self.assertEqual(interest_updated.id, saved.id)
+        self.assertEqual(interest_updated.profile_match, "NO")
+        self.assertEqual(interest_updated.personal_interest, "YES")
+
+        profile_updated = self.db.upsert_article_feedback(
+            article_id=article.id,
+            profile_id=profile.id,
+            profile_fingerprint=fingerprint,
+            profile_match="YES",
+        )
+        self.assertEqual(profile_updated.id, saved.id)
+        self.assertEqual(profile_updated.profile_match, "YES")
+        self.assertEqual(profile_updated.personal_interest, "YES")
+
+        cleared_profile = self.db.upsert_article_feedback(
+            article_id=article.id,
+            profile_id=profile.id,
+            profile_fingerprint=fingerprint,
+            clear_profile_match=True,
+        )
+        self.assertIsNone(cleared_profile.feedback_label)
+        self.assertIsNone(cleared_profile.profile_match)
+        self.assertEqual(cleared_profile.personal_interest, "YES")
+
+        cleared_interest = self.db.upsert_article_feedback(
+            article_id=article.id,
+            profile_id=profile.id,
+            profile_fingerprint=fingerprint,
+            clear_personal_interest=True,
+        )
+        self.assertIsNone(cleared_interest.feedback_label)
+        self.assertIsNone(cleared_interest.profile_match)
+        self.assertIsNone(cleared_interest.personal_interest)
+
+    def test_save_to_library_records_personal_interest_without_profile_match(self) -> None:
+        profile = self.db.create_interest_profile(
+            name="Gravity",
+            description="Higher-dimensional gravity.",
+        )
+        article, _ = self.db.upsert_article(sample_article("2608.save-interest"))
+        assert article.id is not None
+        assert profile.id is not None
+        fingerprint = profile_semantic_fingerprint(profile)
+
+        save_article_with_personal_interest(
+            self.db,
+            article_id=article.id,
+            profile=profile,
+            profile_fingerprint_value=fingerprint,
+        )
+        first = self.db.get_article_feedback(
+            article_id=article.id,
+            profile_id=profile.id,
+            profile_fingerprint=fingerprint,
+        )
+
+        self.assertIsNotNone(first)
+        assert first is not None
+        self.assertIsNone(first.profile_match)
+        self.assertEqual(first.personal_interest, "YES")
+
+        self.db.upsert_article_feedback(
+            article_id=article.id,
+            profile_id=profile.id,
+            profile_fingerprint=fingerprint,
+            profile_match="NO",
+            personal_interest="NO",
+        )
+        save_article_with_personal_interest(
+            self.db,
+            article_id=article.id,
+            profile=profile,
+            profile_fingerprint_value=fingerprint,
+        )
+        updated = self.db.get_article_feedback(
+            article_id=article.id,
+            profile_id=profile.id,
+            profile_fingerprint=fingerprint,
+        )
+        self.assertIsNotNone(updated)
+        assert updated is not None
+        self.assertEqual(updated.profile_match, "NO")
+        self.assertEqual(updated.personal_interest, "YES")
+
+        unsave_article(self.db, article.id)
+        after_unsave = self.db.get_article_feedback(
+            article_id=article.id,
+            profile_id=profile.id,
+            profile_fingerprint=fingerprint,
+        )
+        self.assertIsNotNone(after_unsave)
+        assert after_unsave is not None
+        self.assertEqual(after_unsave.personal_interest, "YES")
 
         changed_profile = self.db.update_interest_profile(
             InterestProfile(
@@ -331,6 +496,121 @@ class DatabaseTests(unittest.TestCase):
                 profile_fingerprint=profile_semantic_fingerprint(changed_profile),
             )
         )
+
+    def test_schema_13_feedback_upgrade_maps_legacy_label_to_profile_match(self) -> None:
+        path = Path(self.tmpdir.name) / "schema13-feedback.sqlite3"
+        now = "2026-08-14T12:00:00Z"
+        with sqlite3.connect(path) as conn:
+            conn.executescript(
+                """
+                CREATE TABLE schema_metadata (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE interest_profiles (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    relevance_threshold REAL NOT NULL,
+                    enabled INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE source_configs (
+                    source_name TEXT PRIMARY KEY,
+                    enabled INTEGER NOT NULL,
+                    categories_json TEXT NOT NULL,
+                    lookback_hours INTEGER NOT NULL,
+                    max_results INTEGER NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE articles (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source TEXT NOT NULL,
+                    source_article_id TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    authors_json TEXT NOT NULL,
+                    abstract TEXT NOT NULL,
+                    categories_json TEXT NOT NULL,
+                    published_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    abstract_url TEXT NOT NULL,
+                    pdf_url TEXT,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(source, source_article_id)
+                );
+                CREATE TABLE article_feedback (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    article_id INTEGER NOT NULL,
+                    profile_id INTEGER NOT NULL,
+                    profile_fingerprint TEXT NOT NULL,
+                    feedback_label TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(article_id, profile_id, profile_fingerprint)
+                );
+                """
+            )
+            conn.execute(
+                "INSERT INTO schema_metadata (key, value, updated_at) VALUES (?, ?, ?)",
+                ("schema_version", "13", now),
+            )
+            conn.execute(
+                """
+                INSERT INTO interest_profiles (
+                    id, name, description, relevance_threshold, enabled, created_at, updated_at
+                )
+                VALUES (1, 'Gravity', 'Higher-dimensional gravity.', 0.6, 1, ?, ?)
+                """,
+                (now, now),
+            )
+            conn.execute(
+                """
+                INSERT INTO articles (
+                    id, source, source_article_id, title, authors_json, abstract,
+                    categories_json, published_at, updated_at, abstract_url, pdf_url, created_at
+                )
+                VALUES (1, 'arxiv', '2608.legacy-feedback', 'Legacy feedback',
+                    '["Ada Lovelace"]', 'Abstract.', '["hep-th"]',
+                    ?, ?, 'http://arxiv.org/abs/2608.legacy-feedback', NULL, ?)
+                """,
+                (now, now, now),
+            )
+            conn.execute(
+                """
+                INSERT INTO article_feedback (
+                    id, article_id, profile_id, profile_fingerprint, feedback_label,
+                    created_at, updated_at
+                )
+                VALUES (1, 1, 1, 'fingerprint', 'NOT_RELEVANT', ?, ?)
+                """,
+                (now, now),
+            )
+
+        migrated = Database(path)
+        try:
+            feedback = migrated.get_article_feedback(
+                article_id=1,
+                profile_id=1,
+                profile_fingerprint="fingerprint",
+            )
+            first_version = migrated.get_schema_version()
+        finally:
+            migrated.close()
+        reopened = Database(path)
+        try:
+            second_version = reopened.get_schema_version()
+        finally:
+            reopened.close()
+
+        self.assertEqual(first_version, CURRENT_SCHEMA_VERSION)
+        self.assertEqual(second_version, CURRENT_SCHEMA_VERSION)
+        self.assertIsNotNone(feedback)
+        assert feedback is not None
+        self.assertEqual(feedback.feedback_label, "NOT_RELEVANT")
+        self.assertEqual(feedback.profile_match, "NO")
+        self.assertIsNone(feedback.personal_interest)
 
     def test_legacy_analysis_rows_are_retained_but_not_reused_as_current_profile(
         self,

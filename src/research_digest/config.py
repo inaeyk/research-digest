@@ -23,12 +23,16 @@ AnalyzerProvider = Literal["codex", "openai"]
 
 DEFAULT_DB_FILENAME = "research_digest.sqlite3"
 DEFAULT_CONFIG_FILENAME = "config.json"
-CONFIG_VERSION = 3
+CONFIG_VERSION = 5
 APP_NAME = "Research Digest"
 APP_AUTHOR = "Research Digest"
 DEFAULT_ANALYZER_PROVIDER: AnalyzerProvider = "codex"
 DEFAULT_OPENAI_MODEL = "gpt-5-mini"
 DEFAULT_CODEX_TIMEOUT_SECONDS = 180.0
+DEFAULT_AUTOMATIC_LIBRARY_CONTEXT_THRESHOLD = 0.90
+DEFAULT_AUTOMATIC_LIBRARY_CONNECTIONS_ENABLED = True
+DEFAULT_PRESELECTION_FRACTION = 0.60
+DEFAULT_RELEVANCE_CALIBRATION_PROMPT_PROBABILITY = 0.20
 ENV_DB_PATH = "RESEARCH_DIGEST_DB"
 ENV_DATA_DIR = "RESEARCH_DIGEST_DATA_DIR"
 ENV_CONFIG_DIR = "RESEARCH_DIGEST_CONFIG_DIR"
@@ -42,6 +46,10 @@ CONFIG_KEYS = {
     "default_date_selection",
     "automatic_catch_up_enabled",
     "automatic_coverage_start_date",
+    "automatic_library_context_threshold",
+    "automatic_library_connections_enabled",
+    "preselection_fraction",
+    "relevance_calibration_prompt_probability",
 }
 SECRET_CONFIG_KEYS = {
     "OPENAI_API_KEY",
@@ -66,6 +74,10 @@ class PersistedConfig:
     default_date_selection: DateSelection
     automatic_catch_up_enabled: bool
     automatic_coverage_start_date: date
+    automatic_library_context_threshold: float
+    automatic_library_connections_enabled: bool
+    preselection_fraction: float
+    relevance_calibration_prompt_probability: float
 
 
 @dataclass(frozen=True)
@@ -87,6 +99,12 @@ class AppConfig:
     automatic_catch_up_enabled: bool = True
     automatic_coverage_start_date: date = field(
         default_factory=lambda: source_date_from_datetime(utc_now())
+    )
+    automatic_library_context_threshold: float = DEFAULT_AUTOMATIC_LIBRARY_CONTEXT_THRESHOLD
+    automatic_library_connections_enabled: bool = DEFAULT_AUTOMATIC_LIBRARY_CONNECTIONS_ENABLED
+    preselection_fraction: float = DEFAULT_PRESELECTION_FRACTION
+    relevance_calibration_prompt_probability: float = (
+        DEFAULT_RELEVANCE_CALIBRATION_PROMPT_PROBABILITY
     )
 
 
@@ -120,6 +138,16 @@ def load_config() -> AppConfig:
         default_date_selection=persisted_config.default_date_selection,
         automatic_catch_up_enabled=persisted_config.automatic_catch_up_enabled,
         automatic_coverage_start_date=persisted_config.automatic_coverage_start_date,
+        automatic_library_context_threshold=(
+            persisted_config.automatic_library_context_threshold
+        ),
+        automatic_library_connections_enabled=(
+            persisted_config.automatic_library_connections_enabled
+        ),
+        preselection_fraction=persisted_config.preselection_fraction,
+        relevance_calibration_prompt_probability=(
+            persisted_config.relevance_calibration_prompt_probability
+        ),
     )
 
 
@@ -158,6 +186,62 @@ def save_automation_settings(
         automatic_catch_up_enabled=catch_up_missed_dates,
         automatic_coverage_start_date=(
             coverage_start_date or persisted.automatic_coverage_start_date
+        ),
+        automatic_library_context_threshold=persisted.automatic_library_context_threshold,
+        automatic_library_connections_enabled=persisted.automatic_library_connections_enabled,
+        preselection_fraction=persisted.preselection_fraction,
+        relevance_calibration_prompt_probability=(
+            persisted.relevance_calibration_prompt_probability
+        ),
+    )
+    _write_persisted_config(config_dir / DEFAULT_CONFIG_FILENAME, updated)
+    return load_config()
+
+
+def save_analysis_settings(
+    *,
+    automatic_library_context_threshold: float | None = None,
+    automatic_library_connections_enabled: bool | None = None,
+    preselection_fraction: float | None = None,
+    relevance_calibration_prompt_probability: float | None = None,
+) -> AppConfig:
+    config_dir = resolve_config_dir()
+    persisted, _ = _load_persisted_config(config_dir)
+    updated = PersistedConfig(
+        config_version=CONFIG_VERSION,
+        analyzer_provider=persisted.analyzer_provider,
+        openai_model=persisted.openai_model,
+        codex_model=persisted.codex_model,
+        codex_timeout_seconds=persisted.codex_timeout_seconds,
+        default_date_selection=persisted.default_date_selection,
+        automatic_catch_up_enabled=persisted.automatic_catch_up_enabled,
+        automatic_coverage_start_date=persisted.automatic_coverage_start_date,
+        automatic_library_context_threshold=_coerce_probability(
+            (
+                persisted.automatic_library_context_threshold
+                if automatic_library_context_threshold is None
+                else automatic_library_context_threshold
+            ),
+            field_name="automatic_library_context_threshold",
+        ),
+        automatic_library_connections_enabled=(
+            persisted.automatic_library_connections_enabled
+            if automatic_library_connections_enabled is None
+            else bool(automatic_library_connections_enabled)
+        ),
+        preselection_fraction=_coerce_probability(
+            persisted.preselection_fraction
+            if preselection_fraction is None
+            else preselection_fraction,
+            field_name="preselection_fraction",
+        ),
+        relevance_calibration_prompt_probability=_coerce_probability(
+            (
+                persisted.relevance_calibration_prompt_probability
+                if relevance_calibration_prompt_probability is None
+                else relevance_calibration_prompt_probability
+            ),
+            field_name="relevance_calibration_prompt_probability",
         ),
     )
     _write_persisted_config(config_dir / DEFAULT_CONFIG_FILENAME, updated)
@@ -198,6 +282,14 @@ def _default_persisted_config() -> PersistedConfig:
         default_date_selection=DateSelection.latest_available(),
         automatic_catch_up_enabled=True,
         automatic_coverage_start_date=source_date_from_datetime(utc_now()),
+        automatic_library_context_threshold=DEFAULT_AUTOMATIC_LIBRARY_CONTEXT_THRESHOLD,
+        automatic_library_connections_enabled=(
+            DEFAULT_AUTOMATIC_LIBRARY_CONNECTIONS_ENABLED
+        ),
+        preselection_fraction=DEFAULT_PRESELECTION_FRACTION,
+        relevance_calibration_prompt_probability=(
+            DEFAULT_RELEVANCE_CALIBRATION_PROMPT_PROBABILITY
+        ),
     )
 
 
@@ -265,6 +357,31 @@ def _persisted_config_from_payload(payload: dict[str, Any]) -> PersistedConfig:
             ),
             field_name="automatic_coverage_start_date",
         ),
+        automatic_library_context_threshold=_coerce_probability(
+            payload.get(
+                "automatic_library_context_threshold",
+                DEFAULT_AUTOMATIC_LIBRARY_CONTEXT_THRESHOLD,
+            ),
+            field_name="automatic_library_context_threshold",
+        ),
+        automatic_library_connections_enabled=_coerce_bool(
+            payload.get(
+                "automatic_library_connections_enabled",
+                DEFAULT_AUTOMATIC_LIBRARY_CONNECTIONS_ENABLED,
+            ),
+            field_name="automatic_library_connections_enabled",
+        ),
+        preselection_fraction=_coerce_probability(
+            payload.get("preselection_fraction", DEFAULT_PRESELECTION_FRACTION),
+            field_name="preselection_fraction",
+        ),
+        relevance_calibration_prompt_probability=_coerce_probability(
+            payload.get(
+                "relevance_calibration_prompt_probability",
+                DEFAULT_RELEVANCE_CALIBRATION_PROMPT_PROBABILITY,
+            ),
+            field_name="relevance_calibration_prompt_probability",
+        ),
     )
 
 
@@ -273,7 +390,7 @@ def _upgrade_persisted_config(
     *,
     from_version: int,
 ) -> PersistedConfig:
-    if from_version not in {0, 1, 2}:
+    if from_version not in {0, 1, 2, 3, 4}:
         raise ConfigError(f"unsupported configuration version: {from_version}")
 
     defaults = _default_persisted_config()
@@ -298,6 +415,22 @@ def _upgrade_persisted_config(
             "automatic_coverage_start_date",
             defaults.automatic_coverage_start_date.isoformat(),
         ),
+        "automatic_library_context_threshold": payload.get(
+            "automatic_library_context_threshold",
+            defaults.automatic_library_context_threshold,
+        ),
+        "automatic_library_connections_enabled": payload.get(
+            "automatic_library_connections_enabled",
+            defaults.automatic_library_connections_enabled,
+        ),
+        "preselection_fraction": payload.get(
+            "preselection_fraction",
+            defaults.preselection_fraction,
+        ),
+        "relevance_calibration_prompt_probability": payload.get(
+            "relevance_calibration_prompt_probability",
+            defaults.relevance_calibration_prompt_probability,
+        ),
     }
     return _persisted_config_from_payload(upgraded_payload)
 
@@ -312,6 +445,12 @@ def _write_persisted_config(path: Path, config: PersistedConfig) -> None:
         "default_date_selection": config.default_date_selection.to_mapping(),
         "automatic_catch_up_enabled": config.automatic_catch_up_enabled,
         "automatic_coverage_start_date": config.automatic_coverage_start_date.isoformat(),
+        "automatic_library_context_threshold": config.automatic_library_context_threshold,
+        "automatic_library_connections_enabled": config.automatic_library_connections_enabled,
+        "preselection_fraction": config.preselection_fraction,
+        "relevance_calibration_prompt_probability": (
+            config.relevance_calibration_prompt_probability
+        ),
     }
     temporary = path.with_name(path.name + ".tmp")
     try:
@@ -365,6 +504,44 @@ def _coerce_positive_float(value: object, *, field_name: str) -> float:
     if number <= 0:
         raise ConfigError(f"{field_name} must be positive")
     return number
+
+
+def _coerce_probability(value: object, *, field_name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ConfigError(f"{field_name} must be numeric")
+    number = float(value)
+    if number < 0 or number > 1:
+        raise ConfigError(f"{field_name} must be between 0 and 1")
+    return number
+
+
+def model_effort_from_preselection_fraction(preselection_fraction: float) -> float:
+    """Return the user-facing model-effort value for an internal preselection fraction."""
+
+    return 1.0 - _coerce_probability(
+        preselection_fraction,
+        field_name="preselection_fraction",
+    )
+
+
+def preselection_fraction_from_model_effort(model_effort: float) -> float:
+    """Return the internal preselection fraction for a user-facing model-effort value."""
+
+    return 1.0 - _coerce_probability(model_effort, field_name="model_effort")
+
+
+def preselection_threshold(
+    *,
+    relevance_threshold: float,
+    preselection_fraction: float,
+) -> float:
+    return _coerce_probability(
+        preselection_fraction,
+        field_name="preselection_fraction",
+    ) * _coerce_probability(
+        relevance_threshold,
+        field_name="relevance_threshold",
+    )
 
 
 def _coerce_date_selection(value: object) -> DateSelection:

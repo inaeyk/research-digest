@@ -21,11 +21,22 @@ from research_digest.library_context import (
     assign_library_context_suggestions,
     build_collection_intelligence_snapshot,
     dismiss_context_suggestion,
+    generate_automatic_library_context_for_digest,
     generate_library_context_for_item,
     list_display_context_suggestions,
     select_library_context_candidates,
 )
-from research_digest.models import AnalysisResult, Article, LibraryContextOrigin
+from research_digest.models import (
+    AnalysisOrigin,
+    AnalysisResult,
+    Article,
+    ArxivSourceConfig,
+    DateSelection,
+    DigestItem,
+    DigestResult,
+    LibraryContextOrigin,
+    RunOrigin,
+)
 from research_digest.tags import add_user_tag
 
 
@@ -87,6 +98,17 @@ class LibraryContextTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmpdir = tempfile.TemporaryDirectory()
         self.db = Database(Path(self.tmpdir.name) / "context.sqlite3")
+        self.profile = self.db.create_interest_profile(
+            name="Gravity",
+            description="Higher-dimensional gravity.",
+            relevance_threshold=0.6,
+        )
+        self.run_id = self.db.create_app_run(
+            profile_id=self.profile.id,
+            source_name="arxiv",
+            run_origin=RunOrigin.MANUAL,
+            date_selection=DateSelection.single_date(datetime(2026, 8, 14).date()),
+        )
         self.new_article, _ = self.db.upsert_article(
             sample_article("2608.ctx01", "New black brane paper", categories=["hep-th"])
         )
@@ -201,6 +223,165 @@ class LibraryContextTests(unittest.TestCase):
         self.assertEqual(len(regenerated), 1)
         self.assertIsNone(regenerated[0].dismissed_at)
 
+    def test_automatic_context_threshold_gates_expensive_generation(self) -> None:
+        assert self.new_article.id is not None
+        assert self.saved_related.id is not None
+        add_user_tag(self.db, article_id=self.saved_related.id, tag="Black branes")
+        draft = LibraryContextSuggestionDraft(
+            related_candidate_id="arxiv:2608.ctx02",
+            collection_id=None,
+            relation_label="shared system",
+            rationale="Both discuss black branes.",
+        )
+        generator = FakeContextGenerator((draft,))
+        digest = self._digest(score=0.89)
+
+        skipped = generate_automatic_library_context_for_digest(
+            self.db,
+            digest=digest,
+            generator=generator,
+            threshold=0.90,
+        )
+
+        self.assertEqual(skipped, [])
+        self.assertEqual(generator.calls, 0)
+
+        eligible = generate_automatic_library_context_for_digest(
+            self.db,
+            digest=self._digest(score=0.90),
+            generator=generator,
+            threshold=0.90,
+        )
+
+        self.assertEqual(len(eligible), 1)
+        self.assertEqual(generator.calls, 1)
+
+    def test_automatic_context_above_threshold_and_cached_result_reuse(self) -> None:
+        assert self.saved_related.id is not None
+        add_user_tag(self.db, article_id=self.saved_related.id, tag="Black branes")
+        draft = LibraryContextSuggestionDraft(
+            related_candidate_id="arxiv:2608.ctx02",
+            collection_id=None,
+            relation_label="shared system",
+            rationale="Both discuss black branes.",
+        )
+        generator = FakeContextGenerator((draft,))
+
+        first = generate_automatic_library_context_for_digest(
+            self.db,
+            digest=self._digest(score=0.95),
+            generator=generator,
+            threshold=0.90,
+        )
+        second = generate_automatic_library_context_for_digest(
+            self.db,
+            digest=self._digest(score=0.95),
+            generator=generator,
+            threshold=0.90,
+        )
+
+        self.assertEqual(len(first), 1)
+        self.assertEqual(second, [])
+        self.assertEqual(generator.calls, 1)
+
+    def test_automatic_context_only_runs_for_new_analyses(self) -> None:
+        digest = self._digest(score=0.95)
+        reused_digest = DigestResult(
+            run_id=digest.run_id,
+            profile=digest.profile,
+            source_config=digest.source_config,
+            retrieved_count=digest.retrieved_count,
+            stored_count=digest.stored_count,
+            preselected_count=digest.preselected_count,
+            skipped_analysis_count=digest.skipped_analysis_count,
+            analyzed_count=digest.analyzed_count,
+            new_analysis_count=0,
+            reused_analysis_count=1,
+            above_threshold_count=digest.above_threshold_count,
+            analysis_available=digest.analysis_available,
+            items=[
+                DigestItem(
+                    article=item.article,
+                    analysis=item.analysis,
+                    analysis_origin=AnalysisOrigin.REUSED,
+                )
+                for item in digest.items
+            ],
+            started_at=digest.started_at,
+            completed_at=digest.completed_at,
+            run_origin=digest.run_origin,
+            date_selection=digest.date_selection,
+            requested_source_dates=digest.requested_source_dates,
+            covered_source_dates=digest.covered_source_dates,
+        )
+        generator = FakeContextGenerator(
+            (
+                LibraryContextSuggestionDraft(
+                    related_candidate_id="arxiv:2608.ctx02",
+                    collection_id=None,
+                    relation_label="shared system",
+                    rationale="Both discuss black branes.",
+                ),
+            )
+        )
+
+        suggestions = generate_automatic_library_context_for_digest(
+            self.db,
+            digest=reused_digest,
+            generator=generator,
+            threshold=0.90,
+        )
+
+        self.assertEqual(suggestions, [])
+        self.assertEqual(generator.calls, 0)
+
+    def test_no_library_or_manual_override_behavior(self) -> None:
+        assert self.new_article.id is not None
+        assert self.saved_related.id is not None
+        unsave_article(self.db, self.saved_related.id)
+        generator = FakeContextGenerator(())
+
+        automatic = generate_automatic_library_context_for_digest(
+            self.db,
+            digest=self._digest(score=0.95),
+            generator=generator,
+            threshold=0.90,
+        )
+
+        self.assertEqual(automatic, [])
+        self.assertEqual(generator.calls, 0)
+
+        save_article(self.db, self.saved_related.id)
+        add_user_tag(self.db, article_id=self.saved_related.id, tag="Black branes")
+        manual_generator = FakeContextGenerator(
+            (
+                LibraryContextSuggestionDraft(
+                    related_candidate_id="arxiv:2608.ctx02",
+                    collection_id=None,
+                    relation_label="shared system",
+                    rationale="Both discuss black branes.",
+                ),
+            )
+        )
+
+        manual = generate_library_context_for_item(
+            self.db,
+            run_id=None,
+            article=self.new_article,
+            analysis=AnalysisResult(
+                relevance_score=0.20,
+                relevance_reason="Low relevance.",
+                matched_topics=["Black branes"],
+                summary="Summary.",
+                why_it_matters="Why.",
+                reading_priority="LOW",
+            ),
+            generator=manual_generator,
+        )
+
+        self.assertEqual(len(manual), 1)
+        self.assertEqual(manual_generator.calls, 1)
+
     def test_assign_rejects_unknown_duplicate_self_and_wrong_collection(self) -> None:
         assert self.new_article.id is not None
         assert self.saved_related.id is not None
@@ -264,6 +445,42 @@ class LibraryContextTests(unittest.TestCase):
                 ],
                 provenance={"provider": "fake"},
             )
+
+    def _digest(self, *, score: float) -> DigestResult:
+        return DigestResult(
+            run_id=self.run_id,
+            profile=self.profile,
+            source_config=ArxivSourceConfig(categories=["hep-th"]),
+            retrieved_count=1,
+            stored_count=1,
+            preselected_count=1,
+            skipped_analysis_count=0,
+            analyzed_count=1,
+            new_analysis_count=1,
+            reused_analysis_count=0,
+            above_threshold_count=1 if score >= self.profile.relevance_threshold else 0,
+            analysis_available=True,
+            items=[
+                DigestItem(
+                    article=self.new_article,
+                    analysis=AnalysisResult(
+                        relevance_score=score,
+                        relevance_reason="Relevant to black branes.",
+                        matched_topics=["Black branes"],
+                        summary="Summary.",
+                        why_it_matters="Why.",
+                        reading_priority="HIGH" if score >= 0.8 else "LOW",
+                    ),
+                    analysis_origin=AnalysisOrigin.NEW_THIS_RUN,
+                )
+            ],
+            started_at=datetime(2026, 8, 14, 12, 0, tzinfo=UTC),
+            completed_at=datetime(2026, 8, 14, 12, 1, tzinfo=UTC),
+            run_origin=RunOrigin.MANUAL,
+            date_selection=DateSelection.single_date(datetime(2026, 8, 14).date()),
+            requested_source_dates=(datetime(2026, 8, 14).date(),),
+            covered_source_dates=(datetime(2026, 8, 14).date(),),
+        )
 
     def test_invalid_suggestion_batch_does_not_partially_persist(self) -> None:
         assert self.new_article.id is not None

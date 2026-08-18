@@ -48,10 +48,10 @@ def build_calibration_summary(
         if item.article.id is None:
             continue
         feedback = feedback_by_article_id.get(item.article.id)
-        if feedback is None:
+        if feedback is None or feedback.profile_match is None:
             continue
         predicted_relevant = is_above_threshold(item, threshold)
-        actual_relevant = feedback.feedback_label == "RELEVANT"
+        actual_relevant = feedback.profile_match == "YES"
         if predicted_relevant and actual_relevant:
             true_positive_count += 1
         elif predicted_relevant and not actual_relevant:

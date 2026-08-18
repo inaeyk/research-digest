@@ -8,12 +8,12 @@ from research_digest.db import Database
 from research_digest.library import (
     is_article_saved,
     is_source_article_saved,
-    save_article,
-    save_article_by_source_identity,
+    save_article_by_source_identity_with_personal_interest,
+    save_article_with_personal_interest,
     unsave_article,
     unsave_article_by_source_identity,
 )
-from research_digest.models import Article
+from research_digest.models import Article, InterestProfile
 from research_digest.ui.abstracts import ArticleIdentity
 
 
@@ -32,6 +32,8 @@ def render_library_control(
     db: Database,
     article: Article,
     context: str,
+    profile: InterestProfile | None = None,
+    profile_fingerprint_value: str | None = None,
 ) -> None:
     import streamlit as st
 
@@ -52,7 +54,12 @@ def render_library_control(
             unsave_article(db, article.id)
             st.toast("Removed from Library.", icon=":material/bookmark_remove:")
         else:
-            save_article(db, article.id)
+            save_article_with_personal_interest(
+                db=db,
+                article_id=article.id,
+                profile=profile,
+                profile_fingerprint_value=profile_fingerprint_value,
+            )
             st.toast("Saved to Library.", icon=":material/bookmark_add:")
         st.rerun()
 
@@ -63,6 +70,8 @@ def render_library_control_for_source_identity(
     source: str,
     source_article_id: str,
     context: str,
+    profile: InterestProfile | None = None,
+    profile_fingerprint_value: str | None = None,
 ) -> None:
     import streamlit as st
 
@@ -88,10 +97,12 @@ def render_library_control_for_source_identity(
             else:
                 st.warning("This historical paper could not be found in Articles.")
         else:
-            entry = save_article_by_source_identity(
+            entry = save_article_by_source_identity_with_personal_interest(
                 db,
                 source=identity.source,
                 source_article_id=identity.source_article_id,
+                profile=profile,
+                profile_fingerprint_value=profile_fingerprint_value,
             )
             if entry is None:
                 st.warning("This historical paper could not be found in Articles.")

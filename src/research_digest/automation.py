@@ -5,9 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from research_digest.analysis.base import LLMAnalyzer
+from research_digest.analysis.codex_context import CodexLibraryContextGenerator
+from research_digest.analysis.providers import build_configured_preselector
 from research_digest.config import AppConfig
 from research_digest.db import Database
 from research_digest.errors import sanitize_error
+from research_digest.library_context import LibraryContextGenerator
+from research_digest.preselection import AbstractPreselector, UnavailableFailOpenPreselector
 from research_digest.scheduler import (
     DEFAULT_TASK_NAME,
     ScheduleOperationResult,
@@ -76,6 +80,9 @@ def run_automatic_digest_now(
     db: Database,
     source: SourceAdapter,
     analyzer: LLMAnalyzer | None,
+    preselector: AbstractPreselector | None = None,
+    library_context_generator: LibraryContextGenerator | None = None,
+    use_configured_preselector: bool | None = None,
 ) -> HeadlessDigestRun:
     source_config = ARXIV_SOURCE_DEFINITION.load_config(db)
     source_request = (
@@ -87,6 +94,27 @@ def run_automatic_digest_now(
             config=source_config,
         )
     )
+    context_generator = (
+        None
+        if not config.automatic_library_connections_enabled
+        else (
+            library_context_generator
+            if library_context_generator is not None
+            else _build_library_context_generator(config)
+        )
+    )
+    configured_preselector_enabled = (
+        analyzer is None if use_configured_preselector is None else use_configured_preselector
+    )
+    if preselector is not None:
+        active_preselector = preselector
+    elif configured_preselector_enabled:
+        active_preselector = build_configured_preselector(config).preselector
+    else:
+        active_preselector = UnavailableFailOpenPreselector(
+            preselection_fraction=config.preselection_fraction,
+            reason="Injected analyzer supplied without model preselector.",
+        )
     return run_automatic_digest_for_enabled_profiles(
         db=db,
         source=source,
@@ -94,4 +122,22 @@ def run_automatic_digest_now(
         source_request=source_request,
         coverage_start_date=config.automatic_coverage_start_date,
         catch_up_missed_dates=config.automatic_catch_up_enabled,
+        preselector=active_preselector,
+        library_context_generator=context_generator,
+        automatic_library_context_threshold=config.automatic_library_context_threshold,
+        relevance_calibration_prompt_probability=(
+            config.relevance_calibration_prompt_probability
+        ),
     )
+
+
+def _build_library_context_generator(config: AppConfig) -> LibraryContextGenerator | None:
+    if not config.automatic_library_connections_enabled:
+        return None
+    try:
+        return CodexLibraryContextGenerator(
+            model=config.codex_model,
+            timeout_seconds=config.codex_timeout_seconds,
+        )
+    except Exception:
+        return None

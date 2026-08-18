@@ -14,6 +14,8 @@ from zoneinfo import ZoneInfo
 
 ReadingPriority = Literal["LOW", "MEDIUM", "HIGH"]
 FeedbackLabel = Literal["RELEVANT", "NOT_RELEVANT"]
+FeedbackAnswer = Literal["YES", "NO"]
+QuantitativeCalibrationState = Literal["PENDING", "COMPLETED", "DISMISSED", "SKIPPED"]
 MAX_ARXIV_LOOKBACK_HOURS = 24 * 30
 MAX_ARXIV_RESULTS = 500
 SOURCE_DATE_TIMEZONE_NAME = "America/Chicago"
@@ -689,9 +691,11 @@ class ArticleFeedback:
     article_id: int
     profile_id: int
     profile_fingerprint: str
-    feedback_label: FeedbackLabel
+    feedback_label: FeedbackLabel | None
     created_at: datetime
     updated_at: datetime
+    profile_match: FeedbackAnswer | None = None
+    personal_interest: FeedbackAnswer | None = None
 
     def __post_init__(self) -> None:
         if self.id is not None and self.id <= 0:
@@ -702,15 +706,153 @@ class ArticleFeedback:
             raise ModelValidationError("article feedback profile_id must be positive")
         if not self.profile_fingerprint.strip():
             raise ModelValidationError("article feedback profile_fingerprint is required")
-        if self.feedback_label not in {"RELEVANT", "NOT_RELEVANT"}:
+        if self.feedback_label is not None and self.feedback_label not in {
+            "RELEVANT",
+            "NOT_RELEVANT",
+        }:
             raise ModelValidationError("feedback_label must be RELEVANT or NOT_RELEVANT")
+        if self.profile_match not in {None, "YES", "NO"}:
+            raise ModelValidationError("profile_match must be YES, NO, or unanswered")
+        if self.personal_interest not in {None, "YES", "NO"}:
+            raise ModelValidationError("personal_interest must be YES, NO, or unanswered")
+        object.__setattr__(
+            self,
+            "profile_fingerprint",
+            normalize_whitespace(self.profile_fingerprint),
+        )
+        if self.profile_match is None and self.feedback_label is not None:
+            object.__setattr__(
+                self,
+                "profile_match",
+                "YES" if self.feedback_label == "RELEVANT" else "NO",
+            )
+        if self.feedback_label is None and self.profile_match is not None:
+            object.__setattr__(
+                self,
+                "feedback_label",
+                "RELEVANT" if self.profile_match == "YES" else "NOT_RELEVANT",
+            )
+        object.__setattr__(self, "created_at", ensure_utc(self.created_at))
+        object.__setattr__(self, "updated_at", ensure_utc(self.updated_at))
+
+    @property
+    def answered_profile_match(self) -> bool:
+        return self.profile_match is not None
+
+    @property
+    def answered_personal_interest(self) -> bool:
+        return self.personal_interest is not None
+
+
+@dataclass(frozen=True)
+class QuantitativeRelevanceCalibration:
+    id: int | None
+    run_id: int
+    profile_id: int
+    profile_fingerprint: str
+    state: QuantitativeCalibrationState
+    created_at: datetime
+    article_id: int | None = None
+    model_relevance_score: float | None = None
+    user_relevance_score: float | None = None
+    completed_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        if self.id is not None and self.id <= 0:
+            raise ModelValidationError("calibration id must be positive")
+        if self.run_id <= 0:
+            raise ModelValidationError("calibration run_id must be positive")
+        if self.profile_id <= 0:
+            raise ModelValidationError("calibration profile_id must be positive")
+        if not self.profile_fingerprint.strip():
+            raise ModelValidationError("calibration profile_fingerprint is required")
+        if self.state not in {"PENDING", "COMPLETED", "DISMISSED", "SKIPPED"}:
+            raise ModelValidationError("calibration state is invalid")
+        if self.state != "SKIPPED":
+            if self.article_id is None or self.article_id <= 0:
+                raise ModelValidationError("calibration article_id is required")
+            if self.model_relevance_score is None:
+                raise ModelValidationError("calibration model score is required")
+        if self.model_relevance_score is not None and not 0 <= self.model_relevance_score <= 1:
+            raise ModelValidationError("calibration model score must be between 0 and 1")
+        if self.user_relevance_score is not None and not 0 <= self.user_relevance_score <= 1:
+            raise ModelValidationError("calibration user score must be between 0 and 1")
+        if self.state == "COMPLETED" and self.user_relevance_score is None:
+            raise ModelValidationError("completed calibration requires a user score")
         object.__setattr__(
             self,
             "profile_fingerprint",
             normalize_whitespace(self.profile_fingerprint),
         )
         object.__setattr__(self, "created_at", ensure_utc(self.created_at))
-        object.__setattr__(self, "updated_at", ensure_utc(self.updated_at))
+        if self.completed_at is not None:
+            object.__setattr__(self, "completed_at", ensure_utc(self.completed_at))
+
+
+@dataclass(frozen=True)
+class SuggestedInterestProfile:
+    id: int | None
+    profile_id: int
+    profile_fingerprint: str
+    suggested_name: str
+    suggested_description: str
+    evidence_article_ids: tuple[int, ...]
+    explanation: str
+    suggestion_key: str
+    provenance: dict[str, object]
+    created_at: datetime
+    dismissed_at: datetime | None = None
+    accepted_profile_id: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.id is not None and self.id <= 0:
+            raise ModelValidationError("suggested interest id must be positive")
+        if self.profile_id <= 0:
+            raise ModelValidationError("suggested interest profile_id must be positive")
+        if not self.profile_fingerprint.strip():
+            raise ModelValidationError("suggested interest profile_fingerprint is required")
+        if not self.suggested_name.strip():
+            raise ModelValidationError("suggested interest name is required")
+        if not self.suggested_description.strip():
+            raise ModelValidationError("suggested interest description is required")
+        if len(set(self.evidence_article_ids)) != len(self.evidence_article_ids):
+            raise ModelValidationError("suggested interest evidence ids must be unique")
+        if any(article_id <= 0 for article_id in self.evidence_article_ids):
+            raise ModelValidationError("suggested interest evidence ids must be positive")
+        if not self.explanation.strip():
+            raise ModelValidationError("suggested interest explanation is required")
+        if not self.suggestion_key.strip():
+            raise ModelValidationError("suggested interest key is required")
+        if self.accepted_profile_id is not None and self.accepted_profile_id <= 0:
+            raise ModelValidationError("accepted profile id must be positive")
+        object.__setattr__(
+            self,
+            "profile_fingerprint",
+            normalize_whitespace(self.profile_fingerprint),
+        )
+        object.__setattr__(self, "suggested_name", normalize_whitespace(self.suggested_name))
+        object.__setattr__(
+            self,
+            "suggested_description",
+            normalize_whitespace(self.suggested_description),
+        )
+        object.__setattr__(self, "explanation", normalize_whitespace(self.explanation))
+        object.__setattr__(self, "suggestion_key", normalize_whitespace(self.suggestion_key))
+        object.__setattr__(self, "created_at", ensure_utc(self.created_at))
+        if self.dismissed_at is not None:
+            object.__setattr__(self, "dismissed_at", ensure_utc(self.dismissed_at))
+
+
+@dataclass(frozen=True)
+class PreselectionEvidence:
+    article_id: str
+    preselection_score: float | None
+    preselection_threshold: float | None
+    passed: bool
+    stage: str
+    decision_origin: str
+    preselector_version: str
+    reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -743,6 +885,7 @@ class DigestResult:
     incomplete_source_dates: tuple[date, ...] = ()
     retrieval_complete: bool = True
     retrieval_safety_limit: int | None = None
+    preselection_evidence: tuple[PreselectionEvidence, ...] = ()
 
     @property
     def relevant_count(self) -> int:

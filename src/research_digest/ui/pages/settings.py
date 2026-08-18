@@ -15,7 +15,16 @@ from research_digest.automation import (
     run_automatic_digest_now,
 )
 from research_digest.backup import BackupResult, run_backup
-from research_digest.config import AppConfig, ConfigError, load_config, save_automation_settings
+from research_digest.config import (
+    AppConfig,
+    ConfigError,
+    load_config,
+    model_effort_from_preselection_fraction,
+    preselection_fraction_from_model_effort,
+    preselection_threshold,
+    save_analysis_settings,
+    save_automation_settings,
+)
 from research_digest.coverage import (
     build_automatic_coverage_plan,
     build_date_coverage_statuses,
@@ -31,8 +40,14 @@ from research_digest.db import (
 )
 from research_digest.doctor import DoctorCheck, DoctorReport, DoctorSeverity, run_doctor
 from research_digest.errors import sanitize_error
+from research_digest.models import profile_semantic_fingerprint
 from research_digest.scheduler import ScheduleOperationResult, ScheduleStatus
 from research_digest.sources.arxiv import ArxivSource
+from research_digest.suggested_interests import (
+    create_profile_from_suggestion,
+    dismiss_suggested_interest,
+    refresh_suggested_interests,
+)
 from research_digest.ui.common import get_analyzer, get_database
 from research_digest.ui.date_status import month_bounds, render_date_status_grid
 
@@ -53,7 +68,7 @@ def render() -> None:
     db = get_database()
     _render_general(config, db)
     doctor_report = run_doctor(config=config, db=db, include_network=False)
-    _render_analysis(config, doctor_report)
+    _render_analysis(config, db, doctor_report)
     _render_automation(config, db)
     _render_data(config)
     _render_doctor(doctor_report)
@@ -80,7 +95,7 @@ def _render_general(config: AppConfig, db: Database) -> None:
         st.code(str(config.config_dir), language=None)
 
 
-def _render_analysis(config: AppConfig, report: DoctorReport) -> None:
+def _render_analysis(config: AppConfig, db: Database, report: DoctorReport) -> None:
     import streamlit as st
 
     st.subheader("Analysis")
@@ -100,6 +115,294 @@ def _render_analysis(config: AppConfig, report: DoctorReport) -> None:
             st.write("API key: configured" if config.openai_api_key else "API key: missing")
         st.markdown("**Preselection effort**")
         st.caption(preselection_effort_summary())
+        _render_library_intelligence_settings(config, db)
+    _render_scoring_guide(config, db)
+    _render_suggested_interests(db)
+
+
+def _render_library_intelligence_settings(config: AppConfig, db: Database) -> None:
+    import streamlit as st
+
+    profiles = db.list_interest_profiles(enabled_only=True)
+    profile = profiles[0] if profiles else None
+    relevance_threshold = profile.relevance_threshold if profile is not None else 0.6
+    st.markdown("**Model effort**")
+    with st.form("analysis_settings", border=False):
+        model_effort = st.slider(
+            "Model effort",
+            min_value=0,
+            max_value=100,
+            value=round(
+                model_effort_from_preselection_fraction(config.preselection_fraction) * 100
+            ),
+            step=5,
+            help=(
+                "Higher effort sends more papers to full analysis and lowers false-negative "
+                "risk. Lower effort filters more aggressively and uses less model work."
+            ),
+        )
+        effort_fraction = preselection_fraction_from_model_effort(model_effort / 100.0)
+        derived_preselection = preselection_threshold(
+            relevance_threshold=relevance_threshold,
+            preselection_fraction=effort_fraction,
+        )
+        st.caption(
+            "Higher Model effort means more papers receive full analysis, lower "
+            "false-negative risk, and more model work. Lower Model effort filters more "
+            "aggressively, runs faster/cheaper, and has a greater chance of missing "
+            "borderline papers."
+        )
+        if model_effort <= 30:
+            st.caption("This is an aggressive Stage-1 filtering setting.")
+        st.caption(
+            f"Model effort: {model_effort}%. Profile relevance threshold: "
+            f"{relevance_threshold:.2f}. Stage-1 cutoff: {derived_preselection:.3f}. "
+            f"Internal preselection fraction: {effort_fraction:.2f}."
+        )
+        st.caption(
+            "Example with the values shown here: papers are first scored from title and "
+            f"abstract only. Your profile relevance threshold is {relevance_threshold:.2f}; "
+            f"Model effort is {model_effort}%, which gives a Stage-1 cutoff of "
+            f"{derived_preselection:.3f}. A cache-miss paper with a preselection score at "
+            "or above that cutoff goes on to full analysis. A paper below the cutoff is "
+            "screened out early and remains available through its source abstract. Higher "
+            "effort lowers this early cutoff, so digest runs spend more model work but are "
+            "less likely to miss borderline papers. Lower effort raises the cutoff, making "
+            "runs faster and cheaper with more false-negative risk."
+        )
+        st.markdown("**Library Intelligence**")
+        automatic_connections = st.toggle(
+            "Automatic Library connections",
+            value=config.automatic_library_connections_enabled,
+        )
+        st.caption(
+            "When enabled, Research Digest may automatically compare highly relevant "
+            "newly analyzed papers with your saved Library. When disabled, digest runs "
+            "skip automatic Library-connection reasoning. You can still use "
+            "\"Find Library connections\" manually on any paper."
+        )
+        threshold = st.number_input(
+            (
+                "Automatically compare with Library when the new paper's relevance is at least"
+            ),
+            min_value=0.0,
+            max_value=1.0,
+            value=float(config.automatic_library_context_threshold),
+            step=0.01,
+            format="%.2f",
+            disabled=not automatic_connections,
+        )
+        st.caption(
+            "This threshold controls extra model work, not Library connection confidence. "
+            "Papers below it can still be checked manually."
+        )
+        st.markdown("**Relevance calibration**")
+        calibration_probability = st.slider(
+            "Occasionally ask me to score a paper",
+            min_value=0,
+            max_value=100,
+            value=round(config.relevance_calibration_prompt_probability * 100),
+            step=5,
+            help=(
+                "Research Digest makes one persisted sampling decision per completed "
+                "digest run. A value of 20% means about one in five completed runs can "
+                "ask one quantitative relevance question."
+            ),
+        )
+        st.caption(
+            f"Frequency: {calibration_probability}% of completed digest runs; at most one "
+            "question per run."
+        )
+        submitted = st.form_submit_button("Save analysis settings", icon=":material/save:")
+    if submitted:
+        try:
+            save_analysis_settings(
+                automatic_library_context_threshold=float(threshold),
+                automatic_library_connections_enabled=bool(automatic_connections),
+                preselection_fraction=effort_fraction,
+                relevance_calibration_prompt_probability=calibration_probability / 100.0,
+            )
+        except Exception as exc:
+            st.error(f"Analysis setting update failed: {sanitize_error(exc)}")
+        else:
+            st.success("Analysis settings saved.", icon=":material/check_circle:")
+            st.rerun()
+
+
+def _render_scoring_guide(config: AppConfig, db: Database) -> None:
+    import streamlit as st
+
+    profiles = db.list_interest_profiles(enabled_only=True)
+    profile = profiles[0] if profiles else None
+    relevance_threshold = profile.relevance_threshold if profile is not None else 0.6
+    derived_preselection = preselection_threshold(
+        relevance_threshold=relevance_threshold,
+        preselection_fraction=config.preselection_fraction,
+    )
+    completed_calibrations = len(
+        db.list_quantitative_calibrations(state="COMPLETED")
+    )
+    st.markdown("**Scoring Guide**")
+    with st.expander("Scoring Guide", icon=":material/rule:"):
+        st.markdown("**Relevance score**")
+        st.write(
+            "Range: 0..1. Meaning: how strongly the paper matches the selected "
+            "Interest Profile. A paper is relevant when relevance_score >= the "
+            "profile relevance threshold."
+        )
+        st.caption(
+            "This is an LLM ordinal judgment, not a calibrated probability. The Codex "
+            "prompt asks it to judge mechanisms, mathematical structures, methods, "
+            "physical systems, and defensible conceptual relevance, not keyword matches alone."
+        )
+        if profile is not None:
+            st.write(
+                f'Current profile example: "{profile.name}" threshold '
+                f"{profile.relevance_threshold:.2f}."
+            )
+        st.markdown("**Preselection score and model effort**")
+        st.write(
+            "Preselection is a cheaper model-generated first-impression score for "
+            "cache-miss papers, based on title and abstract. It asks how plausible it is "
+            "that deeper relevance analysis would find a meaningful match to the profile."
+        )
+        st.caption(
+            "The score is ordinal, not a calibrated probability. Rubric: 0.00-0.19 no "
+            "substantive connection; 0.20-0.39 weak/general adjacency; 0.40-0.59 "
+            "plausible indirect connection; 0.60-0.79 strong plausible relevance; "
+            "0.80-1.00 direct/core apparent match."
+        )
+        st.caption(
+            "Preselection threshold = preselection_fraction * profile relevance threshold. "
+            "A paper at the threshold passes Stage 1."
+        )
+        st.write(
+            f"Model effort: "
+            f"{model_effort_from_preselection_fraction(config.preselection_fraction) * 100:.0f}%. "
+            f"Internal preselection fraction: {config.preselection_fraction:.2f}. "
+            f"Derived preselection threshold: {derived_preselection:.3f}."
+        )
+        st.markdown("**Automatic Library threshold**")
+        st.write(
+            "This controls model work during digest runs. If automatic Library connections "
+            "are ON and a newly analyzed paper's final relevance score is at least the "
+            f"stored threshold ({config.automatic_library_context_threshold:.2f}), "
+            "Research Digest may spend extra model effort comparing it with saved Library "
+            "papers. Below the threshold, automatic Library reasoning is skipped."
+        )
+        st.caption(
+            "Manual Find Library connections remains available and this threshold is not a "
+            "Library connection confidence score."
+        )
+        st.markdown("**Library connection confidence**")
+        st.write(
+            "Range: 0..1 or unavailable. Meaning: confidence that the specific stated "
+            "scientific relationship between two papers is supported by the bounded "
+            "evidence inspected. It is not profile relevance, a statistical confidence "
+            "interval, or a calibrated probability."
+        )
+        st.caption(
+            "The Codex connection prompt asks for meaningful scientific relationships "
+            "grounded in supplied metadata/evidence and validates confidence as a 0..1 "
+            "number or null. Research Digest stores validated suggestions and shows "
+            "non-dismissed suggestions; deterministic candidate selection happens before "
+            "the model call."
+        )
+        st.markdown("**Human relevance calibration score**")
+        st.write(
+            "Range: 0..1. Meaning: your own profile-relevance judgment for an occasional "
+            "below-threshold analyzed paper. It is separate from personal interest and "
+            "does not overwrite the model's historical score."
+        )
+        st.caption(
+            f"Collected completed human calibration samples: {completed_calibrations}. "
+            f"Prompt probability: {config.relevance_calibration_prompt_probability:.2f}."
+        )
+
+
+def _render_suggested_interests(db: Database) -> None:
+    import streamlit as st
+
+    profiles = db.list_interest_profiles(enabled_only=True)
+    if not profiles:
+        return
+    st.markdown("**Suggested interests**")
+    st.caption(
+        "Suggestions are generated only when you explicitly refresh them; opening Settings "
+        "does not create new suggestions."
+    )
+    if st.button("Refresh suggested interests", icon=":material/refresh:"):
+        refreshed_count = 0
+        for profile in profiles:
+            refreshed_count += len(refresh_suggested_interests(db, profile=profile))
+        st.success(
+            f"Suggested interests refreshed; {refreshed_count} active suggestion(s).",
+            icon=":material/check_circle:",
+        )
+        st.rerun()
+    found_any = False
+    for profile in profiles:
+        if profile.id is None:
+            continue
+        suggestions = db.list_suggested_interest_profiles(
+            profile_id=profile.id,
+            profile_fingerprint=profile_semantic_fingerprint(profile),
+        )
+        for suggestion in suggestions:
+            found_any = True
+            with st.container(border=True):
+                st.markdown(f"**{suggestion.suggested_name}**")
+                st.caption(
+                    f"Based on {len(suggestion.evidence_article_ids)} papers you marked "
+                    f"as personally interesting but outside \"{profile.name}\"."
+                )
+                st.write(suggestion.explanation)
+                with st.expander("Evidence", icon=":material/article:"):
+                    for article_id in suggestion.evidence_article_ids:
+                        article = db.get_article(article_id)
+                        if article is not None:
+                            st.write(
+                                f"{article.source}:{article.source_article_id} - "
+                                f"{article.title}"
+                            )
+                with st.form(f"suggested_interest_{suggestion.id}", border=False):
+                    name = st.text_input("Profile name", value=suggestion.suggested_name)
+                    description = st.text_area(
+                        "Profile description",
+                        value=suggestion.suggested_description,
+                    )
+                    with st.container(horizontal=True):
+                        create = st.form_submit_button(
+                            "Create profile",
+                            type="primary",
+                            icon=":material/add:",
+                        )
+                        dismiss = st.form_submit_button(
+                            "Not now",
+                            icon=":material/close:",
+                        )
+                if create:
+                    try:
+                        create_profile_from_suggestion(
+                            db,
+                            suggestion_id=suggestion.id or 0,
+                            name=name,
+                            description=description,
+                        )
+                    except Exception as exc:
+                        st.error(f"Profile creation failed: {sanitize_error(exc)}")
+                    else:
+                        st.success("Interest profile created.", icon=":material/check_circle:")
+                        st.rerun()
+                if dismiss:
+                    dismiss_suggested_interest(db, suggestion_id=suggestion.id or 0)
+                    st.success("Suggestion dismissed.", icon=":material/check_circle:")
+                    st.rerun()
+    if not found_any:
+        st.caption(
+            "No suggested interests yet. Mark several outside-profile papers as personally "
+            "interesting to help Research Digest find a coherent new profile."
+        )
 
 
 def _render_automation(config: AppConfig, db: Database) -> None:
@@ -111,23 +414,39 @@ def _render_automation(config: AppConfig, db: Database) -> None:
         _render_schedule_status(status)
         st.caption("Last scheduled digest outcome: " + last_scheduled_digest_outcome(db))
         default_time = schedule_time_default(status.schedule)
+        schedule_enabled = schedule_enabled_state(status)
         with st.form("automation_schedule", border=False):
-            enabled = st.toggle(
-                "Automatic daily digest",
-                value=bool(status.schedule and status.schedule.installed),
-            )
+            if schedule_enabled is None:
+                st.info(
+                    "Automatic daily digest: Schedule state unavailable.",
+                    icon=":material/help:",
+                )
+                st.caption(
+                    "Research Digest could not determine whether the Windows task is enabled, "
+                    "so schedule install/remove controls are disabled until status inspection "
+                    "succeeds."
+                )
+                enabled = False
+            else:
+                enabled = st.toggle(
+                    "Automatic daily digest",
+                    value=schedule_enabled,
+                )
             daily_time = st.text_input(
                 "Daily time",
                 value=default_time,
                 placeholder="07:30",
+                disabled=schedule_enabled is None,
             )
             catch_up = st.toggle(
                 "Catch up missed source dates",
                 value=config.automatic_catch_up_enabled,
+                disabled=schedule_enabled is None,
             )
             catch_up_from = st.date_input(
                 "Catch up from",
                 value=config.automatic_coverage_start_date,
+                disabled=schedule_enabled is None,
             )
             st.caption("Windows local time; follows Windows daylight-saving rules.")
             st.caption(
@@ -140,6 +459,7 @@ def _render_automation(config: AppConfig, db: Database) -> None:
                 "Save / update schedule",
                 type="primary",
                 icon=":material/save:",
+                disabled=schedule_enabled is None,
             )
         if submitted:
             try:
@@ -169,7 +489,11 @@ def _render_automation(config: AppConfig, db: Database) -> None:
         with st.container(horizontal=True):
             if st.button("Run now", icon=":material/play_arrow:"):
                 _run_automatic_now(config, db)
-            if st.button("Disable schedule", icon=":material/event_busy:"):
+            if st.button(
+                "Disable schedule",
+                icon=":material/event_busy:",
+                disabled=schedule_enabled is None,
+            ):
                 try:
                     result = remove_schedule()
                 except Exception as exc:
@@ -187,7 +511,7 @@ def _render_schedule_status(status: AutomationStatus) -> None:
 
     if not status.ok:
         st.warning(
-            "Automatic scheduling is unavailable: "
+            "Schedule state unavailable: "
             f"{status.error_message or 'unknown scheduler error'}",
             icon=":material/warning:",
         )
@@ -204,12 +528,24 @@ def _render_schedule_status(status: AutomationStatus) -> None:
     else:
         st.success("Schedule is installed.", icon=":material/check_circle:")
     cols = st.columns(3)
-    cols[0].metric("State", schedule.state or "unknown")
+    enabled = schedule_enabled_state(status)
+    state_label = "Unknown" if enabled is None else "Enabled" if enabled else "Disabled"
+    cols[0].metric("Schedule", state_label)
     cols[1].metric("Next run", schedule.next_run_time or "unknown")
     cols[2].metric("Last scheduled run", schedule.last_run_time or "none")
+    st.caption(f"Task state: {schedule.state or 'unknown'}")
     st.caption(schedule.timezone)
     if schedule.message:
         st.caption(sanitize_error(schedule.message))
+
+
+def schedule_enabled_state(status: AutomationStatus) -> bool | None:
+    if not status.ok or status.schedule is None:
+        return None
+    schedule = status.schedule
+    if not schedule.installed:
+        return False
+    return schedule.state is None or schedule.state.strip().casefold() != "disabled"
 
 
 def _render_coverage_overview(config: AppConfig, db: Database) -> None:
@@ -226,48 +562,13 @@ def _render_coverage_overview(config: AppConfig, db: Database) -> None:
         format_func=lambda profile: profile.name,
         key="automation_coverage_profile",
     )
-    source = ArxivSource()
-    try:
-        plan = build_automatic_coverage_plan(
-            db=db,
-            profiles=tuple(profiles),
-            source_name=SOURCE_ARXIV,
-            source_config=source_config,
-            latest_resolver=source,
-            coverage_start_date=config.automatic_coverage_start_date,
-            catch_up_missed_dates=config.automatic_catch_up_enabled,
-        )
-    except Exception as exc:
-        st.warning(
-            "Pending coverage dates could not be resolved: " + sanitize_error(exc),
-            icon=":material/warning:",
-        )
-        return
     st.caption(f"Catch up from: {config.automatic_coverage_start_date.isoformat()}")
-    if plan.latest_available_date is None:
-        st.caption("Latest available source date: unavailable")
-    else:
-        st.caption(f"Latest available source date: {plan.latest_available_date.isoformat()}")
+    st.caption("Latest available source date: checked when Run now starts.")
+    st.caption("Pending source dates: checked when Run now starts.")
     st.caption(
-        "Pending source dates: "
-        + (
-            ", ".join(value.isoformat() for value in plan.pending_dates)
-            if plan.pending_dates
-            else "none"
-        )
+        "Opening Settings is read-only; it does not contact arXiv or process catch-up dates."
     )
-    if (
-        plan.latest_available_date is not None
-        and config.automatic_coverage_start_date > plan.latest_available_date
-    ):
-        st.info(
-            run_now_noop_message(
-                coverage_start_date=config.automatic_coverage_start_date,
-                latest_available_source_date=plan.latest_available_date,
-            ),
-            icon=":material/info:",
-        )
-    anchor = plan.latest_available_date or config.automatic_coverage_start_date
+    anchor = config.automatic_coverage_start_date
     start_date, end_date = month_bounds(anchor)
     render_date_status_grid(
         statuses=build_date_coverage_statuses(
@@ -277,7 +578,7 @@ def _render_coverage_overview(config: AppConfig, db: Database) -> None:
             source_config=source_config,
             start_date=start_date,
             end_date=end_date,
-            pending_dates=plan.pending_dates,
+            pending_dates=(),
         ),
         title=f"Automation coverage for {anchor:%B %Y}",
     )
@@ -465,7 +766,7 @@ def provider_health_check(report: DoctorReport) -> DoctorCheck | None:
 def preselection_effort_summary() -> str:
     return (
         "Research Digest retrieves all eligible articles for the selected source dates. "
-        "Cached analyses are reused, and deterministic abstract preselection decides which "
+        "Cached analyses are reused, and abstract-level model preselection decides which "
         "cache-miss articles need new full LLM analysis."
     )
 

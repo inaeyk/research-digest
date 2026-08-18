@@ -22,9 +22,11 @@ from research_digest.automation import (
 )
 from research_digest.backup import run_backup
 from research_digest.config import AppConfig, load_config
-from research_digest.db import Database
+from research_digest.db import Database, RunAlreadyActiveError, RunLockError
 from research_digest.doctor import DoctorReport, run_doctor, run_doctor_from_environment
 from research_digest.errors import sanitize_error
+from research_digest.preselection import AbstractPreselector, UnavailableFailOpenPreselector
+from research_digest.run_locks import process_run_owner_state
 from research_digest.scheduler import (
     DEFAULT_TASK_NAME,
     ScheduleError,
@@ -58,6 +60,7 @@ def run_cli(
     source: SourceAdapter | None = None,
     analyzer: LLMAnalyzer | None = None,
     analyzer_message: str | None = None,
+    preselector: AbstractPreselector | None = None,
     scheduler_backend: SchedulerBackend | None = None,
     process_launcher: ProcessLauncher | None = None,
 ) -> int:
@@ -79,6 +82,7 @@ def run_cli(
             source=source,
             analyzer=analyzer,
             analyzer_message=analyzer_message,
+            preselector=preselector,
         )
     if args.command == "schedule":
         return _schedule_command(
@@ -112,6 +116,14 @@ def run_cli(
             config=config,
             db=db,
             scheduler_backend=scheduler_backend,
+        )
+    if args.command == "recover-abandoned-run":
+        return _recover_abandoned_run_command(
+            args=args,
+            stdout=stdout,
+            stderr=stderr,
+            config=config,
+            db=db,
         )
     if args.command == "backup":
         return _backup_command(args=args, stdout=stdout, stderr=stderr)
@@ -191,6 +203,29 @@ def _build_parser() -> argparse.ArgumentParser:
         default=5.0,
         help="Network check timeout in seconds. Defaults to 5.",
     )
+    recover_parser = subparsers.add_parser(
+        "recover-abandoned-run",
+        help="Mark an abandoned RUNNING digest terminal and release stale ownership.",
+    )
+    recover_parser.add_argument(
+        "--run-id",
+        type=int,
+        required=True,
+        help="RUNNING app run id to recover.",
+    )
+    recover_parser.add_argument(
+        "--force-uninspectable-owner",
+        action="store_true",
+        help=(
+            "Recover even when an old lock owner cannot be inspected. Use only after "
+            "confirming no digest process is still running."
+        ),
+    )
+    recover_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print a machine-readable JSON result.",
+    )
     backup_parser = subparsers.add_parser("backup", help="Back up local user data.")
     backup_parser.add_argument(
         "--json",
@@ -239,6 +274,7 @@ def _run_digest_command(
     source: SourceAdapter | None,
     analyzer: LLMAnalyzer | None,
     analyzer_message: str | None,
+    preselector: AbstractPreselector | None,
 ) -> int:
     try:
         active_config = config or load_config()
@@ -250,11 +286,19 @@ def _run_digest_command(
             analyzer_connection = build_configured_analyzer(active_config)
             active_analyzer = analyzer_connection.analyzer
             active_analyzer_message = analyzer_connection.message
+        active_preselector = preselector
+        if active_preselector is None and analyzer is not None:
+            active_preselector = UnavailableFailOpenPreselector(
+                preselection_fraction=active_config.preselection_fraction,
+                reason="Injected analyzer supplied without model preselector.",
+            )
         result = run_automatic_digest_now(
             config=active_config,
             db=active_db,
             source=active_source,
             analyzer=active_analyzer,
+            preselector=active_preselector,
+            use_configured_preselector=True,
         )
     except Exception as exc:
         message = sanitize_error(exc)
@@ -409,6 +453,70 @@ def _write_doctor_human(stdout: TextIO, report: DoctorReport) -> None:
         stdout.write(f"{check.severity}: {check.name}: {check.message}\n")
 
 
+def _recover_abandoned_run_command(
+    *,
+    args: argparse.Namespace,
+    stdout: TextIO,
+    stderr: TextIO,
+    config: AppConfig | None,
+    db: Database | None,
+) -> int:
+    try:
+        active_config = config or load_config()
+        active_db = db or Database(active_config.db_path)
+        result = active_db.recover_abandoned_run(
+            run_id=int(args.run_id),
+            force_uninspectable_owner=bool(args.force_uninspectable_owner),
+        )
+    except (RunAlreadyActiveError, RunLockError, ValueError) as exc:
+        message = sanitize_error(exc)
+        if args.json:
+            json.dump({"status": "failed", "error_message": message}, stdout)
+            stdout.write("\n")
+        else:
+            stderr.write(f"Research Digest recovery failed: {message}\n")
+        return 1
+    except Exception as exc:
+        message = sanitize_error(exc)
+        if args.json:
+            json.dump({"status": "failed", "error_message": message}, stdout)
+            stdout.write("\n")
+        else:
+            stderr.write(f"Research Digest recovery failed: {message}\n")
+        return 1
+
+    payload = {
+        "run_id": result.run_id,
+        "recovered": result.recovered,
+        "status_before": result.status_before,
+        "status_after": result.status_after,
+        "retrieved_count": result.retrieved_count,
+        "stored_count": result.stored_count,
+        "preselected_count": result.preselected_count,
+        "skipped_analysis_count": result.skipped_analysis_count,
+        "analyzed_count": result.analyzed_count,
+        "relevant_count": result.relevant_count,
+        "message": result.message,
+    }
+    if args.json:
+        json.dump({"status": "completed", **payload}, stdout)
+        stdout.write("\n")
+    else:
+        stdout.write("Research Digest recovery completed\n")
+        stdout.write(f"Run: #{result.run_id}\n")
+        stdout.write(f"Recovered: {result.recovered}\n")
+        stdout.write(f"Status: {result.status_before} -> {result.status_after}\n")
+        stdout.write(
+            "Counts: "
+            f"retrieved {result.retrieved_count}, "
+            f"preselected {result.preselected_count}, "
+            f"analyzed {result.analyzed_count}, "
+            f"relevant {result.relevant_count}\n"
+        )
+        stdout.write(f"{result.message}\n")
+    return 0
+
+
 def _backup_command(*, args: argparse.Namespace, stdout: TextIO, stderr: TextIO) -> int:
     try:
         result = run_backup(
@@ -453,6 +561,7 @@ def _status_payload(
     app_runs = db.get_app_runs()
     last_run = _last_run_to_mapping(app_runs[0]) if app_runs else None
     schedule = _schedule_status_payload(scheduler_backend)
+    run_lock = db.get_run_lock()
     return {
         "data_path": str(config.db_path),
         "config_path": str(config.config_path) if config.config_path else None,
@@ -460,12 +569,25 @@ def _status_payload(
         "schema_version": db.get_schema_version(),
         "config_version": config.config_version,
         "last_run": last_run,
+        "run_lock": _run_lock_to_mapping(run_lock),
         "schedule": schedule,
         "automation": {
             "catch_up_missed_dates": config.automatic_catch_up_enabled,
             "coverage_start_date": config.automatic_coverage_start_date.isoformat(),
             "covered_source_date_count": len(db.list_source_date_coverage()),
         },
+    }
+
+
+def _run_lock_to_mapping(lock: object | None) -> dict[str, object] | None:
+    if lock is None:
+        return None
+    values = cast(Any, lock)
+    return {
+        "name": values.name,
+        "owner": values.owner,
+        "owner_state": process_run_owner_state(values.owner).value,
+        "acquired_at": values.acquired_at.isoformat(),
     }
 
 
@@ -503,12 +625,13 @@ def _last_run_to_mapping(row: object) -> dict[str, object]:
 def _schedule_status_payload(scheduler_backend: SchedulerBackend | None) -> dict[str, object]:
     status = read_schedule_status(scheduler_backend=scheduler_backend)
     if status.schedule is not None:
-        return status.schedule.to_mapping()
+        return {"status_available": True, **status.schedule.to_mapping()}
     error_message = status.error_message or "Schedule status is unavailable."
     return {
+        "status_available": False,
         "backend": None,
         "task_name": DEFAULT_TASK_NAME,
-        "installed": False,
+        "installed": None,
         "message": error_message,
     }
 
@@ -533,12 +656,27 @@ def _write_status_human(stdout: TextIO, payload: Mapping[str, object]) -> None:
         stdout.write("Last run: none\n")
     schedule = payload.get("schedule")
     if isinstance(schedule, Mapping):
+        if schedule.get("status_available") is False:
+            stdout.write(
+                "Schedule: status unavailable "
+                f"message={schedule.get('message')}\n"
+            )
+        else:
+            stdout.write(
+                "Schedule: "
+                f"installed={schedule.get('installed')} "
+                f"backend={schedule.get('backend')} "
+                f"message={schedule.get('message')}\n"
+            )
+    run_lock = payload.get("run_lock")
+    if isinstance(run_lock, Mapping):
         stdout.write(
-            "Schedule: "
-            f"installed={schedule.get('installed')} "
-            f"backend={schedule.get('backend')} "
-            f"message={schedule.get('message')}\n"
+            "Run lock: "
+            f"owner_state={run_lock.get('owner_state')} "
+            f"acquired_at={run_lock.get('acquired_at')}\n"
         )
+    else:
+        stdout.write("Run lock: none\n")
     automation = payload.get("automation")
     if isinstance(automation, Mapping):
         stdout.write(
@@ -708,9 +846,12 @@ def _write_human_result(
         stdout.write(
             f"Profile {profile_run.profile_id}: run #{digest.run_id}, "
             f"retrieved {digest.retrieved_count}, stored {digest.stored_count}, "
-            f"preselected {digest.preselected_count}, skipped {digest.skipped_analysis_count}, "
-            f"analyzed {digest.analyzed_count}, relevant {digest.relevant_count}, "
-            f"new {digest.new_analysis_count}, reused {digest.reused_analysis_count}, "
+            f"screened this run {digest.preselected_count + digest.skipped_analysis_count}, "
+            f"passed preselection {digest.preselected_count}, "
+            f"preselected out {digest.skipped_analysis_count}, "
+            f"new full analyses {digest.new_analysis_count}, "
+            f"reused full analyses {digest.reused_analysis_count}, "
+            f"total analyzed {digest.analyzed_count}, relevant {digest.relevant_count}, "
             f"analysis {analysis_state}\n"
         )
         stdout.write(

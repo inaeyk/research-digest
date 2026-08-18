@@ -7,8 +7,13 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Literal, TypeAlias, TypeGuard
 
+from research_digest.analysis.providers import build_configured_preselector
 from research_digest.calibration import CalibrationSummary, build_calibration_summary
-from research_digest.config import ConfigError, load_config
+from research_digest.config import (
+    DEFAULT_AUTOMATIC_LIBRARY_CONTEXT_THRESHOLD,
+    ConfigError,
+    load_config,
+)
 from research_digest.coverage import build_date_coverage_statuses
 from research_digest.db import SOURCE_ARXIV, Database
 from research_digest.errors import sanitize_error
@@ -26,7 +31,7 @@ from research_digest.models import (
     DateSelectionKind,
     DigestItem,
     DigestResult,
-    FeedbackLabel,
+    FeedbackAnswer,
     InterestProfile,
     ModelValidationError,
     RunOrigin,
@@ -39,6 +44,10 @@ from research_digest.models import (
     sorted_digest_items,
 )
 from research_digest.pipeline import DigestPipelineError
+from research_digest.quantitative_calibration import (
+    dismiss_quantitative_calibration,
+    submit_quantitative_calibration,
+)
 from research_digest.service import run_digest_for_profile
 from research_digest.sources.arxiv import ArxivSource
 from research_digest.sources.base import LatestAvailableDateResolver, SourceError
@@ -57,6 +66,7 @@ DateSelectionMode: TypeAlias = Literal[
     "date_range",
     "selected_dates",
 ]
+FeedbackControlAnswer: TypeAlias = Literal["YES", "NO", "UNANSWERED"]
 _LAST_DIGEST_RESULT_KEY = "last_digest_result"
 _LAST_DIGEST_SIGNATURE_KEY = "last_digest_signature"
 _SELECTED_DATES_KEY = "today_selected_dates"
@@ -80,10 +90,11 @@ _VIEW_TITLES: dict[DigestView, str] = {
     "all_analyzed": "All analyzed",
     "below_threshold": "Below threshold",
 }
-_FEEDBACK_OPTIONS: tuple[FeedbackLabel, ...] = ("RELEVANT", "NOT_RELEVANT")
-_FEEDBACK_LABELS: dict[FeedbackLabel, str] = {
-    "RELEVANT": "Relevant",
-    "NOT_RELEVANT": "Not relevant",
+_FEEDBACK_OPTIONS: tuple[FeedbackControlAnswer, ...] = ("YES", "NO", "UNANSWERED")
+_FEEDBACK_LABELS: dict[FeedbackControlAnswer, str] = {
+    "YES": "Yes",
+    "NO": "No",
+    "UNANSWERED": "Unanswered",
 }
 
 
@@ -126,13 +137,13 @@ def render() -> None:
         format_func=lambda item: f"{item.name} (threshold {item.relevance_threshold:.2f})",
     )
     try:
-        default_selection = load_config().default_date_selection
+        active_config = load_config()
+        default_selection = active_config.default_date_selection
     except ConfigError:
+        active_config = None
         default_selection = DateSelection.latest_available()
-    source = ArxivSource()
     date_control = _render_date_selection_control(
         default_selection,
-        latest_resolver=source,
         source_config=source_config,
     )
     st.info(f"Digest period: {date_control.period_label}", icon=":material/event:")
@@ -161,14 +172,6 @@ def render() -> None:
         else None
     )
 
-    analyzer, analyzer_message = get_analyzer()
-    if analyzer_message is not None:
-        st.warning(
-            "Analysis provider needs attention: "
-            f"{sanitize_error(analyzer_message)}. Run `research-digest doctor` for details.",
-            icon=":material/warning:",
-        )
-
     if st.button(
         "Run digest",
         type="primary",
@@ -177,10 +180,36 @@ def render() -> None:
     ):
         with st.spinner("Fetching and analyzing selected source date(s)..."):
             try:
+                source = ArxivSource()
+                analyzer, analyzer_message = get_analyzer()
+                library_context_generator = None
+                if active_config is None or active_config.automatic_library_connections_enabled:
+                    library_context_generator, _library_context_message = (
+                        get_library_context_generator()
+                    )
+                if analyzer_message is not None:
+                    st.warning(
+                        "Analysis provider needs attention: "
+                        f"{sanitize_error(analyzer_message)}. "
+                        "Run `research-digest doctor` for details.",
+                        icon=":material/warning:",
+                    )
                 if profile.id is None:
                     raise DigestPipelineError("selected interest profile is missing an id")
                 if date_selection is None:
                     raise DigestPipelineError("select source date(s) before running a digest")
+                preselector_connection = (
+                    build_configured_preselector(active_config)
+                    if active_config is not None
+                    else None
+                )
+                if preselector_connection is not None and preselector_connection.message:
+                    st.warning(
+                        "Stage-1 abstract preselection is unavailable, so cache-miss "
+                        "papers will be allowed through to full analysis: "
+                        f"{sanitize_error(preselector_connection.message)}",
+                        icon=":material/warning:",
+                    )
                 service_result = run_digest_for_profile(
                     db=db,
                     source=source,
@@ -188,6 +217,22 @@ def render() -> None:
                     profile_id=profile.id,
                     date_selection=date_selection,
                     run_origin=RunOrigin.MANUAL,
+                    preselector=(
+                        preselector_connection.preselector
+                        if preselector_connection is not None
+                        else None
+                    ),
+                    library_context_generator=library_context_generator,
+                    automatic_library_context_threshold=(
+                        active_config.automatic_library_context_threshold
+                        if active_config is not None
+                        else DEFAULT_AUTOMATIC_LIBRARY_CONTEXT_THRESHOLD
+                    ),
+                    relevance_calibration_prompt_probability=(
+                        active_config.relevance_calibration_prompt_probability
+                        if active_config is not None
+                        else 0.20
+                    ),
                 )
                 result = service_result.digest
             except (DigestPipelineError, SourceError, ModelValidationError) as exc:
@@ -213,6 +258,7 @@ def render() -> None:
             else:
                 st.info("Papers were fetched and stored, but no analyses are available.")
         _render_items(result, db)
+        _render_quantitative_calibration_prompt(db, result)
     else:
         st.session_state.pop(_LAST_DIGEST_RESULT_KEY, None)
         st.session_state.pop(_LAST_DIGEST_SIGNATURE_KEY, None)
@@ -337,7 +383,6 @@ def _format_date(value: date) -> str:
 def _render_date_selection_control(
     default_selection: DateSelection,
     *,
-    latest_resolver: LatestAvailableDateResolver[ArxivSourceConfig],
     source_config: ArxivSourceConfig,
 ) -> DateSelectionControl:
     import streamlit as st
@@ -353,25 +398,7 @@ def _render_date_selection_control(
     )
     mode = coerce_date_selection_mode(selected_mode)
     if mode == "latest_available":
-        with st.spinner("Checking latest arXiv source date..."):
-            try:
-                latest_date = resolve_latest_available_source_date(latest_resolver, source_config)
-            except SourceError as exc:
-                return DateSelectionControl(
-                    selection=None,
-                    period_label="Latest available source date",
-                    disabled_reason=(
-                        "Could not resolve the latest arXiv source date: "
-                        f"{sanitize_error(exc)}"
-                    ),
-                )
-        if latest_date is None:
-            return DateSelectionControl(
-                selection=None,
-                period_label="Latest available source date",
-                disabled_reason="No eligible arXiv source date is currently available.",
-            )
-        selection = DateSelection.single_date(latest_date)
+        selection = DateSelection.latest_available()
         return DateSelectionControl(
             selection=selection,
             period_label=digest_period_label(selection),
@@ -511,12 +538,16 @@ def _render_empty_metrics() -> None:
 
     col1, col2, col3 = st.columns(3)
     col1.metric("Retrieved", "-")
-    col2.metric("Analyzed", "-")
-    col3.metric("Above threshold", "-")
+    col2.metric("Already analyzed / reused", "-")
+    col3.metric("Screened this run", "-")
     col4, col5, col6 = st.columns(3)
-    col4.metric("New analyses", "-")
-    col5.metric("Reused analyses", "-")
-    col6.metric("Skipped new analysis", "-")
+    col4.metric("Passed preselection", "-")
+    col5.metric("Preselected out", "-")
+    col6.metric("New full analyses", "-")
+    col7, col8, col9 = st.columns(3)
+    col7.metric("Reused full analyses", "-")
+    col8.metric("Total analyzed", "-")
+    col9.metric("Relevant", "-")
 
 
 def _render_metrics(result: DigestResult) -> None:
@@ -524,12 +555,16 @@ def _render_metrics(result: DigestResult) -> None:
 
     col1, col2, col3 = st.columns(3)
     col1.metric("Retrieved", result.retrieved_count)
-    col2.metric("Analyzed", result.analyzed_count)
-    col3.metric("Above threshold", result.above_threshold_count)
+    col2.metric("Already analyzed / reused", result.reused_analysis_count)
+    col3.metric("Screened this run", result.preselected_count + result.skipped_analysis_count)
     col4, col5, col6 = st.columns(3)
-    col4.metric("New analyses", result.new_analysis_count)
-    col5.metric("Reused analyses", result.reused_analysis_count)
-    col6.metric("Skipped new analysis", result.skipped_analysis_count)
+    col4.metric("Passed preselection", result.preselected_count)
+    col5.metric("Preselected out", result.skipped_analysis_count)
+    col6.metric("New full analyses", result.new_analysis_count)
+    col7, col8, col9 = st.columns(3)
+    col7.metric("Reused full analyses", result.reused_analysis_count)
+    col8.metric("Total analyzed", result.analyzed_count)
+    col9.metric("Relevant", result.above_threshold_count)
 
 
 def _render_items(result: DigestResult, db: Database) -> None:
@@ -714,6 +749,8 @@ def _render_item(
             db=db,
             article=article,
             context=f"{context}:library:{article.source}:{article.source_article_id}",
+            profile=profile,
+            profile_fingerprint_value=profile_fingerprint_value,
         )
         _render_library_context(item, db, result_run_id_from_context(context))
         _render_feedback_control(
@@ -787,20 +824,19 @@ def _render_library_context_generation(
     article_id = item.article.id
     if article_id is None:
         return
-    generator, message = get_library_context_generator()
     if st.button(
-        "Find Library context",
+        "Find Library connections",
         key=context_action_key(action="generate", article_id=article_id),
         icon=":material/psychology:",
-        disabled=generator is None,
     ):
+        generator, message = get_library_context_generator()
         if generator is None:
             st.warning(
                 message or "Library context generation is unavailable.",
                 icon=":material/warning:",
             )
             return
-        with st.spinner("Finding Library context..."):
+        with st.spinner("Finding Library connections..."):
             try:
                 suggestions = generate_library_context_for_item(
                     db,
@@ -823,8 +859,6 @@ def _render_library_context_generation(
         else:
             st.info("No grounded Library context was found.")
         st.rerun()
-    if generator is None and message:
-        st.caption(f"Library context generation unavailable: {sanitize_error(message)}")
 
 
 def _render_preselected_out_articles(result: DigestResult, db: Database) -> None:
@@ -834,7 +868,8 @@ def _render_preselected_out_articles(result: DigestResult, db: Database) -> None
         return
     st.markdown("**Preselected out**")
     st.caption(
-        "These papers were retrieved and stored, then skipped by deterministic preselection."
+        "These papers were retrieved and stored, then skipped by Stage-1 abstract "
+        "preselection before full analysis."
     )
     for article in sorted(result.skipped_articles, key=_article_sort_key):
         with st.container(border=True):
@@ -861,6 +896,8 @@ def _render_preselected_out_articles(result: DigestResult, db: Database) -> None
                     f"today:{result.run_id}:preselected:library:"
                     f"{article.source}:{article.source_article_id}"
                 ),
+                profile=result.profile,
+                profile_fingerprint_value=profile_semantic_fingerprint(result.profile),
             )
 
 
@@ -894,7 +931,71 @@ def _render_unresolved_articles(result: DigestResult, db: Database) -> None:
                     f"today:{result.run_id}:unresolved:library:"
                     f"{article.source}:{article.source_article_id}"
                 ),
+                profile=result.profile,
+                profile_fingerprint_value=profile_semantic_fingerprint(result.profile),
             )
+
+
+def _render_quantitative_calibration_prompt(db: Database, result: DigestResult) -> None:
+    import streamlit as st
+
+    prompt = db.get_quantitative_calibration_for_run(result.run_id)
+    if prompt is None or prompt.state == "SKIPPED":
+        return
+    if prompt.state == "COMPLETED":
+        if prompt.user_relevance_score is None or prompt.model_relevance_score is None:
+            return
+        with st.container(border=True):
+            st.markdown("**Relevance calibration saved**")
+            st.caption(
+                f"Your score: {prompt.user_relevance_score:.2f}. "
+                f"Research Digest score: {prompt.model_relevance_score:.2f}. "
+                f"Difference: {prompt.user_relevance_score - prompt.model_relevance_score:+.2f}."
+            )
+        return
+    if prompt.state == "DISMISSED":
+        return
+    if prompt.article_id is None or prompt.id is None:
+        return
+    article = db.get_article(prompt.article_id)
+    if article is None:
+        return
+    with st.container(border=True):
+        st.markdown("**Help calibrate Research Digest**")
+        st.markdown(f'How relevant is this paper to "{result.profile.name}"?')
+        st.caption("0 = no meaningful connection to this profile")
+        st.caption("0.5 = related / adjacent")
+        st.caption("1 = directly central to this profile")
+        st.markdown(f"**{article.title}**")
+        st.caption(result.profile.description)
+        st.text(article.abstract or "Abstract unavailable")
+        with st.form(f"quantitative_calibration_{prompt.id}", border=False):
+            user_score = st.slider(
+                "Your relevance score",
+                min_value=0.0,
+                max_value=1.0,
+                value=0.5,
+                step=0.01,
+            )
+            with st.container(horizontal=True):
+                submitted = st.form_submit_button(
+                    "Submit",
+                    type="primary",
+                    icon=":material/check:",
+                )
+                dismissed = st.form_submit_button("Not now", icon=":material/close:")
+        if submitted:
+            submit_quantitative_calibration(
+                db,
+                calibration_id=prompt.id,
+                user_relevance_score=float(user_score),
+            )
+            st.success("Calibration score saved.", icon=":material/check_circle:")
+            st.rerun()
+        if dismissed:
+            dismiss_quantitative_calibration(db, calibration_id=prompt.id)
+            st.info("Calibration prompt dismissed.", icon=":material/info:")
+            st.rerun()
 
 
 def _render_feedback_control(
@@ -908,14 +1009,41 @@ def _render_feedback_control(
 
     if item.article.id is None or profile.id is None:
         return
-    selected = st.segmented_control(
-        "Feedback",
+    st.markdown("**Help Research Digest learn**")
+    st.caption(
+        "Judge profile fit separately from whether you personally want to read the paper."
+    )
+    profile_match = st.segmented_control(
+        f'Does this paper match "{profile.name}"?',
         options=_FEEDBACK_OPTIONS,
-        default=current_feedback.feedback_label if current_feedback is not None else None,
+        default=current_feedback.profile_match if current_feedback is not None else None,
         required=False,
         format_func=lambda label: _FEEDBACK_LABELS[label],
-        key=f"feedback_{profile.id}_{item.article.id}_{profile_fingerprint_value}",
+        key=(
+            f"feedback_profile_match_{profile.id}_{item.article.id}_"
+            f"{profile_fingerprint_value}"
+        ),
         width="stretch",
+    )
+    st.caption(
+        "Judge whether the paper fits this profile description, regardless of whether "
+        "you personally want to read it."
+    )
+    personal_interest = st.segmented_control(
+        "Are you personally interested in this paper?",
+        options=_FEEDBACK_OPTIONS,
+        default=current_feedback.personal_interest if current_feedback is not None else None,
+        required=False,
+        format_func=lambda label: _FEEDBACK_LABELS[label],
+        key=(
+            f"feedback_personal_interest_{profile.id}_{item.article.id}_"
+            f"{profile_fingerprint_value}"
+        ),
+        width="stretch",
+    )
+    st.caption(
+        "This may include papers outside the current profile. Your answer can help "
+        "Research Digest discover other interests you may want to follow."
     )
     if persist_feedback_selection(
         item=item,
@@ -923,9 +1051,18 @@ def _render_feedback_control(
         profile=profile,
         profile_fingerprint_value=profile_fingerprint_value,
         current_feedback=current_feedback,
-        selected=selected,
+        profile_match=_feedback_answer_value(profile_match),
+        personal_interest=_feedback_answer_value(personal_interest),
+        clear_profile_match=profile_match == "UNANSWERED",
+        clear_personal_interest=personal_interest == "UNANSWERED",
     ):
-        st.rerun()
+        st.success("Feedback saved.", icon=":material/check_circle:")
+
+
+def _feedback_answer_value(value: FeedbackControlAnswer | None) -> FeedbackAnswer | None:
+    if value == "UNANSWERED":
+        return None
+    return value
 
 
 def persist_feedback_selection(
@@ -935,18 +1072,43 @@ def persist_feedback_selection(
     profile: InterestProfile,
     profile_fingerprint_value: str,
     current_feedback: ArticleFeedback | None,
-    selected: FeedbackLabel | None,
+    profile_match: FeedbackAnswer | None = None,
+    personal_interest: FeedbackAnswer | None = None,
+    clear_profile_match: bool = False,
+    clear_personal_interest: bool = False,
 ) -> bool:
     if item.article.id is None or profile.id is None:
         return False
-    if selected is None:
+    if (
+        profile_match is None
+        and personal_interest is None
+        and not clear_profile_match
+        and not clear_personal_interest
+    ):
         return False
-    if current_feedback is not None and selected == current_feedback.feedback_label:
+    if current_feedback is None and (clear_profile_match or clear_personal_interest):
+        return False
+    if (
+        current_feedback is not None
+        and (
+            (profile_match is None and not clear_profile_match)
+            or profile_match == current_feedback.profile_match
+        )
+        and (
+            (personal_interest is None and not clear_personal_interest)
+            or personal_interest == current_feedback.personal_interest
+        )
+        and not (clear_profile_match and current_feedback.profile_match is not None)
+        and not (clear_personal_interest and current_feedback.personal_interest is not None)
+    ):
         return False
     db.upsert_article_feedback(
         article_id=item.article.id,
         profile_id=profile.id,
         profile_fingerprint=profile_fingerprint_value,
-        feedback_label=selected,
+        profile_match=profile_match,
+        personal_interest=personal_interest,
+        clear_profile_match=clear_profile_match,
+        clear_personal_interest=clear_personal_interest,
     )
     return True

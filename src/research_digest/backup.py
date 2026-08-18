@@ -188,6 +188,9 @@ def export_user_data(*, db_path: Path, schema_version: int | None = None) -> dic
             "library_article_connections": _library_article_connections(conn),
             "library_context_suggestions": _library_context_suggestions(conn),
             "collection_intelligence_snapshots": _collection_intelligence_snapshots(conn),
+            "suggested_interest_profiles": _suggested_interest_profiles(conn),
+            "quantitative_relevance_calibrations": _quantitative_relevance_calibrations(conn),
+            "preselection_decisions": _preselection_decisions(conn),
         }
 
 
@@ -267,6 +270,8 @@ def _feedback(conn: sqlite3.Connection) -> list[dict[str, object]]:
             feedback.profile_id,
             feedback.profile_fingerprint,
             feedback.feedback_label,
+            feedback.profile_match,
+            feedback.personal_interest,
             feedback.created_at,
             feedback.updated_at,
             articles.source,
@@ -283,7 +288,17 @@ def _feedback(conn: sqlite3.Connection) -> list[dict[str, object]]:
             "article_id": int(row["article_id"]),
             "profile_id": int(row["profile_id"]),
             "profile_fingerprint": str(row["profile_fingerprint"]),
-            "feedback_label": str(row["feedback_label"]),
+            "feedback_label": (
+                str(row["feedback_label"]) if row["feedback_label"] is not None else None
+            ),
+            "profile_match": (
+                str(row["profile_match"]) if row["profile_match"] is not None else None
+            ),
+            "personal_interest": (
+                str(row["personal_interest"])
+                if row["personal_interest"] is not None
+                else None
+            ),
             "created_at": str(row["created_at"]),
             "updated_at": str(row["updated_at"]),
             "article": {
@@ -326,7 +341,9 @@ def _runs(conn: sqlite3.Connection) -> list[dict[str, object]]:
             empty_source_dates_json,
             incomplete_source_dates_json,
             retrieval_complete,
-            retrieval_safety_limit
+            retrieval_safety_limit,
+            progress_stage,
+            progress_message
         FROM app_runs
         ORDER BY id
         """
@@ -362,6 +379,12 @@ def _runs(conn: sqlite3.Connection) -> list[dict[str, object]]:
                 if row["retrieval_safety_limit"] is not None
                 else None
             ),
+            "progress_stage": (
+                str(row["progress_stage"]) if row["progress_stage"] is not None else None
+            ),
+            "progress_message": (
+                str(row["progress_message"]) if row["progress_message"] is not None else None
+            ),
         }
         for row in rows
     ]
@@ -390,6 +413,78 @@ def _run_snapshots(conn: sqlite3.Connection) -> list[dict[str, object]]:
             }
         )
     return snapshots
+
+
+def _preselection_decisions(conn: sqlite3.Connection) -> list[dict[str, object]]:
+    if not _table_exists(conn, "preselection_decisions"):
+        return []
+    rows = conn.execute(
+        """
+        SELECT
+            decisions.id,
+            decisions.run_id,
+            decisions.article_id,
+            decisions.profile_id,
+            decisions.profile_fingerprint,
+            decisions.source_name,
+            decisions.source_fingerprint,
+            decisions.preselection_score,
+            decisions.preselection_threshold,
+            decisions.passed,
+            decisions.stage,
+            decisions.decision_origin,
+            decisions.preselector_version,
+            decisions.reason,
+            decisions.created_at,
+            articles.source AS article_source,
+            articles.source_article_id AS article_source_article_id,
+            articles.title AS article_title
+        FROM preselection_decisions AS decisions
+        LEFT JOIN articles ON articles.id = decisions.article_id
+        ORDER BY decisions.run_id ASC, decisions.id ASC
+        """
+    ).fetchall()
+    return [
+        {
+            "id": int(row["id"]),
+            "run_id": int(row["run_id"]),
+            "article_id": int(row["article_id"]),
+            "profile_id": int(row["profile_id"]),
+            "profile_fingerprint": str(row["profile_fingerprint"]),
+            "source_name": str(row["source_name"]),
+            "source_fingerprint": (
+                str(row["source_fingerprint"])
+                if row["source_fingerprint"] is not None
+                else None
+            ),
+            "preselection_score": (
+                float(row["preselection_score"])
+                if row["preselection_score"] is not None
+                else None
+            ),
+            "preselection_threshold": (
+                float(row["preselection_threshold"])
+                if row["preselection_threshold"] is not None
+                else None
+            ),
+            "passed": bool(row["passed"]),
+            "stage": str(row["stage"]),
+            "decision_origin": str(row["decision_origin"]),
+            "preselector_version": str(row["preselector_version"]),
+            "reason": str(row["reason"]) if row["reason"] is not None else None,
+            "created_at": str(row["created_at"]),
+            "article": {
+                "source": str(row["article_source"]) if row["article_source"] else None,
+                "source_article_id": (
+                    str(row["article_source_article_id"])
+                    if row["article_source_article_id"]
+                    else None
+                ),
+                "title": str(row["article_title"]) if row["article_title"] else None,
+            },
+        }
+        for row in rows
+    ]
 
 
 def _source_date_coverage(conn: sqlite3.Connection) -> list[dict[str, object]]:
@@ -870,6 +965,129 @@ def _collection_intelligence_snapshots(conn: sqlite3.Connection) -> list[dict[st
             ),
             "collection": {
                 "name": str(row["collection_name"]) if row["collection_name"] is not None else None,
+            },
+        }
+        for row in rows
+    ]
+
+
+def _quantitative_relevance_calibrations(
+    conn: sqlite3.Connection,
+) -> list[dict[str, object]]:
+    if not _table_exists(conn, "quantitative_relevance_calibrations"):
+        return []
+    rows = conn.execute(
+        """
+        SELECT
+            calibrations.id,
+            calibrations.run_id,
+            calibrations.article_id,
+            calibrations.profile_id,
+            calibrations.profile_fingerprint,
+            calibrations.model_relevance_score,
+            calibrations.state,
+            calibrations.user_relevance_score,
+            calibrations.created_at,
+            calibrations.completed_at,
+            articles.source AS article_source,
+            articles.source_article_id AS article_source_article_id,
+            articles.title AS article_title
+        FROM quantitative_relevance_calibrations AS calibrations
+        LEFT JOIN articles ON articles.id = calibrations.article_id
+        ORDER BY calibrations.created_at DESC, calibrations.id DESC
+        """
+    ).fetchall()
+    return [
+        {
+            "id": int(row["id"]),
+            "run_id": int(row["run_id"]),
+            "article_id": int(row["article_id"]) if row["article_id"] is not None else None,
+            "profile_id": int(row["profile_id"]),
+            "profile_fingerprint": str(row["profile_fingerprint"]),
+            "model_relevance_score": (
+                float(row["model_relevance_score"])
+                if row["model_relevance_score"] is not None
+                else None
+            ),
+            "state": str(row["state"]),
+            "user_relevance_score": (
+                float(row["user_relevance_score"])
+                if row["user_relevance_score"] is not None
+                else None
+            ),
+            "created_at": str(row["created_at"]),
+            "completed_at": (
+                str(row["completed_at"]) if row["completed_at"] is not None else None
+            ),
+            "article": {
+                "source": str(row["article_source"]) if row["article_source"] is not None else None,
+                "source_article_id": (
+                    str(row["article_source_article_id"])
+                    if row["article_source_article_id"] is not None
+                    else None
+                ),
+                "title": str(row["article_title"]) if row["article_title"] is not None else None,
+            },
+        }
+        for row in rows
+    ]
+
+
+def _suggested_interest_profiles(conn: sqlite3.Connection) -> list[dict[str, object]]:
+    if not _table_exists(conn, "suggested_interest_profiles"):
+        return []
+    rows = conn.execute(
+        """
+        SELECT
+            suggestions.id,
+            suggestions.profile_id,
+            suggestions.profile_fingerprint,
+            suggestions.suggested_name,
+            suggestions.suggested_description,
+            suggestions.evidence_article_ids_json,
+            suggestions.explanation,
+            suggestions.suggestion_key,
+            suggestions.provenance_json,
+            suggestions.created_at,
+            suggestions.dismissed_at,
+            suggestions.accepted_profile_id,
+            profiles.name AS profile_name,
+            accepted.name AS accepted_profile_name
+        FROM suggested_interest_profiles AS suggestions
+        LEFT JOIN interest_profiles AS profiles ON profiles.id = suggestions.profile_id
+        LEFT JOIN interest_profiles AS accepted ON accepted.id = suggestions.accepted_profile_id
+        ORDER BY suggestions.profile_id, suggestions.created_at DESC, suggestions.id DESC
+        """
+    ).fetchall()
+    return [
+        {
+            "id": int(row["id"]),
+            "profile_id": int(row["profile_id"]),
+            "profile_fingerprint": str(row["profile_fingerprint"]),
+            "suggested_name": str(row["suggested_name"]),
+            "suggested_description": str(row["suggested_description"]),
+            "evidence_article_ids": _json_list(row["evidence_article_ids_json"]),
+            "explanation": str(row["explanation"]),
+            "suggestion_key": str(row["suggestion_key"]),
+            "provenance": json.loads(str(row["provenance_json"])),
+            "created_at": str(row["created_at"]),
+            "dismissed_at": (
+                str(row["dismissed_at"]) if row["dismissed_at"] is not None else None
+            ),
+            "accepted_profile_id": (
+                int(row["accepted_profile_id"])
+                if row["accepted_profile_id"] is not None
+                else None
+            ),
+            "profile": {
+                "name": str(row["profile_name"]) if row["profile_name"] is not None else None,
+            },
+            "accepted_profile": {
+                "name": (
+                    str(row["accepted_profile_name"])
+                    if row["accepted_profile_name"] is not None
+                    else None
+                ),
             },
         }
         for row in rows

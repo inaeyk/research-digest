@@ -68,6 +68,19 @@ def build_run_snapshot(
         ],
         "retrieval_complete": digest.retrieval_complete,
         "retrieval_safety_limit": digest.retrieval_safety_limit,
+        "preselection_decisions": [
+            {
+                "article_id": evidence.article_id,
+                "preselection_score": evidence.preselection_score,
+                "preselection_threshold": evidence.preselection_threshold,
+                "passed": evidence.passed,
+                "stage": evidence.stage,
+                "decision_origin": evidence.decision_origin,
+                "preselector_version": evidence.preselector_version,
+                "reason": evidence.reason,
+            }
+            for evidence in digest.preselection_evidence
+        ],
         "started_at": digest.started_at.isoformat(),
         "completed_at": digest.completed_at.isoformat() if digest.completed_at else None,
         "synthesis": {
