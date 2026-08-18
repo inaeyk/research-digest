@@ -1,104 +1,436 @@
-# Research Digest
+# Research Digest v0.3.0
 
-Research Digest is a local-first arXiv research digest for a single user. It stores
-profiles, source settings, analyses, feedback, history, configuration, and backups
-locally in SQLite and user config/data directories.
+Research Digest is a local-first, personalized research-monitoring
+application. It currently monitors arXiv, screens new papers against
+natural-language research interests, performs deeper analysis only on promising
+papers, creates cross-paper digests, and lets you build a persistent scientific
+Library.
 
-This release is intentionally small: arXiv sources, date-native title/abstract
-analysis, date-oriented history, UI-managed daily scheduling with catch-up,
-diagnostics, and backup/export.
+This release is arXiv-first and abstract-level. It is designed for a local,
+single-user research workflow, not as a universal information extractor or a
+cloud collaboration service. The default analyzer path can use the
+ChatGPT-authenticated Codex CLI, so an OpenAI API key is not required for the
+default Codex setup. OpenAI API mode remains available as an optional provider.
 
-## Installation
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
+```
+arXiv
+  |
+  v
+Date selection
+  |
+  v
+Abstract preselection
+  |
+  v
+Full relevance analysis
+  |
+  v
+Daily synthesis
+  |
+  v
+Feedback / calibration
+  |
+  v
+Library / tags / notes / connections
 ```
 
-Confirm the installed command:
+Papers rejected during abstract preselection do not receive expensive full
+analysis or generated commentary. They remain visible with source metadata,
+links, their original abstract on demand, and a Save to Library action.
+
+## Installation and First Run
+
+From a checkout of this repository:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e .
+```
+
+For development tools as well:
+
+```bash
+python -m pip install -e ".[dev]"
+```
+
+Check that the command is installed:
 
 ```bash
 research-digest --version
 research-digest status
 ```
 
-## First run
+### Codex Authentication
 
-Launch the UI through the supported release command:
+The default analyzer can use the Codex CLI and its saved ChatGPT
+authentication:
+
+```bash
+codex login status
+codex login
+```
+
+ChatGPT subscription access and OpenAI API billing are separate. Codex-backed
+operation uses the Codex CLI login state. OpenAI API mode is optional and uses
+`OPENAI_API_KEY`.
+
+Launch the app through the supported command:
 
 ```bash
 research-digest serve
 ```
 
-In the UI:
+The CLI prints the local browser URL. You normally do not need to run
+`streamlit run` directly.
 
-1. Create an interest profile on Interests.
-2. Check the arXiv settings on Sources.
-3. Check provider/data health on Settings.
-4. Run a date digest from Today.
-5. Enable daily automation from Settings, if wanted.
-6. Review previous source-date runs in History.
-
-Run a digest without the UI:
-
-```bash
-research-digest run
-research-digest run --json
-```
-
-## Manual date digests
-
-Today is date-oriented. Choose one of:
-
-- latest available arXiv source date
-- one explicit source date
-- a contiguous source-date range
-- selected non-contiguous source dates
-
-Research Digest retrieves all eligible arXiv articles for the selected source
-date or dates. The effort control is the qualified preselection/cache system:
-cached analyses are reused, and only cache-miss articles that pass deterministic
-abstract preselection are sent for new LLM analysis.
-
-For this arXiv release, source dates use America/Chicago. Papers are assigned
-by their arXiv publication timestamp converted to Chicago local time using IANA
-timezone rules, so CST/CDT transitions follow the timezone database. API
-`submittedDate` ranges are used only to retrieve a conservative superset of
-candidate records; final date membership is decided by the stored publication
-timestamp converted to America/Chicago. Research Digest does not attempt to
-match arXiv mailing or announcement-page cutoffs if those differ.
-
-## Analyzer providers
-
-The default analyzer is `codex`. It uses the Codex CLI and its saved
-ChatGPT-managed authentication. It does not use `OPENAI_API_KEY`.
-
-```bash
-export RESEARCH_DIGEST_ANALYZER=codex
-research-digest doctor
-research-digest run
-```
-
-Make sure the `codex` executable is installed and already signed in with
-ChatGPT before running live analysis.
-
-To use the OpenAI API provider instead:
+To use OpenAI API mode instead of Codex:
 
 ```bash
 export RESEARCH_DIGEST_ANALYZER=openai
 export OPENAI_API_KEY=...
-export OPENAI_MODEL=gpt-5-mini
 research-digest doctor
-research-digest run
 ```
 
-Never put API keys in the repository, SQLite database, or config file.
+Never store API keys in the repository, SQLite database, or checked-in config.
 
-## Data and config locations
+## UI Pages
+
+### Today
+
+Run a date-based digest, inspect the current results, give feedback, save
+papers to the Library, and view the date-status calendar.
+
+### Library
+
+Browse saved papers, search and filter them, manage tags, notes, collections,
+AI tag suggestions, and related-paper connections.
+
+### History
+
+Review immutable digest runs. History keeps manual and scheduled runs
+distinguishable and preserves what each run requested and produced.
+
+### Interests
+
+Create and edit natural-language Interest Profiles. Each profile has its own
+description and relevance threshold.
+
+### Sources
+
+Configure the arXiv source, including enabled categories. Category order is not
+meaningful for source identity; equivalent category sets are treated as the same
+source scope.
+
+### Settings
+
+Manage analysis controls, Library intelligence settings, the Scoring Guide,
+automation, backups, data paths, and diagnostics.
+
+## Running a Digest
+
+Today is date-native. Choose one of:
+
+- latest available arXiv source date
+- Single date
+- contiguous source-date range
+- Selected dates
+
+Research Digest retrieves all eligible papers from the selected arXiv source
+dates. The normal workflow does not ask you to choose an arbitrary maximum
+number of articles. Computational effort is controlled by preselection, caching,
+and the model-effort setting.
+
+For arXiv, Research Digest source dates use `America/Chicago`. A paper is
+assigned to a source date by converting its authoritative arXiv publication
+timestamp to Chicago local time using timezone database rules. Research Digest
+does not try to duplicate arXiv mailing or announcement-page cutoff semantics.
+
+History preserves individual runs. A later run of the same date can reuse valid
+cached analyses while keeping earlier run records intact.
+
+## Interests and Relevance
+
+An Interest Profile is a natural-language description of what you want the
+digest to surface. For example:
+
+```text
+I am interested in higher-dimensional gravity, compactification,
+black-hole dynamics, Kaluza-Klein spectra, and related numerical methods.
+Surface adjacent work when there is a concrete scientific connection.
+```
+
+Each profile has a relevance threshold. A fully analyzed paper is treated as
+relevant to that profile when:
+
+```text
+relevance_score >= relevance_threshold
+```
+
+Profiles can be created and edited independently. Suggested Interests may
+propose new profiles from repeated feedback, but Research Digest never silently
+rewrites an existing profile.
+
+## Model Effort and Preselection
+
+Model effort controls the tradeoff between speed/cost and false-negative risk.
+It is the user-facing version of the internal preselection setting.
+
+```text
+model_effort = 1 - preselection_fraction
+
+Stage-1 cutoff
+  = preselection_fraction x relevance_threshold
+```
+
+At 100% Model effort, almost everything proceeds to full analysis. At lower
+effort, Stage 1 filters more aggressively.
+
+Worked example: suppose your profile relevance threshold is `0.70` and Model
+effort is `40%`. A 40% effort setting corresponds to a preselection fraction of
+`0.60`, so the Stage-1 cutoff is:
+
+```text
+0.60 x 0.70 = 0.42
+```
+
+A new paper with an abstract-level preselection score of at least `0.42`
+proceeds to full analysis. A paper below `0.42` is screened out and shown with
+its original abstract available on demand.
+
+Higher Model effort sends more papers to full analysis and reduces the chance
+of missing indirectly relevant papers, but requires more Codex or model work.
+Lower Model effort makes runs faster and more selective, with more risk of
+missing borderline papers. A 40% effort setting does not mean exactly 40% of
+papers will be analyzed; it sets the Stage-1 cutoff.
+
+New v0.3.0 configurations default to 40% Model effort. Existing saved settings
+are preserved on upgrade.
+
+## Two-Stage Analysis
+
+### Stage 1: Abstract Preselection
+
+Stage 1 reads title, abstract, and basic metadata. It is batched and cheaper
+than full analysis. It answers a recall-oriented question:
+
+```text
+From the title and abstract alone, how plausible is it that deeper analysis
+would find this paper meaningfully relevant to the selected Interest Profile?
+```
+
+It returns an ordinal preselection score in `0..1`. The score is not a
+calibrated probability. Papers below the Stage-1 cutoff do not receive full
+analysis.
+
+### Stage 2: Full Relevance Analysis
+
+Stage 2 is the deeper abstract-level analysis for papers that pass Stage 1, or
+for papers with already valid cached analyses. It can produce:
+
+- relevance score
+- relevance reason
+- summary
+- why it matters
+- reading priority
+- matched topics
+
+Preselection score and final relevance score answer related but different
+questions. Both are ordinal model judgments, not calibrated probabilities.
+
+## Preselected-Out Papers
+
+A preselected-out paper intentionally receives no generated scientific
+commentary. Its card shows only source metadata, arXiv/PDF links, Show abstract,
+and Save to Library.
+
+If Stage 1 does not find enough evidence to justify deeper analysis, Research
+Digest avoids spending additional model effort. You can still inspect the
+original abstract yourself and save the paper if it matters to you.
+
+## Feedback
+
+Research Digest asks two separate questions:
+
+```text
+Does this paper match "<profile>"?
+Yes / No
+
+Are you personally interested in this paper?
+Yes / No
+```
+
+These are intentionally different.
+
+- Matches profile + interested: the profile fit was right and you care about
+  the paper.
+- Matches profile + not personally interested: the profile fit may still be
+  correct; you simply do not want this paper.
+- Outside profile + personally interested: the paper may reveal another
+  interest you want to follow.
+- Outside profile + not interested: useful negative profile-fit evidence.
+
+Profile-match feedback is what calibrates the profile/relevance system.
+Personal interest does not redefine profile correctness. Outside-profile but
+personally interesting examples can contribute to Suggested Interests.
+
+## Quantitative Calibration
+
+Research Digest may occasionally ask:
+
+```text
+How relevant is this paper to this profile, from 0 to 1?
+```
+
+The default is a 20% chance per completed digest run, with at most one
+calibration request per run. The candidate is selected from analyzed papers that
+finished below the profile relevance threshold. Preselected-out papers are not
+chosen.
+
+The model's relevance score is hidden before you answer to reduce anchoring.
+Your score and the model score are stored separately. v0.3.0 collects this
+calibration evidence but does not automatically rewrite the scoring function
+from a small number of samples.
+
+## Suggested Interests
+
+When you repeatedly mark papers as outside the current profile but personally
+interesting, Research Digest can suggest a new Interest Profile.
+
+Suggested Interests require multiple coherent examples. You review and edit the
+profile name and description before creating it. Nothing is created
+automatically, and dismissals are remembered.
+
+## Library
+
+The Library is explicit user curation. Saving a paper:
+
+- saves the stable Article identity
+- marks you as personally interested in the paper
+- does not automatically change whether the paper matches the current profile
+- does not duplicate the Article if it appears in multiple digest runs
+
+Unsaving removes the paper from the Library view. It does not delete the
+Article, History, analyses, feedback, or notes from the database, and it does
+not automatically mean "not interested."
+
+Library features include:
+
+- AI-generated tags
+- user tags
+- visible tag provenance
+- removal and suppression of unwanted AI tags
+- personal notes
+- collections/projects
+- search and filtering
+- related-paper and scientific connection suggestions
+- Show abstract
+
+## Library Connections
+
+Research Digest can identify possible relationships between a new or saved
+paper and papers in your Library. These are model-generated scientific
+suggestions, not facts.
+
+Connection confidence means confidence in the stated paper-to-paper
+relationship based on the bounded evidence inspected. It does not mean profile
+relevance, and it is not a statistical confidence interval or calibrated
+probability.
+
+Settings includes:
+
+```text
+Automatic Library connections: ON / OFF
+Automatic Library relevance threshold: 0.90 by default
+```
+
+The `0.90` threshold applies to the new paper's final profile relevance score.
+It decides whether Research Digest is allowed to spend extra model effort
+automatically comparing that paper against the Library.
+
+If automatic connections are off, digest runs perform no automatic Library
+connection model work. Manual Find Library connections remains available.
+
+## Scoring Guide
+
+Open Settings -> Scoring Guide for the current values and exact explanations of
+the app's quantitative controls. It covers:
+
+- relevance score
+- relevance threshold
+- preselection score
+- Model effort
+- Stage-1 cutoff
+- automatic Library threshold
+- Library connection confidence
+- human calibration score
+
+The important rule is that these are ordinal heuristic model scores unless the
+app explicitly says otherwise. They are not calibrated probabilities.
+
+## Scheduling and Automation
+
+Daily automation is managed from Settings -> Automation. A normal user should
+not need to run scheduler commands after launching the app.
+
+Automation controls include:
+
+- Automatic daily digest
+- daily time
+- Catch up missed source dates
+- Catch up from
+- Run now
+- schedule state, next run, and previous run
+- coverage calendar
+
+Catch up from `DATE` means process every still-uncovered eligible source date
+from that date through the latest available source date. Successful manual runs
+also count as covered when they satisfy the same retrieval and digest-success
+rules. Failed, partial, or interrupted dates remain eligible for retry.
+
+The first-class scheduler backend is Windows Task Scheduler from WSL2. Schedule
+times are Windows local time and follow Windows daylight-saving rules.
+
+Settings can inspect, install, update, and disable the schedule. Run now is an
+explicit action; simply opening Settings does not process pending dates.
+
+## History and Date Coverage
+
+History stores immutable run records. Manual, scheduled, and Run now executions
+are distinguishable. Completed, failed, partial, and empty dates remain
+inspectable.
+
+History by itself is not long-term semantic memory. The Library is the
+persistent workspace for saved papers, notes, tags, collections, and scientific
+connections.
+
+Date coverage is scoped to the active profile and source semantics. Reordering
+the same arXiv category set, for example `hep-th` plus `gr-qc` versus `gr-qc`
+plus `hep-th`, does not create a new source scope. Actually changing the
+category set does.
+
+## Long-Running Digests
+
+Multi-date digests can take several minutes when many papers require new
+analysis. Progress reporting uses real pipeline stages rather than invented
+percentages, including retrieval, preselection, full analysis, Library context,
+and synthesis.
+
+Repeated runs can be faster because valid analyses and Library connection
+results are reused where their semantic cache identity still applies.
+
+## Data, Backup, and Upgrades
 
 Research Digest stores persistent user data outside the source checkout by
-default. Inspect the active paths with:
+default. On Linux and WSL this is normally:
+
+```text
+~/.local/share/research-digest/
+~/.config/research-digest/
+```
+
+On macOS and Windows, Research Digest uses the standard per-user application
+data/config locations for those platforms. Inspect the active paths with:
 
 ```bash
 research-digest status
@@ -113,151 +445,120 @@ export RESEARCH_DIGEST_DATA_DIR=/absolute/path/to/data-dir
 export RESEARCH_DIGEST_CONFIG_DIR=/absolute/path/to/config-dir
 ```
 
-Existing repo-local development databases can be adopted into the user data
-directory during startup when no user-data DB exists. Explicit
-`RESEARCH_DIGEST_DB` disables automatic adoption.
-
-## Daily automation
-
-Use Settings -> Automation for normal daily scheduling:
-
-- turn automatic daily digest on or off
-- set the daily time
-- see Windows-local-time / daylight-saving semantics
-- see installed state, next run, last scheduled run, and recent outcome
-- run automatic catch-up now
-- choose whether missed source dates should be caught up
-
-On WSL2, Research Digest installs a Windows Task Scheduler task that invokes the
-installed headless command. Streamlit does not need to be running.
-
-The default automatic behavior catches up missed arXiv source dates from the
-configured coverage anchor. A date is marked covered only after retrieval
-completed without truncation/source failure and the digest reached a usable
-terminal state. Failed or partial dates remain eligible for retry.
-
-Administrative CLI commands remain available for power users and debugging:
-
-```bash
-research-digest schedule install --time 07:30
-research-digest schedule status
-research-digest schedule remove
-```
-
-Schedule times are Windows local time and follow Windows daylight-saving rules.
-The scheduled command includes non-secret runtime settings such as the active
-SQLite path and, for Codex-backed schedules, the non-secret directory containing
-the resolved `codex` executable. It does not embed API keys, Codex
-authentication material, or copied auth files.
-
-If Codex was installed through NVM or another user-local runtime manager, run
-`research-digest schedule install ...` from an interactive shell where
-`command -v codex` works. Reinstalling or updating the schedule refreshes the
-recorded Codex runtime path after Node/Codex upgrades. `research-digest doctor`
-warns when an installed Codex-backed schedule does not include the current
-Codex executable directory.
-
-## Doctor
-
-Use doctor for bounded diagnostics:
-
-```bash
-research-digest doctor
-research-digest doctor --json
-research-digest doctor --network
-```
-
-Doctor checks Python/runtime support, data/config paths, SQLite/schema/config
-versions, provider setup, scheduler status, last run health, and optional arXiv
-network reachability. Output is sanitized and should not include secrets.
-
-## Backup and export
-
-Create a recoverable SQLite snapshot from Settings -> Data, or from the CLI:
+Create a SQLite backup from Settings -> Data or from the CLI:
 
 ```bash
 research-digest backup
-```
-
-Create a backup plus portable JSON export:
-
-```bash
 research-digest backup --export-json
-research-digest backup --json --export-json
 ```
 
-Backups use SQLite's backup API and validate the generated snapshot. Existing
-destination files are not overwritten. JSON export contains user-owned semantic
-data such as profiles, source settings, feedback, run summaries, and saved run
-snapshots; it excludes provider secrets and authentication material.
-
-To recover manually, stop running digest/UI processes, keep a copy of the
-current active database, then replace the active SQLite file reported by
-`research-digest status` with a validated backup.
-
-## Upgrade expectations
-
-Application code is replaceable. User data and configuration live outside the
-source checkout by default and are upgraded through explicit SQLite schema and
-JSON config version handling. Migration backups are created before
-schema-changing DB upgrades where required.
-
-From v0.1.0 to v0.2.0:
-
-- historical rolling-lookback runs remain historical runs; they are not
-  silently reinterpreted as exact source-date coverage
-- stored arXiv `lookback_hours` and `max_results` values are preserved for
-  compatibility, but normal manual runs use explicit date selection
-- automatic coverage starts conservatively on first v0.2.0 config creation or
-  upgrade so the scheduler does not surprise-backfill the full arXiv archive
-- Settings can manage schedule, backup, provider health, paths, and diagnostics
-  without opening a shell after the app is launched
-
-Before upgrading an already-current installed/user-data database, run:
+Code upgrades are separate from persistent user data. Database and config
+migrations are versioned, deterministic, and additive where possible. Before a
+manual upgrade or recovery, run:
 
 ```bash
 research-digest doctor
 research-digest backup --export-json
 ```
 
-For an older repo-local M2 development database, keep a separate copy of that
-SQLite file first. On first startup without an existing user-data DB, Research
-Digest adopts the copied legacy DB into the user data directory and creates its
-own pre-migration backup before applying schema changes. After that migration,
-use `research-digest backup --export-json` against the current active DB.
+## CLI Quick Reference
 
-After upgrading, run:
+The UI is the normal workflow after launch. The CLI remains useful for power
+users, automation, and recovery.
 
 ```bash
+research-digest --version
+research-digest serve [--port 8501] [--host localhost]
+research-digest run [--json]
+research-digest status [--json]
+research-digest doctor [--json] [--network]
+research-digest backup [--output PATH] [--export-json] [--json]
+research-digest schedule status [--json]
+research-digest schedule install --time HH:MM [--distro NAME] [--backend auto|windows] [--json]
+research-digest schedule remove [--json]
+research-digest recover-abandoned-run --run-id ID [--force-uninspectable-owner] [--json]
+```
+
+`recover-abandoned-run` is for an interrupted or abandoned running digest. It
+marks the stale run terminal through application logic and preserves History; it
+is not part of normal daily use.
+
+## Troubleshooting
+
+Start with:
+
+```bash
+research-digest doctor
 research-digest status
-research-digest doctor
 ```
 
-## Known release limitations
+If Codex analysis fails, check:
 
-- arXiv is the only source pool in this release.
+```bash
+codex login status
+codex login
+```
+
+If automation looks wrong, inspect Settings -> Automation. A schedule can be
+enabled, disabled, or unavailable/unknown if the scheduler cannot be inspected.
+A nonzero previous task result describes the last execution outcome; it does not
+by itself mean the schedule is off.
+
+If a digest was interrupted by shutdown or a terminated scheduler process,
+`research-digest status` and `doctor` can identify the stale run. Use
+`recover-abandoned-run` only when you have confirmed the owner process is gone,
+and make a backup before manual recovery work.
+
+## Privacy and Security
+
+Research Digest is local-first. The primary store is a local SQLite database.
+Config and data live in per-user directories by default.
+
+Scheduled tasks do not embed API keys or Codex authentication material. Codex
+ChatGPT authentication remains managed by the Codex CLI. `.env` files,
+databases, credentials, caches, build outputs, and runtime state should not be
+committed to Git.
+
+Article titles, abstracts, notes, and other external text are treated as
+untrusted input in model prompts. Do not store secrets in article notes or
+profile text.
+
+## Known Limitations
+
+- arXiv is the only source pool and source family.
 - Analysis is abstract-level; full-paper/PDF deep reading is deferred.
-- Source dates use America/Chicago publication-date conversion, not arXiv
-  mailing or announcement-page cutoffs.
-- Lightweight History is not long-term semantic memory or trend analysis.
-- The supported schedule backend is WSL2 through Windows Task Scheduler.
-- This is a local single-user app; it does not provide authentication,
-  multi-user access, cloud deployment, or a web service.
+- Model scores are ordinal judgments, not calibrated probabilities.
+- Library connections are model inferences and should be reviewed critically.
+- Windows/WSL is the most thoroughly qualified scheduling environment.
+- Research Digest is local and single-user; it has no multi-user or cloud
+  collaboration layer.
 
-Post-release roadmap:
+## Roadmap
 
-- M3: additional websites/source adapters.
-- M5: full-paper/deep reading.
-- M6: persistent research memory.
+Possible future work includes:
 
-## Development checks
+- additional source adapters and websites
+- optional full-paper analysis
+- further empirical relevance calibration
+
+No timeline is promised.
+
+## Developer Notes
+
+The main implementation lives under `src/research_digest`. Streamlit UI pages
+are under `src/research_digest/ui`. Retrieval logic lives behind source
+adapters, and model access lives behind provider interfaces so deterministic
+tests can avoid live arXiv or OpenAI access.
+
+Common checks:
 
 ```bash
 pytest
 ruff check .
 mypy --strict src tests
-python -m compileall -q src tests
+python -m compileall src tests
+git diff --check
 ```
 
-Tests use fixtures, mocks, and fake analyzers so deterministic checks do not
-require live arXiv, Codex, or OpenAI access.
+Campaign qualification details, migration evidence, and audit reports are kept
+under `docs/campaigns/`.
