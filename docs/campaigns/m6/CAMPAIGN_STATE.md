@@ -1,7 +1,7 @@
 # M6 Campaign State
 
-- campaign_state: M6_INTEGRATED_FEATURE_CANDIDATE_QUALIFIED_READY_FOR_LOCAL_FREEZE
-- current_substage: Complete integrated M6/v0.3 feature candidate human-smoked and deterministically qualified; local freeze in progress
+- campaign_state: M6_RELEASE_VERSION_COMMIT_IN_PROGRESS_AWAITING_FINAL_CHECKS
+- current_substage: Complete integrated M6/v0.3 feature candidate frozen locally; v0.3.0 release-version commit in progress
 - current_branch: feature/m6-scientific-library-memory
 - baseline_branch: master
 - baseline_commit: fe92e77a3fce4037c0bf4ecbb0a7ce964763eb8b
@@ -15,8 +15,8 @@
 - local_origin_master_state: origin/master resolves to fe92e77a3fce4037c0bf4ecbb0a7ce964763eb8b
 - online_remote_verification: `git ls-remote --heads --tags origin` failed with DNS resolution failure for `github.com` before and after network escalation.
 - baseline_worktree_state: clean tracked worktree before M6 branch creation.
-- package_version: 0.2.0
-- runtime_version: 0.2.0
+- package_version: 0.3.0
+- runtime_version: 0.3.0
 - baseline_schema_version: 8
 - candidate_schema_version: 16
 - config_version: 5
@@ -29,7 +29,7 @@
 - qualified_local_commit: final local commit tagged `m6f-qualified` after this document update.
 - qualified_local_tag: annotated local tag `m6f-qualified` is the M6 release-candidate qualification tag. Prior local tags: `m6e-qualified` targets `fad6b8425bc14a956fb22f26f68cc485e46f71b9`; `m6d-qualified` targets `82c323d56c9ed9fbbdb8c36f602d03bd9d3d34b0`; `m6c-qualified` targets `7208191b3aa66c21863ec63d21e7d1f60ebe82b0`; `m6b-qualified` targets `104780a0ba9c98cd9663ef8d1088cb9472d53e09`; `m6a-qualified` targets `17e047c325bb61008cf39b9a135bea02bb63a968`.
 - deferred_minor_optional_findings: M6-B repair Auditor noted regeneration replacement is not a single DB transaction after provider success; current supported paths are covered, but a future atomic replace helper would be safer if the persistence path broadens. M6-C Auditor noted tag filter options may include tags retained only for AI suppression/tombstone history, which can yield no-result filter options. M6-E repair Auditor noted context candidate eligibility can still spend prompt budget on a candidate whose only existing suggestion is collection-scoped and will later be skipped during assignment; no incorrect mutation occurs. M6 live Codex smokes require a runtime where Codex can initialize and authenticate; sandbox attempts reached the CLI but could not complete model work.
-- next_permitted_action: create the authorized local qualified feature commit, local M6 qualification tag, and separate local v0.3.0 release-version commit; do not push, publish, create a public release, or create a public v0.3.0 tag without human authority.
+- next_permitted_action: finish the authorized local v0.3.0 release-version commit and re-run release checks; do not push, publish, create a public release, or create a public v0.3.0 tag without human authority.
 - human_stop_reason: final human release decision required after local freeze/version commit.
 
 ## Recovered v0.2 Baseline
@@ -1859,3 +1859,40 @@ Freeze actions authorized by human:
 - Create a separate minimal local v0.3.0 release-version commit.
 - Re-run release checks after the version bump.
 - Do not push, publish, create a public v0.3.0 tag, or create a public release.
+
+Local freeze record:
+
+- Qualified feature commit: `3383ab360d5af0fb17263204863e7bfd5f284ac1`.
+- Local qualification tag: `m6-v0.3-qualified`, targeting the qualified
+  feature commit.
+
+## v0.3.0 Release-Version Commit
+
+Scope:
+
+- Bump package metadata in `pyproject.toml` from `0.2.0` to `0.3.0`.
+- Bump runtime `research_digest.__version__` from `0.2.0` to `0.3.0`.
+- Update version-sensitive package/CLI tests.
+- Update M6 durable release documentation.
+
+Release boundary:
+
+- This is still local-only release-candidate preparation.
+- No public `v0.3.0` tag, push, package publication, or public release is
+  authorized before the final human release decision.
+
+Post-version-bump release checks:
+
+- `pytest -q`: PASS, 393 passed and 9 subtests passed.
+- `ruff check .`: PASS.
+- `mypy --strict src tests`: PASS, 100 source files checked.
+- `python -m compileall src tests`: PASS.
+- `git diff --check`: PASS.
+- Wheel build: PASS, generated `research_digest-0.3.0-py3-none-any.whl`.
+- Isolated no-deps wheel install: PASS.
+- Installed CLI `research-digest --version`: PASS, reported
+  `research-digest 0.3.0`.
+- Installed CLI `status --json`: PASS with isolated data/config, initialized
+  SQLite schema `16` and JSON config `5`; Windows scheduler status was
+  unavailable in the Linux/WSL sandbox with a sanitized WSL socket message.
+- Streamlit AppTest smoke: PASS, 17 passed.

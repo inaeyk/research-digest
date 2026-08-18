@@ -587,33 +587,29 @@ Suggested release commands after human approval:
 
 ```bash
 git status --short --branch
-# After choosing the public version, update pyproject.toml and
-# src/research_digest/__init__.py from 0.2.0 to the approved version.
 pytest
 ruff check .
 mypy --strict src tests
 python -m compileall src tests
 git diff --check
-git commit -am "Prepare Research Digest <APPROVED_VERSION> release"
-git tag -a v<APPROVED_VERSION> -m "Research Digest v<APPROVED_VERSION>" HEAD
+git tag -a v0.3.0 -m "Research Digest v0.3.0" HEAD
 git push origin feature/m6-scientific-library-memory
-git push origin v<APPROVED_VERSION>
+git push origin v0.3.0
 python -m pip wheel . --no-deps --wheel-dir dist
 ```
 
-Do not run these commands until the human release decision is made. The current
-M6 qualification commit intentionally still reports package/runtime version
-`0.2.0`; the public release tag should target the later human-approved
-version-bump release commit.
+Do not run these commands until the human release decision is made. The local
+M6 feature qualification tag remains `m6-v0.3-qualified`; the public
+`v0.3.0` tag should target the separate release-version commit that reports
+package/runtime version `0.3.0`.
 
 Final state:
 
 - Campaign state is
   `M6_RELEASE_CANDIDATE_COMPLETE_AWAITING_HUMAN`.
-- Suggested local qualification tag: `m6f-qualified`.
-- Suggested public release tag target, if approved later: a version-bump
-  release commit derived from `m6f-qualified`, not the unbumped qualification
-  commit unless the human explicitly chooses to keep version `0.2.0`.
+- Suggested local qualification tag: `m6-v0.3-qualified`.
+- Suggested public release tag target, if approved later: the v0.3.0
+  release-version commit derived from `m6-v0.3-qualified`.
 - No push, package publication, public version tag creation, or public release
   has been performed by this campaign.
 
@@ -1498,3 +1494,59 @@ Final feature-candidate deterministic/package gate:
 
 The feature freeze remains local only. No push, public `v0.3.0` tag, package
 publication, or public release was created.
+
+## v0.3.0 Release-Version Candidate
+
+Local feature freeze:
+
+- Qualified feature commit: `3383ab360d5af0fb17263204863e7bfd5f284ac1`.
+- Local qualification tag: `m6-v0.3-qualified`.
+
+Release-version commit scope:
+
+- `pyproject.toml` package version: `0.3.0`.
+- `research_digest.__version__`: `0.3.0`.
+- Version-sensitive package/CLI tests updated to `0.3.0`.
+- No schema or config migration change; SQLite schema remains `16`, JSON
+  config remains `5`.
+
+Post-version-bump release checks:
+
+- `pytest -q`: PASS, 393 passed and 9 subtests passed.
+- `ruff check .`: PASS.
+- `mypy --strict src tests`: PASS, 100 source files checked.
+- `python -m compileall src tests`: PASS.
+- `git diff --check`: PASS.
+- Wheel build: PASS, `research_digest-0.3.0-py3-none-any.whl`.
+- Isolated no-deps wheel install: PASS.
+- Installed CLI `research-digest --version`: PASS, reported
+  `research-digest 0.3.0`.
+- Installed CLI `status --json`: PASS with isolated data/config, schema `16`
+  and config `5`.
+- Streamlit AppTest smoke: PASS, 17 passed.
+
+Major v0.3.0 features:
+
+- Scientific Library for explicit saved articles.
+- User and AI tags with provenance and AI-tag suppression.
+- Notes and collections/projects.
+- Local Library search and persisted paper-connection suggestions.
+- Longitudinal Library context for new digest papers.
+- Two-axis feedback separating profile match from personal interest.
+- Suggested Interests from coherent outside-profile-but-interesting evidence.
+- Quantitative human relevance calibration prompts.
+- Model-based Stage-1 preselection with durable per-run preselection evidence.
+- Model effort control, automatic Library-connection toggle/threshold, Scoring
+  Guide, and improved long-run progress reporting.
+- Date-native v0.2 digest, scheduler/catch-up, coverage calendar, History, and
+  abstract-toggle behavior are preserved.
+
+Known limitations:
+
+- arXiv-only source family.
+- Abstract-level analysis only; no full-paper/PDF deep reading.
+- No vector database or semantic embedding infrastructure.
+- Library intelligence is local-first and bounded, but model-generated
+  connections remain suggestions rather than scientific facts.
+- Public release, package publication, and public `v0.3.0` tag remain blocked
+  pending final human authority.
