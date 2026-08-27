@@ -252,6 +252,7 @@ class LauncherCLITests(unittest.TestCase):
     def test_install_launcher_discovers_distro_and_is_idempotent_at_shared_boundary(self) -> None:
         controller = FakeWindowsLauncherController()
         with (
+            mock.patch("research_digest.launcher.sys.platform", "linux"),
             mock.patch(
                 "research_digest.windows_launcher.resolve_windows_wsl_executable",
                 return_value="C:\\Windows\\System32\\wsl.exe",
@@ -284,12 +285,13 @@ class LauncherCLITests(unittest.TestCase):
         controller = FakeWindowsLauncherController()
         stdout = io.StringIO()
 
-        exit_code = run_cli(
-            argv=["uninstall-launcher", "--json"],
-            stdout=stdout,
-            stderr=io.StringIO(),
-            windows_launcher_backend=controller,
-        )
+        with mock.patch("research_digest.launcher.sys.platform", "linux"):
+            exit_code = run_cli(
+                argv=["uninstall-launcher", "--json"],
+                stdout=stdout,
+                stderr=io.StringIO(),
+                windows_launcher_backend=controller,
+            )
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(controller.uninstall_calls, 1)

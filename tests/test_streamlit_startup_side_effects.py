@@ -156,7 +156,7 @@ def _today_click_app(
 
     st.cache_resource.clear()
     from research_digest.background import BackgroundLaunch
-    from research_digest.run_locks import linux_process_start_ticks
+    from research_digest.platform_runtime import process_start_identity
 
     today = import_module("research_digest.ui.pages.today")
     today_module = vars(today)
@@ -178,7 +178,7 @@ def _today_click_app(
         return BackgroundLaunch(
             pid=os.getpid(),
             mode="manual",
-            process_start_ticks=linux_process_start_ticks(os.getpid()),
+            process_start_ticks=process_start_identity(os.getpid()),
         )
 
     today_module["get_library_context_generator"] = fake_get_context

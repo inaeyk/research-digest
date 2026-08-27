@@ -1,0 +1,35 @@
+name: macOS
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  macos-python-311:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install package and development tools
+        run: python -m pip install -e ".[dev]"
+      - name: Deterministic suite
+        run: python -m pytest -q
+      - name: Static qualification
+        run: |
+          ruff check .
+          mypy --strict src tests
+          python -m compileall src tests
+      - name: Package and CLI smoke
+        run: |
+          python -m pip wheel --no-deps --wheel-dir dist .
+          research-digest --version
+          research-digest --help
+          research-digest launch --help
+          research-digest install-launcher --help
+          research-digest schedule --help

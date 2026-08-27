@@ -175,6 +175,25 @@ class SchedulerTests(unittest.TestCase):
         self.assertEqual(request.environment["RESEARCH_DIGEST_ANALYZER"], "openai")
         self.assertNotIn("PATH", request.environment)
 
+    def test_openai_schedule_captures_optional_codex_for_library_work(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "research_digest.scheduler.shutil.which",
+            side_effect=lambda name: "/home/me/npm/bin/codex"
+            if name == "codex"
+            else None,
+        ):
+            request = build_schedule_request(
+                task_name="Research Digest Test",
+                time_of_day="07:30",
+                config=openai_config(Path("/tmp/runtime.sqlite3")),
+                wsl_distro="Ubuntu",
+                wsl_executable="C:\\Windows\\System32\\wsl.exe",
+                command_executable="/tmp/venv/bin/research-digest",
+                working_directory=Path(tmp),
+            )
+
+        self.assertIn("/home/me/npm/bin", request.environment["PATH"].split(":"))
+
     def test_windows_install_uses_register_scheduled_task_force(self) -> None:
         runner = FakeRunner()
         backend = WindowsTaskSchedulerBackend(powershell_path="powershell.exe", runner=runner)

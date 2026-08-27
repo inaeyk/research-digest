@@ -21,9 +21,15 @@ from uuid import uuid4
 
 from research_digest import __version__
 from research_digest.errors import sanitize_error
+from research_digest.platform_runtime import (
+    ExactProcessState,
+    PlatformRuntime,
+    darwin_streamlit_server_command_matches,
+    exact_process_state,
+    select_platform_runtime,
+)
 from research_digest.run_locks import (
     linux_boot_id,
-    linux_process_start_ticks,
     linux_process_state,
 )
 
@@ -104,6 +110,8 @@ class UIServerRegistration:
     log_path: str
     executable: str
     app_path: str
+    platform: str | None = None
+    process_group_id: int | None = None
 
     def to_mapping(self) -> dict[str, object]:
         return {
@@ -121,6 +129,8 @@ class UIServerRegistration:
             "log_path": self.log_path,
             "executable": self.executable,
             "app_path": self.app_path,
+            "platform": self.platform,
+            "process_group_id": self.process_group_id,
         }
 
     @classmethod
@@ -143,6 +153,8 @@ class UIServerRegistration:
         process_start_ticks = payload.get("process_start_ticks")
         port = payload.get("port")
         boot_id = payload.get("boot_id")
+        platform = payload.get("platform")
+        process_group_id = payload.get("process_group_id")
         if not isinstance(registration_version, int):
             raise ValueError("UI registration version is invalid")
         if not isinstance(pid, int) or pid <= 0:
@@ -153,6 +165,12 @@ class UIServerRegistration:
             raise ValueError("UI registration port is invalid")
         if boot_id is not None and not isinstance(boot_id, str):
             raise ValueError("UI registration boot identity is invalid")
+        if platform is not None and platform not in {"linux", "darwin"}:
+            raise ValueError("UI registration platform is invalid")
+        if process_group_id is not None and (
+            not isinstance(process_group_id, int) or process_group_id <= 0
+        ):
+            raise ValueError("UI registration process group is invalid")
         return cls(
             registration_version=registration_version,
             application=str(payload["application"]),
@@ -168,6 +186,8 @@ class UIServerRegistration:
             log_path=str(payload["log_path"]),
             executable=str(payload["executable"]),
             app_path=str(payload["app_path"]),
+            platform=platform,
+            process_group_id=process_group_id,
         )
 
 
@@ -185,6 +205,7 @@ class UIServerStatus:
     log_path: str | None = None
     application_version: str | None = None
     stale_registration_removed: bool = False
+    platform: str | None = None
 
     def to_mapping(self) -> dict[str, object]:
         return {
@@ -197,6 +218,7 @@ class UIServerStatus:
             "log_path": self.log_path,
             "application_version": self.application_version,
             "stale_registration_removed": self.stale_registration_removed,
+            "platform": self.platform,
         }
 
 
@@ -280,7 +302,8 @@ class UIServerManager:
         health_checker: Callable[[str, int, float], bool] | None = None,
         identity_checker: Callable[[UIServerRegistration], bool] | None = None,
         signal_process: Callable[[int, int], None] | None = None,
-        start_ticks_reader: Callable[[int], int | None] = linux_process_start_ticks,
+        start_ticks_reader: Callable[[int], int | None] | None = None,
+        platform_runtime: PlatformRuntime | None = None,
         monotonic: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
@@ -314,12 +337,15 @@ class UIServerManager:
         self.application_version = application_version
         self._spawner = spawner or _spawn_detached_streamlit
         self._foreground_spawner = foreground_spawner or _spawn_foreground_streamlit
-        self._browser_opener = browser_opener or open_windows_browser
+        self._platform_runtime = platform_runtime or select_platform_runtime()
+        self._browser_opener = browser_opener or self._platform_runtime.open_url
         self._port_available = port_available or _port_is_available
         self._health_checker = health_checker or _streamlit_is_healthy
+        self._uses_default_identity_checker = identity_checker is None
         self._identity_checker = identity_checker or self._default_identity_matches
         self._signal_process = signal_process or os.kill
-        self._start_ticks_reader = start_ticks_reader
+        self._uses_default_start_ticks_reader = start_ticks_reader is None
+        self._start_ticks_reader = start_ticks_reader or self._process_start_identity
         self._monotonic = monotonic
         self._sleep = sleep
 
@@ -334,7 +360,7 @@ class UIServerManager:
             except Exception as exc:
                 raise UIServerError(
                     "Research Digest is running at "
-                    f"{registration.url}, but the Windows browser could not be opened: "
+                    f"{registration.url}, but the default browser could not be opened: "
                     f"{sanitize_error(exc)}"
                 ) from exc
             browser_opened = True
@@ -362,6 +388,11 @@ class UIServerManager:
                             "The registered Research Digest UI is alive but unusable and "
                             f"could not be stopped safely; inspect {existing.log_path}."
                         )
+                elif self._registration_owner_uninspectable(existing):
+                    raise UIServerError(
+                        "The registered Research Digest UI process is alive but its exact "
+                        "identity cannot be inspected; no process was signalled or replaced."
+                    )
                 self._remove_registration_if_nonce(existing.nonce)
 
             registration, process = self._start_server_locked(self._foreground_spawner)
@@ -381,14 +412,21 @@ class UIServerManager:
                     running=False,
                     log_path=str(self.log_path),
                     stale_registration_removed=malformed,
+                    platform=self._platform_runtime.display_platform,
                 )
             if not self._identity_checker(registration):
+                if self._registration_owner_uninspectable(registration):
+                    raise UIServerError(
+                        "The registered Research Digest UI process is alive but its exact "
+                        "identity cannot be inspected; no process was signalled."
+                    )
                 self._remove_registration_if_nonce(registration.nonce)
                 return UIServerStatus(
                     state="stopped",
                     running=False,
                     log_path=str(self.log_path),
                     stale_registration_removed=True,
+                    platform=self._platform_runtime.display_platform,
                 )
             return self._status_for_registration(registration)
 
@@ -398,6 +436,11 @@ class UIServerManager:
             if registration is None:
                 return UIStopResult(stopped=False, stale_registration_removed=malformed)
             if not self._identity_checker(registration):
+                if self._registration_owner_uninspectable(registration):
+                    raise UIServerError(
+                        "The registered Research Digest UI process is alive but its exact "
+                        "identity cannot be inspected; no process was signalled."
+                    )
                 self._remove_registration_if_nonce(registration.nonce)
                 return UIStopResult(stopped=False, stale_registration_removed=True)
             if not self._terminate_owned_process(registration):
@@ -427,6 +470,11 @@ class UIServerManager:
                         "The registered Research Digest UI is alive but unusable and could "
                         f"not be stopped safely; inspect {existing.log_path}."
                     )
+            elif self._registration_owner_uninspectable(existing):
+                raise UIServerError(
+                    "The registered Research Digest UI process is alive but its exact "
+                    "identity cannot be inspected; no process was signalled or replaced."
+                )
             self._remove_registration_if_nonce(existing.nonce)
 
         registration, _ = self._start_server_locked(self._spawner)
@@ -449,13 +497,29 @@ class UIServerManager:
                 "Research Digest UI started without an inspectable process identity; "
                 f"inspect {self.log_path}."
             )
+        process_info = self._platform_runtime.process_info(process.pid)
+        process_group_id = (
+            process_info.process_group_id
+            if process_info is not None and process_info.start_identity == start_ticks
+            else None
+        )
+        if (
+            self._uses_default_start_ticks_reader
+            and self._platform_runtime.process_platform == "darwin"
+            and process_group_id is None
+        ):
+            _stop_just_spawned_process(process)
+            raise UIServerError(
+                "Research Digest UI started without an inspectable Darwin process group; "
+                f"inspect {self.log_path}."
+            )
         registration = UIServerRegistration(
             registration_version=UI_REGISTRATION_VERSION,
             application=UI_APPLICATION_ID,
             application_version=self.application_version,
             pid=process.pid,
             process_start_ticks=start_ticks,
-            boot_id=linux_boot_id(),
+            boot_id=self._platform_runtime.boot_identity(),
             host=self.public_host,
             port=port,
             url=f"http://{self.public_host}:{port}",
@@ -464,6 +528,8 @@ class UIServerManager:
             log_path=str(self.log_path),
             executable=self.executable,
             app_path=str(self.app_path),
+            platform=self._platform_runtime.process_platform,
+            process_group_id=process_group_id,
         )
         self._write_registration(registration)
         deadline = self._monotonic() + self.startup_timeout_seconds
@@ -475,17 +541,28 @@ class UIServerManager:
                     "Research Digest UI failed during startup "
                     f"(exit code {exit_code}); inspect {self.log_path}."
                 )
-            if self._identity_checker(registration) and self._health_checker(
-                self.bind_host,
-                port,
-                0.5,
-            ):
+            identity_matches = self._identity_checker(registration)
+            if identity_matches and self._health_checker(self.bind_host, port, 0.5):
                 return registration, process
             if self._monotonic() >= deadline:
+                exit_code = process.poll()
+                if exit_code is not None:
+                    self._remove_registration_if_nonce(nonce)
+                    raise UIServerError(
+                        "Research Digest UI failed during startup "
+                        f"(exit code {exit_code}); inspect {self.log_path}."
+                    )
                 _stop_just_spawned_process(process)
                 self._remove_registration_if_nonce(nonce)
+                if not identity_matches:
+                    raise UIServerError(
+                        "Research Digest UI stayed alive, but its exact registered process "
+                        "identity could not be validated during startup; "
+                        f"inspect {self.log_path}."
+                    )
                 raise UIServerError(
-                    "Research Digest UI did not become reachable within "
+                    "Research Digest UI process identity was validated, but its health "
+                    "endpoint did not become ready within "
                     f"{self.startup_timeout_seconds:g} seconds; inspect {self.log_path}."
                 )
             self._sleep(0.1)
@@ -508,6 +585,7 @@ class UIServerManager:
             started_at=registration.started_at,
             log_path=registration.log_path,
             application_version=registration.application_version,
+            platform=self._platform_runtime.display_platform,
         )
 
     def _wait_for_health(
@@ -528,7 +606,10 @@ class UIServerManager:
 
     def _terminate_owned_process(self, registration: UIServerRegistration) -> bool:
         if not self._identity_checker(registration):
-            return True
+            return (
+                self._registration_exact_process_state(registration)
+                == ExactProcessState.DEAD
+            )
         self._signal_process(registration.pid, signal.SIGTERM)
         if self._wait_for_exit(registration, self.stop_timeout_seconds):
             return True
@@ -542,11 +623,16 @@ class UIServerManager:
         timeout_seconds: float,
     ) -> bool:
         deadline = self._monotonic() + timeout_seconds
-        while self._identity_checker(registration):
+        while True:
+            if self._identity_checker(registration):
+                state = ExactProcessState.ALIVE
+            else:
+                state = self._registration_exact_process_state(registration)
+            if state == ExactProcessState.DEAD:
+                return True
             if self._monotonic() >= deadline:
                 return False
             self._sleep(0.05)
-        return True
 
     def _select_available_port(self) -> int:
         for port in range(self.preferred_port, self.preferred_port + self.port_count):
@@ -579,6 +665,55 @@ class UIServerManager:
             return False
         if registration.url != f"http://{registration.host}:{registration.port}":
             return False
+        if registration.platform is None:
+            return self._legacy_linux_identity_matches(registration)
+        if registration.platform != self._platform_runtime.process_platform:
+            return False
+        current_boot = self._platform_runtime.boot_identity()
+        if registration.boot_id is not None and current_boot != registration.boot_id:
+            return False
+        info = self._platform_runtime.process_info(registration.pid)
+        if info is None or info.start_identity != registration.process_start_ticks:
+            return False
+        if info.state == "Z":
+            return False
+        if (
+            registration.process_group_id is not None
+            and info.process_group_id != registration.process_group_id
+        ):
+            return False
+        if registration.platform == "linux" and (
+            self._platform_runtime.process_environment_value(
+                registration.pid,
+                UI_NONCE_ENV,
+            )
+            != registration.nonce
+        ):
+            return False
+        command = self._platform_runtime.process_command(registration.pid)
+        if command is None:
+            return False
+        if registration.platform == "darwin":
+            return darwin_streamlit_server_command_matches(
+                command,
+                app_path=registration.app_path,
+                bind_host=self.bind_host,
+                port=registration.port,
+            )
+        command_text = " ".join(command)
+        return (
+            "streamlit" in command_text
+            and "run" in command_text
+            and registration.executable in command_text
+            and registration.app_path in command_text
+            and f"--server.port={registration.port}" in command_text
+        )
+
+    def _legacy_linux_identity_matches(self, registration: UIServerRegistration) -> bool:
+        """Validate registration v1 files written before platform metadata existed."""
+
+        if self._platform_runtime.process_platform != "linux":
+            return False
         if registration.boot_id is not None and linux_boot_id() != registration.boot_id:
             return False
         if self._start_ticks_reader(registration.pid) != registration.process_start_ticks:
@@ -594,6 +729,68 @@ class UIServerManager:
             and "run" in command
             and registration.app_path in command
             and f"--server.port={registration.port}" in command
+        )
+
+    def _process_start_identity(self, pid: int) -> int | None:
+        info = self._platform_runtime.process_info(pid)
+        return None if info is None else info.start_identity
+
+    def _registration_owner_uninspectable(
+        self,
+        registration: UIServerRegistration,
+    ) -> bool:
+        if not self._uses_default_identity_checker:
+            return False
+        if registration.platform != self._platform_runtime.process_platform:
+            return False
+        if self._registration_exact_process_state(registration) == ExactProcessState.UNKNOWN:
+            return True
+        info = self._platform_runtime.process_info(registration.pid)
+        if (
+            info is None
+            or info.start_identity != registration.process_start_ticks
+            or info.state == "Z"
+        ):
+            return False
+        if registration.platform == "linux":
+            nonce = self._platform_runtime.process_environment_value(
+                registration.pid,
+                UI_NONCE_ENV,
+            )
+            if nonce is None:
+                return True
+        return self._platform_runtime.process_command(registration.pid) is None
+
+    def _registration_exact_process_state(
+        self,
+        registration: UIServerRegistration,
+    ) -> ExactProcessState:
+        if not self._uses_default_identity_checker:
+            return (
+                ExactProcessState.ALIVE
+                if self._identity_checker(registration)
+                else ExactProcessState.DEAD
+            )
+        if registration.platform is None:
+            # Legacy Linux registration inspection remains authoritative for
+            # compatibility; its injected/read-only tests predate tri-state data.
+            return (
+                ExactProcessState.ALIVE
+                if self._identity_checker(registration)
+                else ExactProcessState.DEAD
+            )
+        if registration.platform != self._platform_runtime.process_platform:
+            return ExactProcessState.DEAD
+        current_boot = self._platform_runtime.boot_identity()
+        if registration.boot_id is not None:
+            if current_boot is None:
+                return ExactProcessState.UNKNOWN
+            if current_boot != registration.boot_id:
+                return ExactProcessState.DEAD
+        return exact_process_state(
+            registration.pid,
+            registration.process_start_ticks,
+            runtime=self._platform_runtime,
         )
 
     @contextmanager

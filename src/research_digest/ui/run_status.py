@@ -13,10 +13,13 @@ from research_digest.cancellation import request_run_cancellation
 from research_digest.db import Database
 from research_digest.errors import sanitize_error
 from research_digest.models import DateSelection
+from research_digest.platform_runtime import (
+    ExactProcessState,
+    exact_process_state,
+    process_state,
+)
 from research_digest.run_locks import (
     RunOwnerState,
-    linux_process_start_ticks,
-    linux_process_state,
     parse_process_run_owner,
     process_run_owner_state,
 )
@@ -226,7 +229,7 @@ def _pending_launch() -> PendingDigestLaunch | None:
 
 def _pending_process_state(launch: PendingDigestLaunch) -> RunOwnerState:
     if launch.process_start_ticks is None:
-        if linux_process_state(launch.pid) == "Z":
+        if process_state(launch.pid) == "Z":
             return RunOwnerState.DEAD
         try:
             os.kill(launch.pid, 0)
@@ -235,11 +238,11 @@ def _pending_process_state(launch: PendingDigestLaunch) -> RunOwnerState:
         except (OSError, PermissionError):
             return RunOwnerState.UNKNOWN
         return RunOwnerState.UNKNOWN
-    current_ticks = linux_process_start_ticks(launch.pid)
-    if current_ticks is None or current_ticks != launch.process_start_ticks:
+    state = exact_process_state(launch.pid, launch.process_start_ticks)
+    if state == ExactProcessState.DEAD:
         return RunOwnerState.DEAD
-    if linux_process_state(launch.pid) == "Z":
-        return RunOwnerState.DEAD
+    if state == ExactProcessState.UNKNOWN:
+        return RunOwnerState.UNKNOWN
     return RunOwnerState.ALIVE
 
 

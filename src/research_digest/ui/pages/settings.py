@@ -430,7 +430,7 @@ def _render_automation(
                     icon=":material/help:",
                 )
                 st.caption(
-                    "Research Digest could not determine whether the Windows task is enabled, "
+                    "Research Digest could not determine whether the OS schedule is enabled, "
                     "so schedule install/remove controls are disabled until status inspection "
                     "succeeds."
                 )
@@ -456,7 +456,7 @@ def _render_automation(
                 value=config.automatic_coverage_start_date,
                 disabled=schedule_enabled is None,
             )
-            st.caption("Windows local time; follows Windows daylight-saving rules.")
+            st.caption(_schedule_timezone_caption(status))
             st.caption(
                 "Earlier successfully covered dates are not reprocessed. "
                 "Failed or incomplete dates remain pending. Moving this date earlier may "
@@ -550,6 +550,12 @@ def _render_schedule_status(status: AutomationStatus) -> None:
     st.caption(schedule.timezone)
     if schedule.message:
         st.caption(sanitize_error(schedule.message))
+
+
+def _schedule_timezone_caption(status: AutomationStatus) -> str:
+    if status.schedule is not None:
+        return status.schedule.timezone
+    return "The selected OS scheduler uses the computer's local time."
 
 
 def schedule_enabled_state(status: AutomationStatus) -> bool | None:

@@ -14,6 +14,7 @@ from unittest import mock
 
 from research_digest.db import APP_RUN_RUNNING, Database
 from research_digest.models import DateSelection
+from research_digest.platform_runtime import LinuxPlatformRuntime
 from research_digest.ui_server import (
     UI_APPLICATION_ID,
     UI_NONCE_ENV,
@@ -145,7 +146,10 @@ class UIServerManagerTests(unittest.TestCase):
         self.assertIn("--server.address=127.0.0.1", command)
         self.assertIn("--server.port=8501", command)
         self.assertIn("--server.headless=true", command)
-        self.assertEqual(self.runtime.logs, [self.root / "ui" / "ui-server.log"])
+        self.assertEqual(
+            self.runtime.logs,
+            [self.root.resolve() / "ui" / "ui-server.log"],
+        )
         self.assertTrue(self.runtime.environments[0][UI_NONCE_ENV])
 
     def test_streamlit_spawn_preserves_virtual_environment_python_symlink(self) -> None:
@@ -203,7 +207,7 @@ class UIServerManagerTests(unittest.TestCase):
 
         manager = self.manager(
             lock_timeout_seconds=1.0,
-            monotonic=iter((0.0, 2.0)).__next__,
+            monotonic=iter((0.0, 0.0, 2.0)).__next__,
         )
         manager.state_dir.mkdir(parents=True)
         with manager.lock_path.open("a+b") as held_lock:
@@ -253,6 +257,60 @@ class UIServerManagerTests(unittest.TestCase):
         manager = self.manager()
 
         with self.assertRaisesRegex(UIServerError, "exit code 7.*ui-server.log"):
+            manager.launch()
+
+        self.assertEqual(self.runtime.browser_urls, [])
+        self.assertFalse(manager.registration_path.exists())
+
+    def test_startup_identity_failure_has_identity_specific_diagnostic(self) -> None:
+        health = mock.Mock(return_value=True)
+        manager = self.manager(
+            identity_checker=lambda _registration: False,
+            health_checker=health,
+            startup_timeout_seconds=1.0,
+            monotonic=iter((0.0, 0.0, 2.0)).__next__,
+        )
+
+        with self.assertRaisesRegex(
+            UIServerError,
+            "exact registered process identity could not be validated",
+        ):
+            manager.launch()
+
+        health.assert_not_called()
+        self.assertEqual(self.runtime.browser_urls, [])
+        self.assertFalse(manager.registration_path.exists())
+
+    def test_process_exit_after_first_poll_precedes_timeout_diagnostic(self) -> None:
+        process = mock.Mock(pid=4400)
+        process.poll.side_effect = (None, 9)
+        manager = self.manager(
+            spawner=lambda _command, *, environment, log_path: process,
+            identity_checker=lambda _registration: False,
+            start_ticks_reader=lambda _pid: 44_000,
+            startup_timeout_seconds=1.0,
+            monotonic=iter((0.0, 0.0, 2.0)).__next__,
+        )
+
+        with self.assertRaisesRegex(UIServerError, "exit code 9"):
+            manager.launch()
+
+        process.terminate.assert_not_called()
+        process.kill.assert_not_called()
+        self.assertEqual(self.runtime.browser_urls, [])
+        self.assertFalse(manager.registration_path.exists())
+
+    def test_startup_health_failure_has_health_specific_diagnostic(self) -> None:
+        manager = self.manager(
+            health_checker=lambda _host, _port, _timeout: False,
+            startup_timeout_seconds=1.0,
+            monotonic=iter((0.0, 0.0, 2.0)).__next__,
+        )
+
+        with self.assertRaisesRegex(
+            UIServerError,
+            "identity was validated, but its health endpoint did not become ready",
+        ):
             manager.launch()
 
         self.assertEqual(self.runtime.browser_urls, [])
@@ -370,6 +428,7 @@ class UIServerManagerTests(unittest.TestCase):
             executable=executable,
             app_path=app_path,
             start_ticks_reader=lambda pid: 991 if pid == 77 else None,
+            platform_runtime=LinuxPlatformRuntime(),
         )
         registration = UIServerRegistration(
             registration_version=UI_REGISTRATION_VERSION,
@@ -411,6 +470,7 @@ class UIServerManagerTests(unittest.TestCase):
             executable=executable,
             app_path=app_path,
             start_ticks_reader=lambda pid: 992 if pid == 77 else None,
+            platform_runtime=LinuxPlatformRuntime(),
         )
         self.assertFalse(mismatched_manager._default_identity_matches(registration))
 
@@ -421,6 +481,7 @@ class UIServerManagerTests(unittest.TestCase):
             executable="/usr/bin/python3",
             app_path=app_path,
             start_ticks_reader=lambda pid: 991,
+            platform_runtime=LinuxPlatformRuntime(),
         )
         registration = UIServerRegistration(
             registration_version=UI_REGISTRATION_VERSION,

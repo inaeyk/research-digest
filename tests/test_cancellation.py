@@ -4,6 +4,8 @@ import inspect
 import json
 import multiprocessing
 import os
+import signal
+import socket
 import sqlite3
 import subprocess
 import sys
@@ -26,6 +28,7 @@ from research_digest.background import (
     start_manual_digest_worker,
 )
 from research_digest.cancellation import (
+    ProviderProcessOwnershipError,
     RunCancelled,
     bind_run_cancellation,
     cancellation_signal_scope,
@@ -43,6 +46,7 @@ from research_digest.coverage import (
 from research_digest.db import (
     APP_RUN_CANCELLED,
     APP_RUN_COMPLETED,
+    APP_RUN_RUNNING,
     CURRENT_SCHEMA_VERSION,
     Database,
 )
@@ -57,11 +61,13 @@ from research_digest.models import (
     profile_semantic_fingerprint,
 )
 from research_digest.pipeline import run_digest
+from research_digest.platform_runtime import ExactProcessState, process_start_identity
 from research_digest.preselection import (
     AbstractPreselectionDecision,
     AbstractPreselectionResult,
 )
 from research_digest.run_locks import (
+    ProcessRunOwner,
     RunOwnerState,
     current_process_run_owner,
     linux_process_start_ticks,
@@ -436,7 +442,7 @@ class CancellationTests(unittest.TestCase):
             )
         self.assertEqual(calls, 1)
 
-    @unittest.skipUnless(os.name == "posix" and Path("/proc").exists(), "Linux process test")
+    @unittest.skipUnless(os.name == "posix", "POSIX process-group test")
     def test_cancel_terminates_exact_provider_tree_but_not_unrelated_process(self) -> None:
         context = multiprocessing.get_context("fork")
         worker = context.Process(target=_provider_worker, args=(str(self.db_path),))
@@ -529,6 +535,49 @@ class CancellationTests(unittest.TestCase):
                 process.kill()
                 process.wait(timeout=3.0)
 
+    @unittest.skipUnless(os.name == "posix", "process ownership test")
+    def test_uninspectable_live_provider_fails_fast_and_is_stopped(self) -> None:
+        run_id = self.db.create_app_run(profile_id=self.profile_id, source_name="arxiv")
+        self.db.mark_app_run_running(run_id)
+        process = subprocess.Popen(  # noqa: S603
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        try:
+            with (
+                bind_run_cancellation(self.db, run_id),
+                mock.patch(
+                    "research_digest.cancellation.subprocess.Popen",
+                    return_value=process,
+                ),
+                mock.patch(
+                    "research_digest.cancellation._wait_for_spawned_process_identity",
+                    return_value=None,
+                ),
+                self.assertRaisesRegex(
+                    ProviderProcessOwnershipError,
+                    "exact process identity",
+                ),
+            ):
+                run_owned_subprocess(
+                    [sys.executable, "-c", "import time; time.sleep(30)"],
+                    input_text="",
+                    cwd=Path(self.tmp.name),
+                    env=os.environ,
+                    timeout_seconds=60.0,
+                )
+            process.wait(timeout=3.0)
+            self.assertIsNotNone(process.returncode)
+            self.assertEqual(self.db.list_active_provider_processes(run_id=run_id), [])
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=3.0)
+
     @unittest.skipUnless(os.name == "posix", "provider registration race test")
     def test_cancel_between_provider_spawn_and_registration_cannot_orphan_process(
         self,
@@ -616,6 +665,61 @@ class CancellationTests(unittest.TestCase):
         self.db.finish_cancelled_run(run_b)
         self.db.release_run_lock(owner=owner_b)
 
+    def test_uninspectable_owner_after_term_is_not_killed_or_force_released(self) -> None:
+        owner = ProcessRunOwner(
+            pid=987_654,
+            host=socket.gethostname(),
+            start_ticks=456,
+            nonce="cancel-unknown-race",
+            boot_id="test-boot",
+            platform="darwin",
+        ).to_owner_string()
+        self.db.acquire_run_lock(owner=owner, stale_after_seconds=60.0)
+        run_id = self.db.create_app_run(
+            profile_id=self.profile_id,
+            source_name="arxiv",
+        )
+        self.db.mark_app_run_running(run_id)
+
+        with (
+            mock.patch(
+                "research_digest.cancellation.process_run_owner_state",
+                return_value=RunOwnerState.ALIVE,
+            ),
+            mock.patch(
+                "research_digest.cancellation._wait_for_cancel_completion",
+                return_value=False,
+            ),
+            mock.patch(
+                "research_digest.cancellation._wait_for_retrieval_persistence",
+                return_value=True,
+            ),
+            mock.patch(
+                "research_digest.cancellation._wait_for_process_exit",
+                return_value=False,
+            ),
+            mock.patch(
+                "research_digest.cancellation.exact_process_state",
+                return_value=ExactProcessState.UNKNOWN,
+            ),
+            mock.patch(
+                "research_digest.cancellation._signal_exact_owner",
+                return_value=True,
+            ) as signal_owner,
+        ):
+            result = request_run_cancellation(self.db, run_id=run_id)
+
+        self.assertFalse(result.owner_stopped)
+        self.assertEqual(signal_owner.call_count, 2)
+        self.assertNotIn(signal.SIGKILL, [call.args[2] for call in signal_owner.call_args_list])
+        run = self.db.get_app_run(run_id)
+        assert run is not None
+        self.assertEqual(run["status"], APP_RUN_RUNNING)
+        self.assertIsNotNone(run["cancel_requested_at"])
+        lock = self.db.get_run_lock()
+        assert lock is not None
+        self.assertEqual(lock.owner, owner)
+
     def test_stale_recovery_preserves_an_accepted_cancellation(self) -> None:
         owner_a = "dead-worker"
         owner_b = "replacement-worker"
@@ -636,7 +740,7 @@ class CancellationTests(unittest.TestCase):
         self.assertEqual(run["error_message"], "Cancelled by user.")
         self.db.release_run_lock(owner=owner_b)
 
-    @unittest.skipUnless(os.name == "posix" and Path("/proc").exists(), "Linux process test")
+    @unittest.skipUnless(os.name == "posix", "POSIX process-group test")
     def test_stale_recovery_stops_registered_orphan_provider(self) -> None:
         provider = subprocess.Popen(  # noqa: S603
             [sys.executable, "-c", "import time; time.sleep(30)"],
@@ -656,7 +760,7 @@ class CancellationTests(unittest.TestCase):
                 call_kind="orphan-test",
                 pid=provider.pid,
                 process_group_id=os.getpgid(provider.pid),
-                process_start_ticks=linux_process_start_ticks(provider.pid),
+                process_start_ticks=process_start_identity(provider.pid),
             )
             with mock.patch(
                 "research_digest.cancellation.process_run_owner_state",

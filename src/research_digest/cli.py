@@ -30,6 +30,13 @@ from research_digest.config import AppConfig, load_config, resolve_data_dir
 from research_digest.db import Database, RunAlreadyActiveError, RunLockError
 from research_digest.doctor import DoctorReport, run_doctor, run_doctor_from_environment
 from research_digest.errors import sanitize_error
+from research_digest.launcher import (
+    LauncherResult,
+    MacLauncherController,
+    install_launcher,
+    uninstall_launcher,
+)
+from research_digest.macos_launcher import MACOS_LAUNCHER_ID, MacLauncherResult
 from research_digest.preselection import AbstractPreselector, UnavailableFailOpenPreselector
 from research_digest.run_locks import process_run_owner_state
 from research_digest.scheduler import (
@@ -57,9 +64,6 @@ from research_digest.ui_server import (
 from research_digest.windows_launcher import (
     WINDOWS_LAUNCHER_ID,
     WindowsLauncherController,
-    WindowsLauncherResult,
-    build_windows_launcher_request,
-    select_windows_launcher_backend,
 )
 
 DEFAULT_SERVE_PORT = 8501
@@ -87,6 +91,7 @@ def run_cli(
     process_launcher: ProcessLauncher | None = None,
     ui_server_manager: UIServerController | None = None,
     windows_launcher_backend: WindowsLauncherController | None = None,
+    macos_launcher_backend: MacLauncherController | None = None,
 ) -> int:
     try:
         args = _build_parser().parse_args(argv)
@@ -154,14 +159,16 @@ def run_cli(
             stdout=stdout,
             stderr=stderr,
             config=config,
-            backend=windows_launcher_backend,
+            windows_backend=windows_launcher_backend,
+            macos_backend=macos_launcher_backend,
         )
     if args.command == "uninstall-launcher":
         return _uninstall_launcher_command(
             args=args,
             stdout=stdout,
             stderr=stderr,
-            backend=windows_launcher_backend,
+            windows_backend=windows_launcher_backend,
+            macos_backend=macos_launcher_backend,
         )
     if args.command == "status":
         return _status_command(
@@ -234,7 +241,7 @@ def _build_parser() -> argparse.ArgumentParser:
     install_parser.add_argument(
         "--time",
         required=True,
-        help="Windows local time in HH:MM 24-hour format.",
+        help="Computer local time in HH:MM 24-hour format.",
     )
     install_parser.add_argument(
         "--distro",
@@ -271,7 +278,7 @@ def _build_parser() -> argparse.ArgumentParser:
     launch_parser.add_argument(
         "--no-browser",
         action="store_true",
-        help="Start or reuse the UI without opening the Windows browser.",
+        help="Start or reuse the UI without opening the default browser.",
     )
     launch_parser.add_argument(
         "--json",
@@ -280,7 +287,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     launch_parser.add_argument(
         "--launcher-id",
-        choices=(WINDOWS_LAUNCHER_ID,),
+        choices=(WINDOWS_LAUNCHER_ID, MACOS_LAUNCHER_ID),
         help=argparse.SUPPRESS,
     )
     for name, help_text in (
@@ -295,11 +302,11 @@ def _build_parser() -> argparse.ArgumentParser:
         )
     install_launcher_parser = subparsers.add_parser(
         "install-launcher",
-        help="Create or update the owned Windows Desktop shortcut.",
+        help="Create or update the owned Windows/macOS application launcher.",
     )
     install_launcher_parser.add_argument(
         "--distro",
-        help="WSL distribution name. Defaults to WSL_DISTRO_NAME.",
+        help="Windows/WSL only: distribution name. Defaults to WSL_DISTRO_NAME.",
     )
     install_launcher_parser.add_argument(
         "--json",
@@ -308,7 +315,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     uninstall_launcher_parser = subparsers.add_parser(
         "uninstall-launcher",
-        help="Remove only the Research Digest-owned Windows Desktop shortcut.",
+        help="Remove only the Research Digest-owned application launcher.",
     )
     uninstall_launcher_parser.add_argument(
         "--json",
@@ -399,12 +406,12 @@ def _add_schedule_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--task-name",
         default=DEFAULT_TASK_NAME,
-        help=f"Windows Task Scheduler task name. Defaults to {DEFAULT_TASK_NAME!r}.",
+        help=f"OS scheduler task name. Defaults to {DEFAULT_TASK_NAME!r}.",
     )
     parser.add_argument(
         "--backend",
         default="auto",
-        choices=("auto", "windows"),
+        choices=("auto", "windows", "launchd"),
         help="Scheduler backend. Defaults to auto.",
     )
     parser.add_argument(
@@ -664,12 +671,16 @@ def _install_launcher_command(
     stdout: TextIO,
     stderr: TextIO,
     config: AppConfig | None,
-    backend: WindowsLauncherController | None,
+    windows_backend: WindowsLauncherController | None,
+    macos_backend: MacLauncherController | None,
 ) -> int:
     try:
-        request = build_windows_launcher_request(config=config, distro=args.distro)
-        active_backend = backend or select_windows_launcher_backend()
-        result = active_backend.install(request)
+        result = install_launcher(
+            config=config,
+            distro=args.distro,
+            windows_backend=windows_backend,
+            macos_backend=macos_backend,
+        )
     except Exception as exc:
         return _write_launcher_failure(
             args=args,
@@ -678,7 +689,7 @@ def _install_launcher_command(
             operation="launcher installation",
             error=exc,
         )
-    _write_windows_launcher_result(stdout, result, json_output=bool(args.json))
+    _write_launcher_result(stdout, result, json_output=bool(args.json))
     return 0
 
 
@@ -687,11 +698,14 @@ def _uninstall_launcher_command(
     args: argparse.Namespace,
     stdout: TextIO,
     stderr: TextIO,
-    backend: WindowsLauncherController | None,
+    windows_backend: WindowsLauncherController | None,
+    macos_backend: MacLauncherController | None,
 ) -> int:
     try:
-        active_backend = backend or select_windows_launcher_backend()
-        result = active_backend.uninstall()
+        result = uninstall_launcher(
+            windows_backend=windows_backend,
+            macos_backend=macos_backend,
+        )
     except Exception as exc:
         return _write_launcher_failure(
             args=args,
@@ -700,7 +714,7 @@ def _uninstall_launcher_command(
             operation="launcher removal",
             error=exc,
         )
-    _write_windows_launcher_result(stdout, result, json_output=bool(args.json))
+    _write_launcher_result(stdout, result, json_output=bool(args.json))
     return 0
 
 
@@ -733,7 +747,7 @@ def _write_ui_launch_result(
     action = "reused" if result.reused else "started"
     stdout.write(f"Research Digest UI {action}: {result.status.url}\n")
     stdout.write(f"PID: {result.status.pid}; log: {result.status.log_path}\n")
-    stdout.write("Windows browser opened.\n" if result.browser_opened else "Browser not opened.\n")
+    stdout.write("Default browser opened.\n" if result.browser_opened else "Browser not opened.\n")
 
 
 def _write_ui_status(
@@ -769,9 +783,9 @@ def _write_ui_stop_result(
         stdout.write("Research Digest UI server is not running.\n")
 
 
-def _write_windows_launcher_result(
+def _write_launcher_result(
     stdout: TextIO,
-    result: WindowsLauncherResult,
+    result: LauncherResult,
     *,
     json_output: bool,
 ) -> None:
@@ -779,12 +793,13 @@ def _write_windows_launcher_result(
         json.dump({"status": "completed", **result.to_mapping()}, stdout)
         stdout.write("\n")
         return
+    platform_label = "macOS" if isinstance(result, MacLauncherResult) else "Windows"
     if result.operation == "installed_or_updated":
-        stdout.write(f"Research Digest Windows launcher installed: {result.path}\n")
+        stdout.write(f"Research Digest {platform_label} launcher installed: {result.path}\n")
     elif result.operation == "removed":
-        stdout.write(f"Research Digest Windows launcher removed: {result.path}\n")
+        stdout.write(f"Research Digest {platform_label} launcher removed: {result.path}\n")
     else:
-        stdout.write("Research Digest Windows launcher is not installed.\n")
+        stdout.write(f"Research Digest {platform_label} launcher is not installed.\n")
 
 
 def _write_launcher_failure(

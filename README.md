@@ -40,6 +40,13 @@ links, their original abstract on demand, and a Save to Library action.
 
 ## Installation and First Run
 
+Research Digest requires Python 3.11 or newer. Check the interpreter before
+creating a virtual environment:
+
+```bash
+python3 -c 'import sys; print(sys.version.split()[0]); raise SystemExit(0 if sys.version_info >= (3, 11) else "Research Digest requires Python 3.11+")'
+```
+
 From a checkout of this repository:
 
 ```bash
@@ -47,6 +54,25 @@ python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e .
 ```
+
+On macOS, the guarded bootstrap performs that version check before creating
+`.venv` and can discover a versioned `python3.11`–`python3.14` executable when
+the active `python3` is older:
+
+```bash
+./scripts/bootstrap_macos.sh
+source .venv/bin/activate
+```
+
+If needed, select an installed interpreter explicitly:
+
+```bash
+RESEARCH_DIGEST_PYTHON=/path/to/python3.12 ./scripts/bootstrap_macos.sh
+```
+
+If no compatible interpreter is installed, use a current installer from
+python.org or Homebrew, then rerun the bootstrap. It will not create `.venv`
+with Python 3.10 or older.
 
 For development tools as well:
 
@@ -61,17 +87,25 @@ research-digest --version
 research-digest status
 ```
 
-### Everyday Windows Launch
+### Everyday Windows and macOS Launch
 
-On Windows 11 with WSL2, create the supported Desktop shortcut once:
+Install the platform launcher once:
 
 ```bash
 research-digest install-launcher
 ```
 
-After that, double-click **Research Digest** on the Windows Desktop. Research
-Digest starts or reuses one local UI server and opens it in the Windows default
-browser. No Linux terminal needs to remain open.
+On Windows 11 with WSL2 this creates the owned **Research Digest** Desktop
+shortcut. On macOS it creates the owned user-local app at:
+
+```text
+~/Applications/Research Digest.app
+```
+
+After that, open **Research Digest** normally from the Windows Desktop or macOS
+Finder/Dock. Research Digest starts or reuses one local UI server and opens it
+in the platform default browser. No WSL or macOS Terminal window needs to
+remain open.
 
 Power-user UI commands are:
 
@@ -108,10 +142,24 @@ ChatGPT subscription access and OpenAI API billing are separate. Codex-backed
 operation uses the Codex CLI login state. OpenAI API mode is optional and uses
 `OPENAI_API_KEY`.
 
-The Windows shortcut intentionally never stores API keys or authentication
-tokens. If optional OpenAI API mode is used, `OPENAI_API_KEY` must already be
-available to non-interactive processes in the target WSL distribution; Codex
-CLI authentication continues to use its normal saved login state.
+The Windows shortcut and macOS app intentionally never store API keys or
+authentication tokens. If optional OpenAI API mode is used, `OPENAI_API_KEY`
+must already be available to the non-interactive application environment;
+Codex CLI authentication continues to use its normal saved login state.
+
+On macOS, run `install-launcher` from a Terminal where `research-digest` and,
+when Codex-backed analysis or Library intelligence is used, `codex` resolve
+successfully. The installer captures their exact executable
+directories—and the directory of an interpreter declared through a validated
+`/usr/bin/env` shebang, such as `node`—in the app's non-secret PATH, because
+Finder apps do not load interactive shell startup files. If either tool or its
+runtime moves (for example after a virtual-environment, Homebrew, npm, or nvm
+change), rerun
+`research-digest install-launcher`. Both Apple Silicon and Intel installs are
+supported without architecture-specific paths where Python and the declared
+dependencies support the current macOS release. The package requires Python
+3.11 or newer and declares no additional project-specific historical macOS
+floor beyond its Python/dependency support.
 
 For foreground/manual debugging, the existing server command remains available:
 
@@ -446,8 +494,13 @@ from that date through the latest available source date. Successful manual runs
 also count as covered when they satisfy the same retrieval and digest-success
 rules. Failed, partial, or interrupted dates remain eligible for retry.
 
-The first-class scheduler backend is Windows Task Scheduler from WSL2. Schedule
-times are Windows local time and follow Windows daylight-saving rules.
+The scheduler backend is selected by platform:
+
+- Windows/WSL uses Windows Task Scheduler.
+- macOS uses an owned per-user LaunchAgent under `~/Library/LaunchAgents`.
+
+Schedule times use the operating system's local time and daylight-saving rules.
+Neither backend stores API keys or Codex authentication material.
 
 Settings can inspect, install, update, and disable the schedule. Run now is an
 explicit action; simply opening Settings does not process pending dates.
@@ -462,10 +515,10 @@ History by itself is not long-term semantic memory. The Library is the
 persistent workspace for saved papers, notes, tags, collections, and scientific
 connections.
 
-Date coverage is scoped to the active profile and source semantics. Reordering
-the same arXiv category set, for example `hep-th` plus `gr-qc` versus `gr-qc`
-plus `hep-th`, does not create a new source scope. Actually changing the
-category set does.
+Date coverage is scoped only to source semantics, not Interest Profile
+semantics. Reordering the same arXiv category set, for example `hep-th` plus
+`gr-qc` versus `gr-qc` plus `hep-th`, does not create a new source scope.
+Actually changing the category set does; editing a profile does not.
 
 ## Long-Running Digests
 
@@ -487,8 +540,15 @@ default. On Linux and WSL this is normally:
 ~/.config/research-digest/
 ```
 
-On macOS and Windows, Research Digest uses the standard per-user application
-data/config locations for those platforms. Inspect the active paths with:
+On macOS, both data and config default below:
+
+```text
+~/Library/Application Support/Research Digest/
+```
+
+The app bundle contains no database or runtime state. On Windows, Research
+Digest continues to use its established WSL per-user paths. Inspect the active
+paths with:
 
 ```bash
 research-digest status
@@ -537,7 +597,7 @@ research-digest status [--json]
 research-digest doctor [--json] [--network]
 research-digest backup [--output PATH] [--export-json] [--json]
 research-digest schedule status [--json]
-research-digest schedule install --time HH:MM [--distro NAME] [--backend auto|windows] [--json]
+research-digest schedule install --time HH:MM [--distro NAME] [--backend auto|windows|launchd] [--json]
 research-digest schedule remove [--json]
 research-digest recover-abandoned-run --run-id ID [--force-uninspectable-owner] [--json]
 ```
@@ -555,7 +615,7 @@ research-digest doctor
 research-digest status
 ```
 
-For Windows shortcut or UI-server problems, inspect:
+For launcher or UI-server problems on either platform, inspect:
 
 ```bash
 research-digest ui-status --json
@@ -602,7 +662,8 @@ profile text.
 - Analysis is abstract-level; full-paper/PDF deep reading is deferred.
 - Model scores are ordinal judgments, not calibrated probabilities.
 - Library connections are model inferences and should be reviewed critically.
-- Windows/WSL is the most thoroughly qualified scheduling environment.
+- Windows/WSL and macOS are human-qualified on their tested environments. The
+  documented macOS login/logout or full-restart smoke remains deferred.
 - Research Digest is local and single-user; it has no multi-user or cloud
   collaboration layer.
 

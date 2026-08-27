@@ -17,10 +17,13 @@ from types import FrameType
 from typing import cast
 
 from research_digest.db import APP_RUN_CANCELLED, Database
+from research_digest.platform_runtime import (
+    ExactProcessState,
+    exact_process_state,
+    process_start_identity,
+)
 from research_digest.run_locks import (
     RunOwnerState,
-    linux_process_start_ticks,
-    linux_process_state,
     parse_process_run_owner,
     process_run_owner_state,
 )
@@ -38,6 +41,10 @@ class RunCancelled(BaseException):
     def __init__(self, run_id: int, message: str = "Cancelled by user.") -> None:
         super().__init__(message)
         self.run_id = run_id
+
+
+class ProviderProcessOwnershipError(RuntimeError):
+    """Raised when a live provider cannot be registered for exact cancellation."""
 
 
 @dataclass(frozen=True)
@@ -190,13 +197,25 @@ def run_owned_subprocess(
             process_group_id = os.getpgid(process.pid)
         cancellation = current_run_cancellation()
         if cancellation is not None:
-            process_record_id = cancellation.db.register_provider_process(
-                run_id=cancellation.run_id,
-                call_kind=call_kind,
-                pid=process.pid,
-                process_group_id=process_group_id,
-                process_start_ticks=linux_process_start_ticks(process.pid),
-            )
+            process_identity = _wait_for_spawned_process_identity(process)
+            if process_identity is None and process.poll() is None:
+                raise ProviderProcessOwnershipError(
+                    "The provider process started, but Research Digest could not verify "
+                    "its exact process identity for safe cancellation. The provider was "
+                    "stopped; retry after checking local process-inspection permissions."
+                )
+            if process_identity is None:
+                # The provider completed before registration was needed. Its
+                # Popen handle remains authoritative and communicate() reaps it.
+                cancellation.raise_if_requested()
+            else:
+                process_record_id = cancellation.db.register_provider_process(
+                    run_id=cancellation.run_id,
+                    call_kind=call_kind,
+                    pid=process.pid,
+                    process_group_id=process_group_id,
+                    process_start_ticks=process_identity,
+                )
             # Registration and a cancellation request are both committed SQLite
             # operations. This closes the Popen/register race: either the
             # canceller observes this row, or this check observes its request.
@@ -235,6 +254,21 @@ def run_owned_subprocess(
             )
         if previous_signal_mask is not None:
             _restore_cancel_signal(previous_signal_mask)
+
+
+def _wait_for_spawned_process_identity(
+    process: subprocess.Popen[str],
+    *,
+    timeout_seconds: float = 0.25,
+) -> int | None:
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        identity = process_start_identity(process.pid)
+        if identity is not None:
+            return identity
+        if process.poll() is not None or time.monotonic() >= deadline:
+            return None
+        time.sleep(0.01)
 
 
 def request_run_cancellation(
@@ -285,11 +319,14 @@ def request_run_cancellation(
         return CancellationResult(run_id, True, status, stopped)
     if owner is None or owner_state == RunOwnerState.UNKNOWN:
         return CancellationResult(run_id, True, str(run["status"]), False)
+    if owner.start_ticks is None:
+        return CancellationResult(run_id, True, str(run["status"]), False)
 
     if owner.pid == os.getpid():
         return CancellationResult(run_id, True, str(run["status"]), False)
 
-    _signal_exact_owner(owner.pid, owner.start_ticks, _CANCEL_SIGNAL)
+    owner_start = owner.start_ticks
+    _signal_exact_owner(owner.pid, owner_start, _CANCEL_SIGNAL)
     if _wait_for_cancel_completion(
         db,
         run_id=run_id,
@@ -315,21 +352,20 @@ def request_run_cancellation(
         status = APP_RUN_CANCELLED if current is None else str(current["status"])
         return CancellationResult(run_id, True, status, True)
 
-    _signal_exact_owner(owner.pid, owner.start_ticks, signal.SIGTERM)
+    _signal_exact_owner(owner.pid, owner_start, signal.SIGTERM)
     if not _wait_for_process_exit(
         owner.pid,
-        owner.start_ticks,
+        owner_start,
         timeout_seconds=terminate_seconds,
-    ):
-        _signal_exact_owner(owner.pid, owner.start_ticks, signal.SIGKILL)
+    ) and exact_process_state(owner.pid, owner_start) == ExactProcessState.ALIVE:
+        _signal_exact_owner(owner.pid, owner_start, signal.SIGKILL)
         _wait_for_process_exit(
             owner.pid,
-            owner.start_ticks,
+            owner_start,
             timeout_seconds=terminate_seconds,
         )
     owner_stopped = (
-        linux_process_start_ticks(owner.pid) != owner.start_ticks
-        or linux_process_state(owner.pid) == "Z"
+        exact_process_state(owner.pid, owner_start) == ExactProcessState.DEAD
     )
     if owner_stopped:
         db.force_cancel_after_owner_stopped(run_id=run_id, owner=expected_owner)
@@ -388,7 +424,12 @@ def _terminate_registered_process(
     pgid = int(cast(int, process["process_group_id"]))
     expected_start = process["process_start_ticks"]
     start_ticks = int(cast(int, expected_start)) if expected_start is not None else None
-    if start_ticks is None or linux_process_start_ticks(pid) != start_ticks:
+    if start_ticks is None:
+        return False
+    state = exact_process_state(pid, start_ticks)
+    if state == ExactProcessState.DEAD:
+        return True
+    if state != ExactProcessState.ALIVE:
         return False
     try:
         if os.getpgid(pid) != pgid:
@@ -398,12 +439,23 @@ def _terminate_registered_process(
     _signal_process_group(pgid, signal.SIGTERM)
     if _wait_for_process_exit(pid, start_ticks, timeout_seconds=graceful_seconds):
         return True
+    if exact_process_state(pid, start_ticks) != ExactProcessState.ALIVE:
+        return False
+    try:
+        if os.getpgid(pid) != pgid:
+            return False
+    except ProcessLookupError:
+        return True
     _signal_process_group(pgid, signal.SIGKILL)
-    _wait_for_process_exit(pid, start_ticks, timeout_seconds=graceful_seconds)
+    stopped = _wait_for_process_exit(
+        pid,
+        start_ticks,
+        timeout_seconds=graceful_seconds,
+    )
     # A provider that was our child may remain as a non-executing zombie until
     # its owning worker reaps it. The exact validated process group has still
     # received the terminal signal and can no longer perform provider work.
-    return True
+    return stopped
 
 
 def _signal_process_group(process_group_id: int, requested_signal: signal.Signals) -> None:
@@ -420,7 +472,7 @@ def _signal_exact_owner(
 ) -> bool:
     if requested_signal is None or expected_start_ticks is None:
         return False
-    if linux_process_start_ticks(pid) != expected_start_ticks:
+    if exact_process_state(pid, expected_start_ticks) != ExactProcessState.ALIVE:
         return False
     try:
         os.kill(pid, requested_signal)
@@ -435,15 +487,14 @@ def _wait_for_process_exit(
     *,
     timeout_seconds: float,
 ) -> bool:
+    if expected_start_ticks is None:
+        return False
     deadline = time.monotonic() + max(timeout_seconds, 0.0)
-    while (
-        linux_process_start_ticks(pid) == expected_start_ticks
-        and linux_process_state(pid) != "Z"
-    ):
+    while exact_process_state(pid, expected_start_ticks) == ExactProcessState.ALIVE:
         if time.monotonic() >= deadline:
             return False
         time.sleep(0.05)
-    return True
+    return exact_process_state(pid, expected_start_ticks) == ExactProcessState.DEAD
 
 
 def _wait_for_cancel_completion(
