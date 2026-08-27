@@ -1,4 +1,4 @@
-# Research Digest v0.3.0
+# Research Digest v0.4.0
 
 Research Digest is a local-first, personalized research-monitoring
 application. It currently monitors arXiv, screens new papers against
@@ -37,6 +37,30 @@ Library / tags / notes / connections
 Papers rejected during abstract preselection do not receive expensive full
 analysis or generated commentary. They remain visible with source metadata,
 links, their original abstract on demand, and a Save to Library action.
+
+## v0.4.0 highlights
+
+- Source-date coverage now represents complete source retrieval, independent
+  of Interest Profile analysis, and survives application or machine restarts.
+- Retrieved source-date corpora remain reusable across profile edits, so those
+  edits do not require redundant source retrieval. Completed analyses remain
+  reusable across retries when their profile and analysis semantics are
+  unchanged.
+- Digest workers run independently from the browser and Streamlit UI. Active
+  runs can be rediscovered after UI restart and explicitly cancelled while
+  retaining completed work and source coverage.
+- Article headers consistently show source-provided author metadata.
+- Windows 11 with WSL2 has an owned Desktop launcher and Task Scheduler
+  automation; macOS has an owned `Research Digest.app` and launchd automation.
+- Linux/WSL and Darwin use exact process ownership for UI and provider lifecycle
+  operations. The macOS bootstrap rejects Python older than 3.11 before it
+  creates a virtual environment.
+
+Windows 11 with WSL2 and macOS are human-qualified on their tested
+environments. Two environment-only smokes remain deferred: Windows launch plus
+real Codex execution immediately after `wsl --shutdown`, and macOS login/logout
+or full restart. Finder launch, real Codex analysis, cancellation, fallback
+ports, and launchd invocation passed on real Mac hardware.
 
 ## Installation and First Run
 
@@ -663,7 +687,8 @@ profile text.
 - Model scores are ordinal judgments, not calibrated probabilities.
 - Library connections are model inferences and should be reviewed critically.
 - Windows/WSL and macOS are human-qualified on their tested environments. The
-  documented macOS login/logout or full-restart smoke remains deferred.
+  documented Windows cold-WSL-start/real-Codex and macOS login/logout or
+  full-restart smokes remain deferred.
 - Research Digest is local and single-user; it has no multi-user or cloud
   collaboration layer.
 

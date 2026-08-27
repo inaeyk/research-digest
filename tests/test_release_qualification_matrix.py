@@ -243,9 +243,9 @@ class ReleaseQualificationMatrixTests(unittest.TestCase):
             with zipfile.ZipFile(wheels[0]) as wheel:
                 names = set(wheel.namelist())
                 entry_points = wheel.read(
-                    "research_digest-0.3.0.dist-info/entry_points.txt"
+                    "research_digest-0.4.0.dist-info/entry_points.txt"
                 ).decode("utf-8")
-                metadata = wheel.read("research_digest-0.3.0.dist-info/METADATA").decode(
+                metadata = wheel.read("research_digest-0.4.0.dist-info/METADATA").decode(
                     "utf-8"
                 )
 
@@ -290,7 +290,7 @@ class ReleaseQualificationMatrixTests(unittest.TestCase):
                 text=True,
             )
 
-        self.assertEqual(result.stdout.strip(), "research-digest 0.3.0")
+        self.assertEqual(result.stdout.strip(), "research-digest 0.4.0")
 
 
 def _isolated_env(tmp: str) -> dict[str, str]:
