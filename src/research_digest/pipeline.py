@@ -8,9 +8,19 @@ from datetime import date, datetime
 from typing import Any
 
 from research_digest.analysis.base import LLMAnalyzer, article_analysis_key
-from research_digest.coverage import source_config_semantic_fingerprint
+from research_digest.cancellation import (
+    RunCancelled,
+    activate_run_cancellation,
+    deactivate_run_cancellation,
+    raise_if_cancelled,
+)
+from research_digest.coverage import (
+    record_complete_retrieval,
+    source_config_semantic_fingerprint,
+)
 from research_digest.db import (
     APP_RUN_ANALYSIS_UNAVAILABLE,
+    APP_RUN_CANCELLED,
     APP_RUN_COMPLETED,
     APP_RUN_FAILED,
     APP_RUN_PARTIAL,
@@ -44,6 +54,7 @@ from research_digest.preselection import (
 )
 from research_digest.sources.base import DateNativeSourceAdapter, SourceAdapter
 from research_digest.sources.registry import SourceRunRequest
+from research_digest.sources.stored import StoredDateSource
 
 
 class DigestPipelineError(RuntimeError):
@@ -78,6 +89,7 @@ def run_digest(
     now: datetime | None = None,
     preselector: AbstractPreselector | None = None,
     analysis_chunk_size: int = DEFAULT_FULL_ANALYSIS_CHUNK_SIZE,
+    defer_terminalization: bool = False,
 ) -> DigestResult:
     """Fetch, store, analyze, filter, rank, and return one digest run."""
 
@@ -110,6 +122,7 @@ def run_digest(
         date_selection=date_selection,
     )
     db.mark_app_run_running(run_id)
+    cancellation_binding = activate_run_cancellation(db, run_id)
     started_at = utc_now()
     retrieved_count = 0
     stored_count = 0
@@ -131,13 +144,16 @@ def run_digest(
         else ()
     )
     covered_source_dates: tuple[str, ...] = ()
+    retrieved_covered_source_dates: tuple[str, ...] = ()
     empty_source_dates: tuple[str, ...] = ()
+    retrieved_empty_source_dates: tuple[str, ...] = ()
     incomplete_source_dates: tuple[str, ...] = ()
     retrieval_complete = date_selection is None
     retrieval_returned = date_selection is None
     retrieval_safety_limit: int | None = None
 
     try:
+        raise_if_cancelled()
         if date_selection is None:
             fetched = active_source_request.adapter.fetch(active_source_request.config, now=now)
         else:
@@ -150,8 +166,12 @@ def run_digest(
             retrieval_returned = True
             fetched = list(retrieval.articles)
             requested_source_dates = tuple(value.isoformat() for value in retrieval.requested_dates)
-            covered_source_dates = tuple(value.isoformat() for value in retrieval.covered_dates)
-            empty_source_dates = tuple(value.isoformat() for value in retrieval.empty_dates)
+            retrieved_covered_source_dates = tuple(
+                value.isoformat() for value in retrieval.covered_dates
+            )
+            retrieved_empty_source_dates = tuple(
+                value.isoformat() for value in retrieval.empty_dates
+            )
             incomplete_source_dates = tuple(
                 value.isoformat() for value in retrieval.incomplete_dates
             )
@@ -163,10 +183,53 @@ def run_digest(
                     for article in fetched
                 }
                 requested_source_dates = tuple(sorted(article_dates))
-                covered_source_dates = requested_source_dates
+                retrieved_covered_source_dates = requested_source_dates
         retrieved_count = len(fetched)
+        db.update_app_run_progress(
+            run_id,
+            progress_stage="retrieval_persistence",
+            retrieved_count=retrieved_count,
+            progress_message="Persisting the complete retrieved source set.",
+        )
         saved_articles, stored_count = db.upsert_articles(fetched)
         saved_articles = _unique_articles(saved_articles)
+        if (
+            date_selection is not None
+            and isinstance(active_source_request.config, ArxivSourceConfig)
+            and not isinstance(active_source_request.adapter, StoredDateSource)
+        ):
+            record_complete_retrieval(
+                db=db,
+                source_name=active_source_request.source_name,
+                source_config=active_source_request.config,
+                run_id=run_id,
+                run_origin=run_origin,
+                covered_source_dates=_source_date_tuple(retrieved_covered_source_dates),
+                requested_source_dates=_source_date_tuple(requested_source_dates),
+                empty_source_dates=_source_date_tuple(retrieved_empty_source_dates),
+                incomplete_source_dates=_source_date_tuple(incomplete_source_dates),
+                retrieval_complete=retrieval_complete,
+                retrieval_safety_limit=retrieval_safety_limit,
+                retrieved_count=retrieved_count,
+                stored_count=stored_count,
+                articles=tuple(saved_articles),
+            )
+        else:
+            db.persist_app_run_retrieval_metadata(
+                run_id=run_id,
+                requested_source_dates=_source_date_tuple(requested_source_dates),
+                covered_source_dates=_source_date_tuple(retrieved_covered_source_dates),
+                empty_source_dates=_source_date_tuple(retrieved_empty_source_dates),
+                incomplete_source_dates=_source_date_tuple(incomplete_source_dates),
+                retrieval_complete=retrieval_complete,
+                retrieval_safety_limit=retrieval_safety_limit,
+                retrieved_count=retrieved_count,
+                stored_count=stored_count,
+            )
+        covered_source_dates = retrieved_covered_source_dates
+        empty_source_dates = tuple(
+            value for value in retrieved_empty_source_dates if value in covered_source_dates
+        )
         db.update_app_run_progress(
             run_id,
             progress_stage="retrieval",
@@ -174,6 +237,7 @@ def run_digest(
             stored_count=stored_count,
             progress_message=f"Retrieved {retrieved_count} paper(s).",
         )
+        raise_if_cancelled()
 
         active_preselector = preselector or TermOverlapPreselector()
         analyses_by_key: dict[str, AnalysisResult] = {}
@@ -205,6 +269,7 @@ def run_digest(
 
         analysis_candidates = missing_articles
         if missing_articles and analyzer is not None:
+            raise_if_cancelled()
             try:
                 preselection = active_preselector.preselect(
                     profile=profile,
@@ -255,6 +320,7 @@ def run_digest(
                 article_by_key=article_by_key,
                 decisions=preselection_decisions,
             )
+            raise_if_cancelled()
         elif preselection_decisions and profile.id is not None:
             db.save_preselection_decisions(
                 run_id=run_id,
@@ -267,6 +333,7 @@ def run_digest(
             )
 
         if analysis_candidates and analyzer is not None:
+            raise_if_cancelled()
             bounded = _analyze_candidates_with_bounded_retries(
                 db=db,
                 analyzer=analyzer,
@@ -323,24 +390,28 @@ def run_digest(
         elif analyzer is None and retrieved_count > 0:
             status = APP_RUN_ANALYSIS_UNAVAILABLE
         completed_at = utc_now()
-        db.finish_app_run(
-            run_id,
-            status=status,
-            retrieved_count=retrieved_count,
-            stored_count=stored_count,
-            preselected_count=preselected_count,
-            skipped_analysis_count=skipped_analysis_count,
-            analyzed_count=analyzed_count,
-            relevant_count=above_threshold_count,
-            requested_source_dates=requested_source_dates,
-            covered_source_dates=covered_source_dates,
-            empty_source_dates=empty_source_dates,
-            incomplete_source_dates=incomplete_source_dates,
-            retrieval_complete=retrieval_complete,
-            retrieval_safety_limit=retrieval_safety_limit,
-            error_message=error_message,
-        )
-        return DigestResult(
+        raise_if_cancelled()
+        if not defer_terminalization:
+            effective_status = db.finish_app_run(
+                run_id,
+                status=status,
+                retrieved_count=retrieved_count,
+                stored_count=stored_count,
+                preselected_count=preselected_count,
+                skipped_analysis_count=skipped_analysis_count,
+                analyzed_count=analyzed_count,
+                relevant_count=above_threshold_count,
+                requested_source_dates=requested_source_dates,
+                covered_source_dates=covered_source_dates,
+                empty_source_dates=empty_source_dates,
+                incomplete_source_dates=incomplete_source_dates,
+                retrieval_complete=retrieval_complete,
+                retrieval_safety_limit=retrieval_safety_limit,
+                error_message=error_message,
+            )
+            if effective_status == APP_RUN_CANCELLED:
+                raise RunCancelled(run_id)
+        result = DigestResult(
             run_id=run_id,
             profile=profile,
             source_config=active_source_request.config,
@@ -371,9 +442,14 @@ def run_digest(
             retrieval_safety_limit=retrieval_safety_limit,
             preselection_evidence=_preselection_evidence_tuple(preselection_decisions),
         )
+        deactivate_run_cancellation(cancellation_binding)
+        return result
     except BaseException as exc:
+        cancelled = isinstance(exc, RunCancelled) or db.app_run_cancellation_requested(run_id)
         error_message = (
-            "Digest interrupted before completion."
+            "Cancelled by user."
+            if cancelled
+            else "Digest interrupted before completion."
             if isinstance(exc, (KeyboardInterrupt, SystemExit))
             else sanitize_error(exc)
         )
@@ -392,11 +468,14 @@ def run_digest(
         if date_selection is not None and not retrieval_returned:
             failed_incomplete_dates = requested_source_dates
         failed_retrieval_complete = retrieval_complete
-        if date_selection is not None and not retrieval_returned:
-            failed_retrieval_complete = False
+        if date_selection is not None:
+            failed_retrieval_complete = (
+                retrieval_returned
+                and set(retrieved_covered_source_dates).issubset(covered_source_dates)
+            )
         db.finish_app_run(
             run_id,
-            status=APP_RUN_FAILED,
+            status=APP_RUN_CANCELLED if cancelled else APP_RUN_FAILED,
             retrieved_count=retrieved_count,
             stored_count=stored_count,
             preselected_count=preselected_count,
@@ -411,6 +490,7 @@ def run_digest(
             retrieval_complete=failed_retrieval_complete,
             retrieval_safety_limit=retrieval_safety_limit,
         )
+        deactivate_run_cancellation(cancellation_binding)
         raise
 
 
@@ -521,6 +601,7 @@ def _analyze_candidates_with_bounded_retries(
                 analyzed_count=len(analyses),
                 progress_message=f"Full analysis {len(analyses)} / {total}.",
             )
+            raise_if_cancelled()
         remaining = next_remaining
     return _BoundedAnalysisResult(
         analyses=analyses,

@@ -93,6 +93,7 @@ class LibraryUiSmokeTests(unittest.TestCase):
             [str(element.value) for element in at.title]
             + [str(element.value) for element in at.header]
             + [str(element.value) for element in at.subheader]
+            + [str(element.value) for element in at.markdown]
             + [str(element.value) for element in at.text]
             + [str(element.value) for element in at.caption]
         )

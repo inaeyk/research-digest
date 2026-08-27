@@ -8,6 +8,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 from research_digest.config import DEFAULT_DB_FILENAME, ENV_DB_PATH, resolve_data_dir
 from research_digest.db import CURRENT_SCHEMA_VERSION
@@ -178,6 +179,7 @@ def export_user_data(*, db_path: Path, schema_version: int | None = None) -> dic
             "runs": _runs(conn),
             "run_snapshots": _run_snapshots(conn),
             "source_date_coverage": _source_date_coverage(conn),
+            "source_date_corpora": _source_date_corpora(conn),
             "library_articles": _library_articles(conn),
             "library_tags": _library_tags(conn),
             "library_tag_assignments": _library_tag_assignments(conn),
@@ -191,6 +193,7 @@ def export_user_data(*, db_path: Path, schema_version: int | None = None) -> dic
             "suggested_interest_profiles": _suggested_interest_profiles(conn),
             "quantitative_relevance_calibrations": _quantitative_relevance_calibrations(conn),
             "preselection_decisions": _preselection_decisions(conn),
+            "run_provider_processes": _run_provider_processes(conn),
         }
 
 
@@ -343,7 +346,10 @@ def _runs(conn: sqlite3.Connection) -> list[dict[str, object]]:
             retrieval_complete,
             retrieval_safety_limit,
             progress_stage,
-            progress_message
+            progress_message,
+            cancel_requested_at,
+            cancel_reason,
+            run_owner
         FROM app_runs
         ORDER BY id
         """
@@ -385,6 +391,50 @@ def _runs(conn: sqlite3.Connection) -> list[dict[str, object]]:
             "progress_message": (
                 str(row["progress_message"]) if row["progress_message"] is not None else None
             ),
+            "cancel_requested_at": (
+                str(row["cancel_requested_at"])
+                if row["cancel_requested_at"] is not None
+                else None
+            ),
+            "cancel_reason": (
+                sanitize_error_text(str(row["cancel_reason"]))
+                if row["cancel_reason"] is not None
+                else None
+            ),
+            "run_owner": str(row["run_owner"]) if row["run_owner"] is not None else None,
+        }
+        for row in rows
+    ]
+
+
+def _run_provider_processes(conn: sqlite3.Connection) -> list[dict[str, object]]:
+    if not _table_exists(conn, "run_provider_processes"):
+        return []
+    rows = conn.execute(
+        """
+        SELECT id, run_id, call_kind, pid, process_group_id,
+            process_start_ticks, started_at, completed_at, status
+        FROM run_provider_processes
+        ORDER BY id
+        """
+    ).fetchall()
+    return [
+        {
+            "id": int(row["id"]),
+            "run_id": int(row["run_id"]),
+            "call_kind": str(row["call_kind"]),
+            "pid": int(row["pid"]),
+            "process_group_id": int(row["process_group_id"]),
+            "process_start_ticks": (
+                int(row["process_start_ticks"])
+                if row["process_start_ticks"] is not None
+                else None
+            ),
+            "started_at": str(row["started_at"]),
+            "completed_at": (
+                str(row["completed_at"]) if row["completed_at"] is not None else None
+            ),
+            "status": str(row["status"]),
         }
         for row in rows
     ]
@@ -494,8 +544,6 @@ def _source_date_coverage(conn: sqlite3.Connection) -> list[dict[str, object]]:
         """
         SELECT
             id,
-            profile_id,
-            profile_fingerprint,
             source_name,
             source_fingerprint,
             source_date,
@@ -506,14 +554,12 @@ def _source_date_coverage(conn: sqlite3.Connection) -> list[dict[str, object]]:
             covered_at,
             updated_at
         FROM source_date_coverage
-        ORDER BY source_date, profile_id, id
+        ORDER BY source_date, source_name, id
         """
     ).fetchall()
     return [
         {
             "id": int(row["id"]),
-            "profile_id": int(row["profile_id"]),
-            "profile_fingerprint": str(row["profile_fingerprint"]),
             "source_name": str(row["source_name"]),
             "source_fingerprint": str(row["source_fingerprint"]),
             "source_date": str(row["source_date"]),
@@ -526,6 +572,44 @@ def _source_date_coverage(conn: sqlite3.Connection) -> list[dict[str, object]]:
         }
         for row in rows
     ]
+
+
+def _source_date_corpora(conn: sqlite3.Connection) -> list[dict[str, object]]:
+    if not _table_exists(conn, "source_date_corpora"):
+        return []
+    rows = conn.execute(
+        """
+        SELECT
+            source_date_corpora.*,
+            source_date_corpus_articles.article_id
+        FROM source_date_corpora
+        LEFT JOIN source_date_corpus_articles
+            ON source_date_corpus_articles.corpus_id = source_date_corpora.id
+        ORDER BY source_date_corpora.source_date, source_date_corpora.id,
+            source_date_corpus_articles.article_id
+        """
+    ).fetchall()
+    corpora: dict[int, dict[str, object]] = {}
+    for row in rows:
+        corpus_id = int(row["id"])
+        corpus = corpora.setdefault(
+            corpus_id,
+            {
+                "id": corpus_id,
+                "source_name": str(row["source_name"]),
+                "source_fingerprint": str(row["source_fingerprint"]),
+                "source_date": str(row["source_date"]),
+                "article_count": int(row["article_count"]),
+                "captured_run_id": int(row["captured_run_id"]),
+                "created_at": str(row["created_at"]),
+                "updated_at": str(row["updated_at"]),
+                "article_ids": [],
+            },
+        )
+        if row["article_id"] is not None:
+            article_ids = cast(list[int], corpus["article_ids"])
+            article_ids.append(int(row["article_id"]))
+    return list(corpora.values())
 
 
 def _library_articles(conn: sqlite3.Connection) -> list[dict[str, object]]:

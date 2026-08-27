@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
+from research_digest.cancellation import raise_if_cancelled
 from research_digest.connections import (
     LIBRARY_CONNECTION_PROMPT_VERSION,
     article_candidate_id,
@@ -147,12 +148,14 @@ def generate_library_context_for_item(
     ]
     if not candidates:
         return []
+    raise_if_cancelled()
     generation = generator.suggest_context(
         article=article,
         analysis=analysis,
         candidates=candidates,
         max_suggestions=max_suggestions,
     )
+    raise_if_cancelled()
     return assign_library_context_suggestions(
         db,
         run_id=run_id,
@@ -181,6 +184,7 @@ def generate_automatic_library_context_for_digest(
         raise ValueError("automatic Library context threshold must be between 0 and 1")
     persisted: list[LibraryContextSuggestion] = []
     for item in digest.items:
+        raise_if_cancelled()
         if item.analysis_origin != AnalysisOrigin.NEW_THIS_RUN:
             continue
         if item.analysis.relevance_score < threshold:
@@ -196,6 +200,7 @@ def generate_automatic_library_context_for_digest(
                 max_suggestions=max_suggestions,
             )
         )
+        raise_if_cancelled()
     return persisted
 
 

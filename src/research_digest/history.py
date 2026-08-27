@@ -4,10 +4,22 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import date
 from typing import Any
 
-from research_digest.db import Database
-from research_digest.models import DigestResult, datetime_from_db
+from research_digest.coverage import source_config_accepted_semantic_fingerprints
+from research_digest.db import APP_RUN_CANCELLED, APP_RUN_FAILED, Database
+from research_digest.models import (
+    AnalysisOrigin,
+    Article,
+    DateSelection,
+    DigestItem,
+    DigestResult,
+    PreselectionEvidence,
+    RunOrigin,
+    datetime_from_db,
+    profile_semantic_fingerprint,
+)
 from research_digest.synthesis import CrossPaperSynthesis
 
 
@@ -102,7 +114,9 @@ def build_run_snapshot(
                 "source_article_id": item.article.source_article_id,
                 "source": item.article.source,
                 "title": item.article.title,
+                "authors": list(item.article.authors),
                 "abstract": item.article.abstract,
+                "categories": list(item.article.categories),
                 "abstract_url": item.article.abstract_url,
                 "published_at": item.article.published_at.isoformat(),
                 "relevance_score": item.analysis.relevance_score,
@@ -118,7 +132,9 @@ def build_run_snapshot(
                 "source": article.source,
                 "source_article_id": article.source_article_id,
                 "title": article.title,
+                "authors": list(article.authors),
                 "abstract": article.abstract,
+                "categories": list(article.categories),
                 "abstract_url": article.abstract_url,
                 "published_at": article.published_at.isoformat(),
             }
@@ -129,7 +145,9 @@ def build_run_snapshot(
                 "source": article.source,
                 "source_article_id": article.source_article_id,
                 "title": article.title,
+                "authors": list(article.authors),
                 "abstract": article.abstract,
+                "categories": list(article.categories),
                 "abstract_url": article.abstract_url,
                 "published_at": article.published_at.isoformat(),
             }
@@ -204,6 +222,166 @@ def get_run_snapshot(db: Database, *, run_id: int) -> dict[str, Any] | None:
     if not isinstance(payload, dict):
         raise ValueError("run snapshot must be a JSON object")
     return payload
+
+
+def reconstruct_digest_result(db: Database, *, run_id: int) -> DigestResult | None:
+    """Rebuild a completed UI result from durable run, corpus, and analysis state."""
+
+    row = db.get_app_run(run_id)
+    snapshot = get_run_snapshot(db, run_id=run_id)
+    if row is None or snapshot is None or row["completed_at"] is None:
+        return None
+    if str(row["status"]) in {APP_RUN_CANCELLED, APP_RUN_FAILED}:
+        return None
+    if row["profile_id"] is None or row["profile_fingerprint"] is None:
+        return None
+    profile_id = int(row["profile_id"])
+    profile = db.get_interest_profile(profile_id)
+    source_config = db.get_arxiv_config()
+    if profile is None or source_config is None:
+        return None
+    profile_fingerprint = str(row["profile_fingerprint"])
+    if profile_fingerprint != profile_semantic_fingerprint(profile):
+        return None
+    if row["source_fingerprint"] is not None and str(row["source_fingerprint"]) not in set(
+        source_config_accepted_semantic_fingerprints(source_config)
+    ):
+        return None
+    items = _snapshot_digest_items(
+        db,
+        snapshot.get("items"),
+        profile_id=profile_id,
+        profile_fingerprint=profile_fingerprint,
+    )
+    skipped = _snapshot_articles(db, snapshot.get("skipped_articles"))
+    unresolved = _snapshot_articles(db, snapshot.get("unresolved_articles"))
+    selection_payload = _optional_json_object(row["date_selection_json"])
+    selection = DateSelection.from_mapping(selection_payload) if selection_payload else None
+    return DigestResult(
+        run_id=run_id,
+        profile=profile,
+        source_config=source_config,
+        retrieved_count=int(row["retrieved_count"]),
+        stored_count=int(row["stored_count"]),
+        preselected_count=int(row["preselected_count"]),
+        skipped_analysis_count=int(row["skipped_analysis_count"]),
+        analyzed_count=int(row["analyzed_count"]),
+        new_analysis_count=sum(
+            item.analysis_origin == AnalysisOrigin.NEW_THIS_RUN for item in items
+        ),
+        reused_analysis_count=sum(
+            item.analysis_origin == AnalysisOrigin.REUSED for item in items
+        ),
+        above_threshold_count=int(row["relevant_count"]),
+        analysis_available=bool(snapshot.get("analysis_available", True)),
+        items=items,
+        started_at=datetime_from_db(str(row["started_at"])),
+        completed_at=datetime_from_db(str(row["completed_at"])),
+        analysis_complete=bool(snapshot.get("analysis_complete", True)),
+        skipped_articles=skipped,
+        unresolved_articles=unresolved,
+        run_status=str(row["status"]),
+        error_message=str(row["error_message"]) if row["error_message"] else None,
+        run_origin=RunOrigin(str(row["run_origin"])),
+        date_selection=selection,
+        requested_source_dates=_date_tuple(row["requested_source_dates_json"]),
+        covered_source_dates=_date_tuple(row["covered_source_dates_json"]),
+        empty_source_dates=_date_tuple(row["empty_source_dates_json"]),
+        incomplete_source_dates=_date_tuple(row["incomplete_source_dates_json"]),
+        retrieval_complete=bool(row["retrieval_complete"]),
+        retrieval_safety_limit=(
+            int(row["retrieval_safety_limit"])
+            if row["retrieval_safety_limit"] is not None
+            else None
+        ),
+        preselection_evidence=_snapshot_preselection_evidence(
+            snapshot.get("preselection_decisions")
+        ),
+    )
+
+
+def _snapshot_digest_items(
+    db: Database,
+    payload: object,
+    *,
+    profile_id: int,
+    profile_fingerprint: str,
+) -> list[DigestItem]:
+    if not isinstance(payload, list):
+        return []
+    items: list[DigestItem] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        article = _snapshot_article(db, item)
+        if article is None or article.id is None:
+            continue
+        analysis = db.get_analysis(
+            article_id=article.id,
+            profile_id=profile_id,
+            profile_fingerprint=profile_fingerprint,
+        )
+        if analysis is None:
+            continue
+        try:
+            origin = AnalysisOrigin(str(item.get("analysis_origin", "REUSED")))
+        except ValueError:
+            origin = AnalysisOrigin.REUSED
+        items.append(DigestItem(article=article, analysis=analysis, analysis_origin=origin))
+    return items
+
+
+def _snapshot_articles(db: Database, payload: object) -> list[Article]:
+    if not isinstance(payload, list):
+        return []
+    return [
+        article
+        for item in payload
+        if isinstance(item, dict) and (article := _snapshot_article(db, item)) is not None
+    ]
+
+
+def _snapshot_article(db: Database, payload: dict[str, object]) -> Article | None:
+    source = payload.get("source")
+    source_article_id = payload.get("source_article_id")
+    if not isinstance(source, str) or not isinstance(source_article_id, str):
+        return None
+    return db.get_article_by_source_id(source, source_article_id)
+
+
+def _snapshot_preselection_evidence(payload: object) -> tuple[PreselectionEvidence, ...]:
+    if not isinstance(payload, list):
+        return ()
+    evidence: list[PreselectionEvidence] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        article_id = item.get("article_id")
+        if not isinstance(article_id, str):
+            continue
+        evidence.append(
+            PreselectionEvidence(
+                article_id=article_id,
+                preselection_score=_optional_float(item.get("preselection_score")),
+                preselection_threshold=_optional_float(item.get("preselection_threshold")),
+                passed=bool(item.get("passed")),
+                stage=str(item.get("stage", "unknown")),
+                decision_origin=str(item.get("decision_origin", "unknown")),
+                preselector_version=str(item.get("preselector_version", "unknown")),
+                reason=str(item["reason"]) if item.get("reason") is not None else None,
+            )
+        )
+    return tuple(evidence)
+
+
+def _optional_float(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def _date_tuple(value: object) -> tuple[date, ...]:
+    return tuple(date.fromisoformat(item) for item in _json_string_tuple(value))
 
 
 def _format_history_time(value: str) -> str:

@@ -17,6 +17,7 @@ from research_digest.analysis.base import (
     LLMAnalyzer,
     article_analysis_key,
 )
+from research_digest.cancellation import raise_if_cancelled, run_owned_subprocess
 from research_digest.config import (
     DEFAULT_CODEX_TIMEOUT_SECONDS,
     DEFAULT_PRESELECTION_FRACTION,
@@ -235,6 +236,7 @@ class CodexAbstractPreselector(AbstractPreselector):
                 break
             next_remaining: list[Article] = []
             for chunk in _article_chunks(remaining, active_size):
+                raise_if_cancelled()
                 chunk_scores = self._score_chunk(profile=profile, articles=chunk)
                 for article in chunk:
                     key = article_analysis_key(article)
@@ -243,6 +245,7 @@ class CodexAbstractPreselector(AbstractPreselector):
                         next_remaining.append(article)
                     else:
                         scores[key] = score
+                raise_if_cancelled()
             remaining = next_remaining
         return scores
 
@@ -305,15 +308,13 @@ def _run_codex(
     env: Mapping[str, str],
     timeout_seconds: float,
 ) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        list(command),
-        input=input_text,
+    return run_owned_subprocess(
+        command,
+        input_text=input_text,
         cwd=cwd,
-        env=dict(env),
-        timeout=timeout_seconds,
-        capture_output=True,
-        text=True,
-        check=False,
+        env=env,
+        timeout_seconds=timeout_seconds,
+        call_kind="codex-analysis",
     )
 
 

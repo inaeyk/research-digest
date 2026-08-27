@@ -14,6 +14,7 @@ from research_digest.db import (
     APP_RUN_ANALYSIS_UNAVAILABLE,
     APP_RUN_COMPLETED,
     APP_RUN_FAILED,
+    APP_RUN_PARTIAL,
     APP_RUN_RUNNING,
     CURRENT_SCHEMA_VERSION,
     Database,
@@ -26,6 +27,7 @@ from research_digest.models import (
     Article,
     ArticleFeedback,
     ArxivSourceConfig,
+    DateSelection,
     InterestProfile,
     RunOrigin,
     profile_semantic_fingerprint,
@@ -330,6 +332,147 @@ class DatabaseTests(unittest.TestCase):
             {date(2026, 8, 14)},
         )
         self.assertEqual(len(self.db.list_source_date_coverage()), 1)
+
+    def test_v16_profile_coverage_migrates_to_consolidated_source_coverage(self) -> None:
+        first = self.db.create_interest_profile(name="First", description="First semantics.")
+        second = self.db.create_interest_profile(name="Second", description="Second semantics.")
+        assert first.id is not None
+        assert second.id is not None
+        source_fingerprint = "stable-source-scope"
+
+        run_ids: list[int] = []
+        for profile, source_date, status, retrieval_complete, covered, incomplete in (
+            (first, date(2026, 8, 14), APP_RUN_COMPLETED, True, True, False),
+            (second, date(2026, 8, 14), APP_RUN_COMPLETED, True, True, False),
+            (first, date(2026, 8, 15), APP_RUN_PARTIAL, True, True, False),
+            (first, date(2026, 8, 16), APP_RUN_FAILED, True, True, False),
+            (first, date(2026, 8, 17), APP_RUN_FAILED, False, False, True),
+        ):
+            run_id = self.db.create_app_run(
+                profile_id=profile.id,
+                profile_fingerprint=profile_semantic_fingerprint(profile),
+                source_name="arxiv",
+                source_fingerprint=source_fingerprint,
+                date_selection=DateSelection.single_date(source_date),
+            )
+            self.db.finish_app_run(
+                run_id,
+                status=status,
+                retrieved_count=1,
+                stored_count=1,
+                preselected_count=1,
+                skipped_analysis_count=0,
+                analyzed_count=1 if status == APP_RUN_COMPLETED else 0,
+                relevant_count=0,
+                requested_source_dates=(source_date.isoformat(),),
+                covered_source_dates=(source_date.isoformat(),) if covered else (),
+                incomplete_source_dates=(source_date.isoformat(),) if incomplete else (),
+                retrieval_complete=retrieval_complete,
+            )
+            run_ids.append(run_id)
+
+        mixed_run_id = self.db.create_app_run(
+            profile_id=first.id,
+            profile_fingerprint=profile_semantic_fingerprint(first),
+            source_name="arxiv",
+            source_fingerprint=source_fingerprint,
+            date_selection=DateSelection.date_range(
+                date(2026, 8, 18),
+                date(2026, 8, 19),
+            ),
+        )
+        self.db.finish_app_run(
+            mixed_run_id,
+            status=APP_RUN_PARTIAL,
+            retrieved_count=1,
+            stored_count=1,
+            preselected_count=0,
+            skipped_analysis_count=0,
+            analyzed_count=0,
+            relevant_count=0,
+            requested_source_dates=("2026-08-18", "2026-08-19"),
+            covered_source_dates=("2026-08-18",),
+            incomplete_source_dates=("2026-08-19",),
+            retrieval_complete=False,
+        )
+        run_ids.append(mixed_run_id)
+
+        self.db.close()
+        with sqlite3.connect(self.db.path) as conn:
+            conn.executescript(
+                """
+                DROP TABLE source_date_corpus_articles;
+                DROP TABLE source_date_corpora;
+                DROP TABLE source_date_coverage;
+                CREATE TABLE source_date_coverage (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    profile_id INTEGER NOT NULL,
+                    profile_fingerprint TEXT NOT NULL,
+                    source_name TEXT NOT NULL,
+                    source_fingerprint TEXT NOT NULL,
+                    source_date TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    first_covered_run_id INTEGER NOT NULL,
+                    last_covered_run_id INTEGER NOT NULL,
+                    run_origin TEXT NOT NULL,
+                    covered_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(
+                        profile_id, profile_fingerprint, source_name,
+                        source_fingerprint, source_date
+                    )
+                );
+                """
+            )
+            for profile, run_id in ((first, run_ids[0]), (second, run_ids[1])):
+                conn.execute(
+                    """
+                    INSERT INTO source_date_coverage (
+                        profile_id, profile_fingerprint, source_name, source_fingerprint,
+                        source_date, status, first_covered_run_id, last_covered_run_id,
+                        run_origin, covered_at, updated_at
+                    ) VALUES (?, ?, 'arxiv', ?, '2026-08-14', 'COVERED', ?, ?,
+                        'MANUAL', '2026-08-14T12:00:00Z', '2026-08-14T12:00:00Z')
+                    """,
+                    (
+                        profile.id,
+                        profile_semantic_fingerprint(profile),
+                        source_fingerprint,
+                        run_id,
+                        run_id,
+                    ),
+                )
+            conn.execute(
+                "UPDATE schema_metadata SET value = '16' WHERE key = 'schema_version'"
+            )
+
+        migrated = Database(self.db.path)
+        self.addCleanup(migrated.close)
+        rows = migrated.list_source_date_coverage()
+        with sqlite3.connect(self.db.path) as conn:
+            columns = {
+                str(row[1])
+                for row in conn.execute("PRAGMA table_info(source_date_coverage)").fetchall()
+            }
+            corpus_table = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE name = 'source_date_corpora'"
+            ).fetchone()
+
+        self.assertEqual(migrated.get_schema_version(), CURRENT_SCHEMA_VERSION)
+        self.assertIsNotNone(migrated.last_migration_backup_path)
+        self.assertNotIn("profile_id", columns)
+        self.assertNotIn("profile_fingerprint", columns)
+        self.assertIsNotNone(corpus_table)
+        self.assertEqual(
+            {(str(row["source_date"]), int(row["last_covered_run_id"])) for row in rows},
+            {
+                ("2026-08-14", run_ids[1]),
+                ("2026-08-15", run_ids[2]),
+                ("2026-08-16", run_ids[3]),
+                ("2026-08-18", run_ids[5]),
+            },
+        )
+        self.assertEqual(len(migrated.get_app_runs()), 6)
 
     def test_article_feedback_round_trip_and_profile_semantic_isolation(self) -> None:
         profile = self.db.create_interest_profile(

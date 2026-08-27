@@ -61,7 +61,7 @@ def process_run_owner_state(
     current_host: str | None = None,
     start_ticks_reader: StartTicksReader = lambda pid: linux_process_start_ticks(pid),
 ) -> RunOwnerState:
-    parsed = _parse_process_owner(owner)
+    parsed = parse_process_run_owner(owner)
     if parsed is None:
         return RunOwnerState.UNKNOWN
     if parsed.host != (current_host or socket.gethostname()):
@@ -79,6 +79,8 @@ def process_run_owner_state(
     if current_start_ticks is None:
         return RunOwnerState.DEAD
     if current_start_ticks != parsed.start_ticks:
+        return RunOwnerState.DEAD
+    if linux_process_state(parsed.pid) == "Z":
         return RunOwnerState.DEAD
     return RunOwnerState.ALIVE
 
@@ -98,6 +100,18 @@ def linux_process_start_ticks(pid: int) -> int | None:
         return None
 
 
+def linux_process_state(pid: int) -> str | None:
+    """Return the Linux process state; zombies are stopped ownership."""
+
+    if pid <= 0:
+        return None
+    try:
+        text = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+        return text.rsplit(") ", 1)[1].split()[0]
+    except (IndexError, OSError):
+        return None
+
+
 def linux_boot_id() -> str | None:
     try:
         return Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8").strip()
@@ -105,7 +119,9 @@ def linux_boot_id() -> str | None:
         return None
 
 
-def _parse_process_owner(owner: str) -> ProcessRunOwner | None:
+def parse_process_run_owner(owner: str) -> ProcessRunOwner | None:
+    """Parse an exact process-backed lock owner, or reject legacy/invalid owners."""
+
     try:
         payload = json.loads(owner)
     except json.JSONDecodeError:

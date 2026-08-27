@@ -149,6 +149,24 @@ does not try to duplicate arXiv mailing or announcement-page cutoff semantics.
 History preserves individual runs. A later run of the same date can reuse valid
 cached analyses while keeping earlier run records intact.
 
+### Cancelling a Digest
+
+While a digest is active, Today and Settings show its durable progress and an
+application **Cancel digest** button. Use that button to cancel backend retrieval,
+analysis, or Library work. Streamlit's top-right Stop control only stops the current
+page script; it is not the Research Digest cancellation control.
+
+The worker is local and independent of the Streamlit server. If the browser is
+refreshed or `research-digest serve` is restarted, the UI reattaches to the active
+run and offers the same cancellation control. Completed retrieval and valid partial
+analyses are preserved for retry. Power users can use the same cancellation service:
+
+```bash
+research-digest cancel --run-id RUN_ID
+```
+
+Cancelling a scheduled run does not disable the daily schedule.
+
 ## Interests and Relevance
 
 An Interest Profile is a natural-language description of what you want the

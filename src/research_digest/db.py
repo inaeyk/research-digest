@@ -41,8 +41,10 @@ from research_digest.models import (
     RunOrigin,
     SuggestedInterestProfile,
     TagOrigin,
+    canonical_arxiv_categories,
     datetime_from_db,
     datetime_to_db,
+    source_date_from_datetime,
     utc_now,
 )
 from research_digest.run_locks import RunOwnerState, process_run_owner_state
@@ -53,13 +55,14 @@ if TYPE_CHECKING:
 SOURCE_ARXIV = "arxiv"
 SCHEMA_VERSION_KEY = "schema_version"
 LAST_MIGRATION_BACKUP_KEY = "last_migration_backup_path"
-CURRENT_SCHEMA_VERSION = 16
+CURRENT_SCHEMA_VERSION = 18
 APP_RUN_STARTING = "STARTING"
 APP_RUN_RUNNING = "RUNNING"
 APP_RUN_COMPLETED = "COMPLETED"
 APP_RUN_FAILED = "FAILED"
 APP_RUN_ANALYSIS_UNAVAILABLE = "ANALYSIS_UNAVAILABLE"
 APP_RUN_PARTIAL = "PARTIAL"
+APP_RUN_CANCELLED = "CANCELLED"
 DIGEST_RUN_LOCK = "digest"
 
 
@@ -293,6 +296,37 @@ class Database:
     def get_article_by_source_id(self, source: str, source_article_id: str) -> Article | None:
         with self._connection() as conn:
             return _get_article_by_source_id(conn, source, source_article_id)
+
+    def list_articles_for_source_date(
+        self,
+        *,
+        source_name: str,
+        source_date: date,
+        categories: Iterable[str],
+    ) -> tuple[Article, ...]:
+        """Reconstruct an arXiv corpus for an already-proven covered source date."""
+
+        category_set = set(canonical_arxiv_categories(tuple(categories)))
+        with self._connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM articles
+                WHERE source = ?
+                ORDER BY published_at DESC, id ASC
+                """,
+                (source_name,),
+            ).fetchall()
+        articles = (
+            _article_from_row(row)
+            for row in rows
+        )
+        return tuple(
+            article
+            for article in articles
+            if source_date_from_datetime(article.published_at) == source_date
+            and category_set.intersection(article.categories)
+        )
 
     def save_library_article(self, article_id: int) -> LibraryEntry:
         if article_id <= 0:
@@ -1752,14 +1786,26 @@ class Database:
         run_origin: RunOrigin = RunOrigin.LEGACY,
         date_selection: DateSelection | None = None,
     ) -> int:
+        selected_dates = (
+            tuple(value.isoformat() for value in date_selection.selected_dates())
+            if date_selection is not None
+            else ()
+        )
         with self._connection() as conn:
+            lock = conn.execute(
+                "SELECT owner FROM run_locks WHERE name = ?",
+                (DIGEST_RUN_LOCK,),
+            ).fetchone()
+            run_owner = str(lock["owner"]) if lock is not None else None
             cursor = conn.execute(
                 """
                 INSERT INTO app_runs (
                     profile_id, profile_fingerprint, source_name, source_fingerprint,
-                    started_at, status, run_origin, date_selection_json
+                    started_at, status, run_origin, date_selection_json, run_owner,
+                    requested_source_dates_json, incomplete_source_dates_json,
+                    retrieval_complete
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
                 """,
                 (
                     profile_id,
@@ -1772,6 +1818,9 @@ class Database:
                     json.dumps(date_selection.to_mapping(), sort_keys=True)
                     if date_selection is not None
                     else None,
+                    run_owner,
+                    json.dumps(list(selected_dates)),
+                    json.dumps(list(selected_dates)),
                 ),
             )
             return _lastrowid(cursor)
@@ -1779,7 +1828,11 @@ class Database:
     def mark_app_run_running(self, run_id: int) -> None:
         with self._connection() as conn:
             conn.execute(
-                "UPDATE app_runs SET status = ?, progress_stage = ? WHERE id = ?",
+                """
+                UPDATE app_runs
+                SET status = ?, progress_stage = ?
+                WHERE id = ? AND completed_at IS NULL AND cancel_requested_at IS NULL
+                """,
                 (APP_RUN_RUNNING, "running", run_id),
             )
 
@@ -1813,7 +1866,11 @@ class Database:
         params.append(run_id)
         with self._connection() as conn:
             conn.execute(
-                f"UPDATE app_runs SET {', '.join(assignments)} WHERE id = ?",
+                f"""
+                UPDATE app_runs
+                SET {', '.join(assignments)}
+                WHERE id = ? AND completed_at IS NULL
+                """,
                 tuple(params),
             )
 
@@ -1835,8 +1892,29 @@ class Database:
         incomplete_source_dates: Sequence[str] = (),
         retrieval_complete: bool = True,
         retrieval_safety_limit: int | None = None,
-    ) -> None:
-        with self._connection() as conn:
+    ) -> str:
+        with self._immediate_connection() as conn:
+            current = conn.execute(
+                """
+                SELECT status, completed_at, cancel_requested_at, cancel_reason
+                FROM app_runs
+                WHERE id = ?
+                """,
+                (run_id,),
+            ).fetchone()
+            if current is None:
+                raise ValueError(f"app run {run_id} does not exist")
+            if current["completed_at"] is not None:
+                return str(current["status"])
+            cancellation_won = current["cancel_requested_at"] is not None
+            effective_status = (
+                APP_RUN_CANCELLED
+                if cancellation_won or status == APP_RUN_CANCELLED
+                else status
+            )
+            effective_error = error_message
+            if effective_status == APP_RUN_CANCELLED:
+                effective_error = str(current["cancel_reason"] or "Cancelled by user.")
             conn.execute(
                 """
                 UPDATE app_runs
@@ -1847,28 +1925,222 @@ class Database:
                     empty_source_dates_json = ?, incomplete_source_dates_json = ?,
                     retrieval_complete = ?, retrieval_safety_limit = ?,
                     progress_stage = ?, progress_message = ?
-                WHERE id = ?
+                WHERE id = ? AND completed_at IS NULL
                 """,
                 (
                     datetime_to_db(utc_now()),
-                    status,
+                    effective_status,
                     retrieved_count,
                     stored_count,
                     preselected_count,
                     skipped_analysis_count,
                     analyzed_count,
                     relevant_count,
-                    error_message,
+                    effective_error,
                     json.dumps(list(requested_source_dates)),
                     json.dumps(list(covered_source_dates)),
                     json.dumps(list(empty_source_dates)),
                     json.dumps(list(incomplete_source_dates)),
                     int(retrieval_complete),
                     retrieval_safety_limit,
-                    status.lower(),
-                    error_message,
+                    effective_status.lower(),
+                    effective_error,
                     run_id,
                 ),
+            )
+        return effective_status
+
+    def request_app_run_cancellation(
+        self,
+        run_id: int,
+        *,
+        reason: str = "Cancelled by user.",
+    ) -> bool:
+        """Durably accept cancellation only while the run is nonterminal."""
+
+        sanitized_reason = sanitize_error_text(reason) or "Cancelled by user."
+        requested_at = datetime_to_db(utc_now())
+        with self._immediate_connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE app_runs
+                SET cancel_requested_at = COALESCE(cancel_requested_at, ?),
+                    cancel_reason = COALESCE(cancel_reason, ?),
+                    progress_message = ?
+                WHERE id = ?
+                    AND completed_at IS NULL
+                    AND status IN (?, ?, 'running')
+                """,
+                (
+                    requested_at,
+                    sanitized_reason,
+                    "Cancellation requested.",
+                    run_id,
+                    APP_RUN_STARTING,
+                    APP_RUN_RUNNING,
+                ),
+            )
+            return cursor.rowcount > 0
+
+    def app_run_cancellation_requested(self, run_id: int) -> bool:
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT cancel_requested_at FROM app_runs WHERE id = ?",
+                (run_id,),
+            ).fetchone()
+        return row is not None and row["cancel_requested_at"] is not None
+
+    def finish_cancelled_run(self, run_id: int) -> str:
+        """Terminalize cancellation without overwriting already-persisted progress."""
+
+        now = datetime_to_db(utc_now())
+        with self._immediate_connection() as conn:
+            current = conn.execute(
+                "SELECT status, completed_at, cancel_reason FROM app_runs WHERE id = ?",
+                (run_id,),
+            ).fetchone()
+            if current is None:
+                raise ValueError(f"app run {run_id} does not exist")
+            if current["completed_at"] is not None:
+                return str(current["status"])
+            reason = str(current["cancel_reason"] or "Cancelled by user.")
+            conn.execute(
+                """
+                UPDATE app_runs
+                SET completed_at = ?, status = ?, error_message = ?,
+                    progress_stage = ?, progress_message = ?
+                WHERE id = ? AND completed_at IS NULL
+                """,
+                (now, APP_RUN_CANCELLED, reason, APP_RUN_CANCELLED.lower(), reason, run_id),
+            )
+            conn.execute(
+                """
+                UPDATE run_provider_processes
+                SET completed_at = COALESCE(completed_at, ?), status = ?
+                WHERE run_id = ? AND completed_at IS NULL
+                """,
+                (now, APP_RUN_CANCELLED, run_id),
+            )
+        return APP_RUN_CANCELLED
+
+    def get_active_app_run(self) -> sqlite3.Row | None:
+        with self._connection() as conn:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM app_runs
+                WHERE completed_at IS NULL AND status IN (?, ?, 'running')
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (APP_RUN_STARTING, APP_RUN_RUNNING),
+            ).fetchone()
+        return cast(sqlite3.Row | None, row)
+
+    def force_cancel_after_owner_stopped(self, *, run_id: int, owner: str) -> bool:
+        """Terminalize a requested cancellation after its exact owner is dead."""
+
+        now = datetime_to_db(utc_now())
+        with self._immediate_connection() as conn:
+            lock = conn.execute(
+                "SELECT owner FROM run_locks WHERE name = ?",
+                (DIGEST_RUN_LOCK,),
+            ).fetchone()
+            if lock is None or str(lock["owner"]) != owner:
+                return False
+            cursor = conn.execute(
+                """
+                UPDATE app_runs
+                SET completed_at = ?, status = ?, error_message = COALESCE(
+                        cancel_reason, 'Cancelled by user.'
+                    ),
+                    progress_stage = ?, progress_message = COALESCE(
+                        cancel_reason, 'Cancelled by user.'
+                    )
+                WHERE id = ?
+                    AND completed_at IS NULL
+                    AND cancel_requested_at IS NOT NULL
+                    AND run_owner = ?
+                    AND status IN (?, ?, 'running')
+                """,
+                (
+                    now,
+                    APP_RUN_CANCELLED,
+                    APP_RUN_CANCELLED.lower(),
+                    run_id,
+                    owner,
+                    APP_RUN_STARTING,
+                    APP_RUN_RUNNING,
+                ),
+            )
+            if cursor.rowcount == 0:
+                return False
+            conn.execute(
+                """
+                UPDATE run_provider_processes
+                SET completed_at = COALESCE(completed_at, ?), status = ?
+                WHERE run_id = ? AND completed_at IS NULL
+                """,
+                (now, APP_RUN_CANCELLED, run_id),
+            )
+            conn.execute(
+                "DELETE FROM run_locks WHERE name = ? AND owner = ?",
+                (DIGEST_RUN_LOCK, owner),
+            )
+            return True
+
+    def register_provider_process(
+        self,
+        *,
+        run_id: int,
+        call_kind: str,
+        pid: int,
+        process_group_id: int,
+        process_start_ticks: int | None,
+    ) -> int:
+        with self._connection() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO run_provider_processes (
+                    run_id, call_kind, pid, process_group_id,
+                    process_start_ticks, started_at, status
+                )
+                VALUES (?, ?, ?, ?, ?, ?, 'RUNNING')
+                """,
+                (
+                    run_id,
+                    call_kind,
+                    pid,
+                    process_group_id,
+                    process_start_ticks,
+                    datetime_to_db(utc_now()),
+                ),
+            )
+            return _lastrowid(cursor)
+
+    def finish_provider_process(self, process_id: int, *, status: str) -> None:
+        with self._connection() as conn:
+            conn.execute(
+                """
+                UPDATE run_provider_processes
+                SET completed_at = COALESCE(completed_at, ?), status = ?
+                WHERE id = ?
+                """,
+                (datetime_to_db(utc_now()), status, process_id),
+            )
+
+    def list_active_provider_processes(self, *, run_id: int) -> list[sqlite3.Row]:
+        with self._connection() as conn:
+            return list(
+                conn.execute(
+                    """
+                    SELECT *
+                    FROM run_provider_processes
+                    WHERE run_id = ? AND completed_at IS NULL AND status = 'RUNNING'
+                    ORDER BY id ASC
+                    """,
+                    (run_id,),
+                ).fetchall()
             )
 
     def get_app_runs(self) -> list[sqlite3.Row]:
@@ -1906,8 +2178,11 @@ class Database:
                         incomplete_source_dates_json,
                     retrieval_complete,
                     retrieval_safety_limit,
-                    progress_stage,
-                    progress_message
+                        progress_stage,
+                        progress_message,
+                        cancel_requested_at,
+                        cancel_reason,
+                        run_owner
                 FROM app_runs
                 ORDER BY id DESC
                     """,
@@ -1935,26 +2210,27 @@ class Database:
     def mark_source_date_covered(
         self,
         *,
-        profile_id: int,
-        profile_fingerprint: str,
         source_name: str,
         source_fingerprint: str,
         source_date: date,
         run_id: int,
         run_origin: RunOrigin,
+        profile_id: int | None = None,
+        profile_fingerprint: str | None = None,
     ) -> None:
+        del profile_id, profile_fingerprint
         covered_at = datetime_to_db(utc_now())
         with self._connection() as conn:
             conn.execute(
                 """
                 INSERT INTO source_date_coverage (
-                    profile_id, profile_fingerprint, source_name, source_fingerprint,
-                    source_date, status, first_covered_run_id, last_covered_run_id,
+                    source_name, source_fingerprint, source_date, status,
+                    first_covered_run_id, last_covered_run_id,
                     run_origin, covered_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, 'COVERED', ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, 'COVERED', ?, ?, ?, ?, ?)
                 ON CONFLICT(
-                    profile_id, profile_fingerprint, source_name, source_fingerprint, source_date
+                    source_name, source_fingerprint, source_date
                 ) DO UPDATE SET
                     status = 'COVERED',
                     last_covered_run_id = excluded.last_covered_run_id,
@@ -1962,8 +2238,6 @@ class Database:
                     updated_at = excluded.updated_at
                 """,
                 (
-                    profile_id,
-                    profile_fingerprint,
                     source_name,
                     source_fingerprint,
                     source_date.isoformat(),
@@ -1978,28 +2252,25 @@ class Database:
     def list_covered_source_dates(
         self,
         *,
-        profile_id: int,
-        profile_fingerprint: str,
         source_name: str,
         source_fingerprint: str,
         start_date: date,
         end_date: date,
+        profile_id: int | None = None,
+        profile_fingerprint: str | None = None,
     ) -> set[date]:
+        del profile_id, profile_fingerprint
         with self._connection() as conn:
             rows = conn.execute(
                 """
                 SELECT source_date
                 FROM source_date_coverage
-                WHERE profile_id = ?
-                    AND profile_fingerprint = ?
-                    AND source_name = ?
+                WHERE source_name = ?
                     AND source_fingerprint = ?
                     AND status = 'COVERED'
                     AND source_date BETWEEN ? AND ?
                 """,
                 (
-                    profile_id,
-                    profile_fingerprint,
                     source_name,
                     source_fingerprint,
                     start_date.isoformat(),
@@ -2015,10 +2286,169 @@ class Database:
                     """
                     SELECT *
                     FROM source_date_coverage
-                    ORDER BY source_date DESC, profile_id ASC, id DESC
+                    ORDER BY source_date DESC, source_name ASC, id DESC
                     """
                 ).fetchall()
             )
+
+    def record_complete_source_date(
+        self,
+        *,
+        source_name: str,
+        source_fingerprint: str,
+        source_date: date,
+        articles: Iterable[Article],
+        run_id: int,
+        run_origin: RunOrigin,
+    ) -> None:
+        """Atomically persist coverage and its exact locally reusable corpus."""
+
+        self.record_complete_source_dates(
+            source_name=source_name,
+            source_fingerprint=source_fingerprint,
+            articles_by_date={source_date: tuple(articles)},
+            run_id=run_id,
+            run_origin=run_origin,
+        )
+
+    def record_complete_source_dates(
+        self,
+        *,
+        source_name: str,
+        source_fingerprint: str,
+        articles_by_date: Mapping[date, Iterable[Article]],
+        run_id: int,
+        run_origin: RunOrigin,
+        requested_source_dates: Sequence[date] | None = None,
+        empty_source_dates: Sequence[date] = (),
+        incomplete_source_dates: Sequence[date] = (),
+        retrieval_complete: bool | None = None,
+        retrieval_safety_limit: int | None = None,
+        retrieved_count: int | None = None,
+        stored_count: int | None = None,
+    ) -> None:
+        """Persist one complete multi-date retrieval in a single transaction."""
+
+        prepared: list[tuple[date, list[int]]] = []
+        for source_date, articles in sorted(articles_by_date.items()):
+            corpus_articles = tuple(articles)
+            if any(article.id is None for article in corpus_articles):
+                raise ValueError("source-date corpus articles must be stored first")
+            if any(article.source != source_name for article in corpus_articles):
+                raise ValueError("source-date corpus articles must match the source")
+            if any(
+                source_date_from_datetime(article.published_at) != source_date
+                for article in corpus_articles
+            ):
+                raise ValueError("source-date corpus articles must match the source date")
+            prepared.append(
+                (source_date, sorted({cast(int, article.id) for article in corpus_articles}))
+            )
+        now = datetime_to_db(utc_now())
+        with self._connection() as conn:
+            for source_date, article_ids in prepared:
+                _record_complete_source_date(
+                    conn,
+                    source_name,
+                    source_fingerprint,
+                    source_date,
+                    article_ids,
+                    run_id,
+                    run_origin,
+                    now,
+                )
+            if requested_source_dates is not None and retrieval_complete is not None:
+                _persist_app_run_retrieval_metadata(
+                    conn,
+                    run_id=run_id,
+                    requested_source_dates=requested_source_dates,
+                    covered_source_dates=tuple(value for value, _article_ids in prepared),
+                    empty_source_dates=empty_source_dates,
+                    incomplete_source_dates=incomplete_source_dates,
+                    retrieval_complete=retrieval_complete,
+                    retrieval_safety_limit=retrieval_safety_limit,
+                    retrieved_count=retrieved_count,
+                    stored_count=stored_count,
+                )
+
+    def persist_app_run_retrieval_metadata(
+        self,
+        *,
+        run_id: int,
+        requested_source_dates: Sequence[date],
+        covered_source_dates: Sequence[date],
+        empty_source_dates: Sequence[date],
+        incomplete_source_dates: Sequence[date],
+        retrieval_complete: bool,
+        retrieval_safety_limit: int | None,
+        retrieved_count: int,
+        stored_count: int,
+    ) -> None:
+        """Persist retrieval progress before entering cancellable downstream work."""
+
+        with self._connection() as conn:
+            _persist_app_run_retrieval_metadata(
+                conn,
+                run_id=run_id,
+                requested_source_dates=requested_source_dates,
+                covered_source_dates=covered_source_dates,
+                empty_source_dates=empty_source_dates,
+                incomplete_source_dates=incomplete_source_dates,
+                retrieval_complete=retrieval_complete,
+                retrieval_safety_limit=retrieval_safety_limit,
+                retrieved_count=retrieved_count,
+                stored_count=stored_count,
+            )
+
+    def load_source_date_corpus(
+        self,
+        *,
+        source_name: str,
+        source_fingerprints: Iterable[str],
+        source_date: date,
+    ) -> tuple[Article, ...] | None:
+        """Return a complete persisted corpus, including an explicitly empty one."""
+
+        fingerprints = tuple(dict.fromkeys(source_fingerprints))
+        if not fingerprints:
+            return None
+        placeholders = ", ".join("?" for _ in fingerprints)
+        with self._connection() as conn:
+            row = conn.execute(
+                f"""
+                SELECT id, article_count
+                FROM source_date_corpora
+                WHERE source_name = ?
+                    AND source_date = ?
+                    AND source_fingerprint IN ({placeholders})
+                ORDER BY CASE source_fingerprint
+                    {" ".join(f"WHEN ? THEN {index}" for index, _ in enumerate(fingerprints))}
+                    ELSE {len(fingerprints)} END
+                LIMIT 1
+                """,
+                (
+                    source_name,
+                    source_date.isoformat(),
+                    *fingerprints,
+                    *fingerprints,
+                ),
+            ).fetchone()
+            if row is None:
+                return None
+            article_rows = conn.execute(
+                """
+                SELECT articles.*
+                FROM source_date_corpus_articles
+                JOIN articles ON articles.id = source_date_corpus_articles.article_id
+                WHERE source_date_corpus_articles.corpus_id = ?
+                ORDER BY articles.published_at DESC, articles.id ASC
+                """,
+                (int(row["id"]),),
+            ).fetchall()
+        articles = tuple(_article_from_row(article_row) for article_row in article_rows)
+        if len(articles) != int(row["article_count"]):
+            raise RuntimeError("source-date corpus is incomplete")
+        return articles
 
     def save_run_snapshot(self, *, run_id: int, snapshot_json: str) -> None:
         with self._connection() as conn:
@@ -2268,7 +2698,7 @@ class Database:
         try:
             yield conn
             conn.commit()
-        except Exception:
+        except BaseException:
             conn.rollback()
             raise
         finally:
@@ -2283,7 +2713,7 @@ class Database:
         try:
             yield conn
             conn.commit()
-        except Exception:
+        except BaseException:
             conn.rollback()
             raise
         finally:
@@ -3011,6 +3441,357 @@ def _migration_preselection_decisions(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migration_source_scoped_coverage(conn: sqlite3.Connection) -> None:
+    """Remove profile identity from coverage and add reusable corpus manifests."""
+
+    if _table_exists(conn, "source_date_coverage"):
+        columns = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA table_info(source_date_coverage)").fetchall()
+        }
+        if "profile_id" in columns:
+            conn.execute("ALTER TABLE source_date_coverage RENAME TO source_date_coverage_v16")
+            _create_source_scoped_coverage_table(conn)
+            conn.execute(
+                """
+                INSERT INTO source_date_coverage (
+                    source_name, source_fingerprint, source_date, status,
+                    first_covered_run_id, last_covered_run_id, run_origin,
+                    covered_at, updated_at
+                )
+                SELECT
+                    source_name,
+                    source_fingerprint,
+                    source_date,
+                    'COVERED',
+                    MIN(first_covered_run_id),
+                    MAX(last_covered_run_id),
+                    MAX(run_origin),
+                    MIN(covered_at),
+                    MAX(updated_at)
+                FROM source_date_coverage_v16
+                WHERE status = 'COVERED'
+                GROUP BY source_name, source_fingerprint, source_date
+                """
+            )
+            conn.execute("DROP TABLE source_date_coverage_v16")
+    else:
+        _create_source_scoped_coverage_table(conn)
+
+    _backfill_complete_retrieval_coverage(conn)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS source_date_corpora (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_name TEXT NOT NULL,
+            source_fingerprint TEXT NOT NULL,
+            source_date TEXT NOT NULL,
+            article_count INTEGER NOT NULL,
+            captured_run_id INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(source_name, source_fingerprint, source_date),
+            CHECK(article_count >= 0),
+            FOREIGN KEY(captured_run_id) REFERENCES app_runs(id) ON DELETE RESTRICT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS source_date_corpus_articles (
+            corpus_id INTEGER NOT NULL,
+            article_id INTEGER NOT NULL,
+            PRIMARY KEY(corpus_id, article_id),
+            FOREIGN KEY(corpus_id) REFERENCES source_date_corpora(id) ON DELETE CASCADE,
+            FOREIGN KEY(article_id) REFERENCES articles(id) ON DELETE RESTRICT
+        )
+        """
+    )
+
+
+def _migration_run_cancellation(conn: sqlite3.Connection) -> None:
+    """Add durable cancellation requests and exact provider-process ownership."""
+
+    if _table_exists(conn, "app_runs"):
+        columns = _table_columns(conn, "app_runs")
+        if "cancel_requested_at" not in columns:
+            conn.execute("ALTER TABLE app_runs ADD COLUMN cancel_requested_at TEXT")
+        if "cancel_reason" not in columns:
+            conn.execute("ALTER TABLE app_runs ADD COLUMN cancel_reason TEXT")
+        if "run_owner" not in columns:
+            conn.execute("ALTER TABLE app_runs ADD COLUMN run_owner TEXT")
+        if _table_exists(conn, "run_locks"):
+            conn.execute(
+                """
+                UPDATE app_runs
+                SET run_owner = (
+                    SELECT owner FROM run_locks WHERE name = ?
+                )
+                WHERE run_owner IS NULL
+                    AND completed_at IS NULL
+                    AND status IN (?, ?, 'running')
+                    AND id = (
+                        SELECT id
+                        FROM app_runs
+                        WHERE completed_at IS NULL
+                            AND status IN (?, ?, 'running')
+                        ORDER BY id DESC
+                        LIMIT 1
+                    )
+                    AND EXISTS (SELECT 1 FROM run_locks WHERE name = ?)
+                """,
+                (
+                    DIGEST_RUN_LOCK,
+                    APP_RUN_STARTING,
+                    APP_RUN_RUNNING,
+                    APP_RUN_STARTING,
+                    APP_RUN_RUNNING,
+                    DIGEST_RUN_LOCK,
+                ),
+            )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS run_provider_processes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id INTEGER NOT NULL,
+            call_kind TEXT NOT NULL,
+            pid INTEGER NOT NULL,
+            process_group_id INTEGER NOT NULL,
+            process_start_ticks INTEGER,
+            started_at TEXT NOT NULL,
+            completed_at TEXT,
+            status TEXT NOT NULL,
+            CHECK(pid > 0),
+            CHECK(process_group_id > 0),
+            FOREIGN KEY(run_id) REFERENCES app_runs(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_run_provider_processes_active
+        ON run_provider_processes(run_id, completed_at, status)
+        """
+    )
+
+
+def _create_source_scoped_coverage_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS source_date_coverage (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_name TEXT NOT NULL,
+            source_fingerprint TEXT NOT NULL,
+            source_date TEXT NOT NULL,
+            status TEXT NOT NULL,
+            first_covered_run_id INTEGER NOT NULL,
+            last_covered_run_id INTEGER NOT NULL,
+            run_origin TEXT NOT NULL,
+            covered_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(source_name, source_fingerprint, source_date),
+            FOREIGN KEY(first_covered_run_id) REFERENCES app_runs(id) ON DELETE RESTRICT,
+            FOREIGN KEY(last_covered_run_id) REFERENCES app_runs(id) ON DELETE RESTRICT
+        )
+        """
+    )
+
+
+def _record_complete_source_date(
+    conn: sqlite3.Connection,
+    source_name: str,
+    source_fingerprint: str,
+    source_date: date,
+    article_ids: Sequence[int],
+    run_id: int,
+    run_origin: RunOrigin,
+    now: str,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO source_date_coverage (
+            source_name, source_fingerprint, source_date, status,
+            first_covered_run_id, last_covered_run_id,
+            run_origin, covered_at, updated_at
+        )
+        VALUES (?, ?, ?, 'COVERED', ?, ?, ?, ?, ?)
+        ON CONFLICT(source_name, source_fingerprint, source_date) DO UPDATE SET
+            status = 'COVERED',
+            last_covered_run_id = excluded.last_covered_run_id,
+            run_origin = excluded.run_origin,
+            updated_at = excluded.updated_at
+        """,
+        (
+            source_name,
+            source_fingerprint,
+            source_date.isoformat(),
+            run_id,
+            run_id,
+            run_origin.value,
+            now,
+            now,
+        ),
+    )
+    conn.execute(
+        """
+        INSERT INTO source_date_corpora (
+            source_name, source_fingerprint, source_date, article_count,
+            captured_run_id, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(source_name, source_fingerprint, source_date) DO UPDATE SET
+            article_count = excluded.article_count,
+            captured_run_id = excluded.captured_run_id,
+            updated_at = excluded.updated_at
+        """,
+        (
+            source_name,
+            source_fingerprint,
+            source_date.isoformat(),
+            len(article_ids),
+            run_id,
+            now,
+            now,
+        ),
+    )
+    row = conn.execute(
+        """
+        SELECT id
+        FROM source_date_corpora
+        WHERE source_name = ? AND source_fingerprint = ? AND source_date = ?
+        """,
+        (source_name, source_fingerprint, source_date.isoformat()),
+    ).fetchone()
+    if row is None:
+        raise RuntimeError("failed to load source-date corpus")
+    corpus_id = int(row["id"])
+    conn.execute(
+        "DELETE FROM source_date_corpus_articles WHERE corpus_id = ?",
+        (corpus_id,),
+    )
+    conn.executemany(
+        """
+        INSERT INTO source_date_corpus_articles (corpus_id, article_id)
+        VALUES (?, ?)
+        """,
+        ((corpus_id, article_id) for article_id in article_ids),
+    )
+
+
+def _persist_app_run_retrieval_metadata(
+    conn: sqlite3.Connection,
+    *,
+    run_id: int,
+    requested_source_dates: Sequence[date],
+    covered_source_dates: Sequence[date],
+    empty_source_dates: Sequence[date],
+    incomplete_source_dates: Sequence[date],
+    retrieval_complete: bool,
+    retrieval_safety_limit: int | None,
+    retrieved_count: int | None,
+    stored_count: int | None,
+) -> None:
+    assignments = [
+        "requested_source_dates_json = ?",
+        "covered_source_dates_json = ?",
+        "empty_source_dates_json = ?",
+        "incomplete_source_dates_json = ?",
+        "retrieval_complete = ?",
+        "retrieval_safety_limit = ?",
+    ]
+    params: list[object] = [
+        json.dumps([value.isoformat() for value in requested_source_dates]),
+        json.dumps([value.isoformat() for value in covered_source_dates]),
+        json.dumps([value.isoformat() for value in empty_source_dates]),
+        json.dumps([value.isoformat() for value in incomplete_source_dates]),
+        int(retrieval_complete),
+        retrieval_safety_limit,
+    ]
+    if retrieved_count is not None:
+        assignments.append("retrieved_count = ?")
+        params.append(retrieved_count)
+    if stored_count is not None:
+        assignments.append("stored_count = ?")
+        params.append(stored_count)
+    params.append(run_id)
+    conn.execute(
+        f"""
+        UPDATE app_runs
+        SET {', '.join(assignments)}
+        WHERE id = ? AND completed_at IS NULL
+        """,
+        tuple(params),
+    )
+
+
+def _backfill_complete_retrieval_coverage(conn: sqlite3.Connection) -> None:
+    if not _table_exists(conn, "app_runs"):
+        return
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM app_runs
+        WHERE status IN (?, ?, ?, ?)
+            AND source_fingerprint IS NOT NULL
+        ORDER BY id ASC
+        """,
+        (
+            APP_RUN_COMPLETED,
+            APP_RUN_FAILED,
+            APP_RUN_PARTIAL,
+            APP_RUN_ANALYSIS_UNAVAILABLE,
+        ),
+    ).fetchall()
+    for row in rows:
+        covered = _migration_json_dates(row["covered_source_dates_json"])
+        incomplete = _migration_json_dates(row["incomplete_source_dates_json"])
+        for source_date in sorted(covered - incomplete):
+            timestamp = str(row["completed_at"] or row["started_at"])
+            conn.execute(
+                """
+                INSERT INTO source_date_coverage (
+                    source_name, source_fingerprint, source_date, status,
+                    first_covered_run_id, last_covered_run_id, run_origin,
+                    covered_at, updated_at
+                )
+                VALUES (?, ?, ?, 'COVERED', ?, ?, ?, ?, ?)
+                ON CONFLICT(source_name, source_fingerprint, source_date) DO UPDATE SET
+                    status = 'COVERED',
+                    last_covered_run_id = excluded.last_covered_run_id,
+                    run_origin = excluded.run_origin,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    str(row["source_name"]),
+                    str(row["source_fingerprint"]),
+                    source_date,
+                    int(row["id"]),
+                    int(row["id"]),
+                    str(row["run_origin"]),
+                    timestamp,
+                    timestamp,
+                ),
+            )
+
+
+def _migration_json_dates(value: object) -> set[str]:
+    try:
+        payload = json.loads(str(value))
+    except (json.JSONDecodeError, TypeError):
+        return set()
+    if not isinstance(payload, list):
+        return set()
+    dates: set[str] = set()
+    for item in payload:
+        if not isinstance(item, str):
+            continue
+        try:
+            dates.add(date.fromisoformat(item).isoformat())
+        except ValueError:
+            continue
+    return dates
+
+
 MIGRATIONS: Sequence[SchemaMigration] = (
     SchemaMigration(1, "core m1/m2 tables", _migration_core_tables),
     SchemaMigration(2, "profile-fingerprinted relevance analyses", _migration_profile_fingerprints),
@@ -3056,6 +3837,16 @@ MIGRATIONS: Sequence[SchemaMigration] = (
         "preselection decision evidence",
         _migration_preselection_decisions,
     ),
+    SchemaMigration(
+        17,
+        "source-scoped coverage and reusable corpora",
+        _migration_source_scoped_coverage,
+    ),
+    SchemaMigration(
+        18,
+        "durable run cancellation and provider process ownership",
+        _migration_run_cancellation,
+    ),
 )
 
 
@@ -3077,8 +3868,10 @@ def _mark_unfinished_runs_failed(
 ) -> None:
     params: list[object] = [
         completed_at,
+        APP_RUN_CANCELLED,
         APP_RUN_FAILED,
         message,
+        APP_RUN_CANCELLED.lower(),
         APP_RUN_FAILED.lower(),
         message,
         APP_RUN_STARTING,
@@ -3096,11 +3889,48 @@ def _mark_unfinished_runs_failed(
     conn.execute(
         f"""
         UPDATE app_runs
-        SET completed_at = ?, status = ?, error_message = ?,
-            progress_stage = ?, progress_message = ?
+        SET completed_at = ?,
+            status = CASE WHEN cancel_requested_at IS NOT NULL THEN ? ELSE ? END,
+            error_message = CASE
+                WHEN cancel_requested_at IS NOT NULL
+                    THEN COALESCE(cancel_reason, 'Cancelled by user.')
+                ELSE ?
+            END,
+            progress_stage = CASE
+                WHEN cancel_requested_at IS NOT NULL THEN ?
+                ELSE ?
+            END,
+            progress_message = CASE
+                WHEN cancel_requested_at IS NOT NULL
+                    THEN COALESCE(cancel_reason, 'Cancelled by user.')
+                ELSE ?
+            END
         WHERE completed_at IS NULL AND status IN (?, ?, ?){started_clause}{run_clause}
         """,
         tuple(params),
+    )
+    conn.execute(
+        """
+        UPDATE run_provider_processes
+        SET completed_at = COALESCE(completed_at, ?),
+            status = COALESCE(
+                (SELECT status FROM app_runs WHERE id = run_provider_processes.run_id),
+                ?
+            )
+        WHERE completed_at IS NULL
+            AND run_id IN (
+                SELECT id
+                FROM app_runs
+                WHERE completed_at = ? AND status IN (?, ?)
+            )
+        """,
+        (
+            completed_at,
+            APP_RUN_FAILED,
+            completed_at,
+            APP_RUN_FAILED,
+            APP_RUN_CANCELLED,
+        ),
     )
 
 

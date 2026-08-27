@@ -63,7 +63,9 @@ class SettingsPageTests(unittest.TestCase):
         self.assertNotIn("deterministic abstract preselection", summary)
 
     def test_run_now_uses_configured_stage1_preselector(self) -> None:
-        source = inspect.getsource(settings._run_automatic_now)
+        from research_digest import worker
+
+        source = inspect.getsource(worker.main)
 
         self.assertIn("use_configured_preselector=True", source)
 

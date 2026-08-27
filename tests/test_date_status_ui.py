@@ -12,7 +12,7 @@ class DateStatusUiTests(unittest.TestCase):
         completed = DateCoverageStatus(
             source_date=date(2026, 8, 14),
             status="completed",
-            label="Completed digest",
+            label="Source covered",
             selected=True,
         )
         pending = DateCoverageStatus(
@@ -32,7 +32,7 @@ class DateStatusUiTests(unittest.TestCase):
                 DateCoverageStatus(
                     source_date=date(2026, 8, 14),
                     status="completed",
-                    label="Completed digest",
+                    label="Source covered",
                     selected=True,
                     run_id=30,
                     retrieved_count=19,
@@ -48,7 +48,7 @@ class DateStatusUiTests(unittest.TestCase):
         )
 
         self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["Status"], "Completed digest")
+        self.assertEqual(rows[0]["Status"], "Source covered")
         self.assertEqual(rows[0]["Run"], "#30")
         self.assertEqual(rows[0]["Retrieved"], 19)
 

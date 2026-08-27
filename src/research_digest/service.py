@@ -2,18 +2,34 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, cast
 
 from research_digest.analysis.base import LLMAnalyzer
 from research_digest.calibration import CalibrationSummary, build_calibration_summary
-from research_digest.coverage import (
-    build_automatic_coverage_plan,
-    digest_is_coverage_eligible,
-    mark_digest_coverage,
+from research_digest.cancellation import (
+    RunCancelled,
+    bind_run_cancellation,
+    cancellation_signal_scope,
+    raise_if_cancelled,
+    stop_abandoned_provider_processes,
 )
-from research_digest.db import APP_RUN_COMPLETED, SOURCE_ARXIV, Database
+from research_digest.coverage import (
+    CoverageScope,
+    build_automatic_coverage_plan,
+    build_coverage_scope,
+    date_selection_from_dates,
+    digest_is_coverage_eligible,
+)
+from research_digest.db import (
+    APP_RUN_CANCELLED,
+    APP_RUN_COMPLETED,
+    APP_RUN_FAILED,
+    SOURCE_ARXIV,
+    Database,
+)
 from research_digest.errors import sanitize_error
 from research_digest.history import persist_run_snapshot
 from research_digest.library_context import (
@@ -21,6 +37,7 @@ from research_digest.library_context import (
     generate_automatic_library_context_for_digest,
 )
 from research_digest.models import (
+    Article,
     ArxivSourceConfig,
     DateSelection,
     DigestResult,
@@ -36,6 +53,7 @@ from research_digest.quantitative_calibration import (
 from research_digest.run_locks import current_process_run_owner
 from research_digest.sources.base import LatestAvailableDateResolver, SourceAdapter
 from research_digest.sources.registry import ARXIV_SOURCE_DEFINITION, SourceRunRequest
+from research_digest.sources.stored import StoredDateSource
 from research_digest.synthesis import (
     CrossPaperSynthesis,
     CrossPaperSynthesizer,
@@ -137,76 +155,114 @@ def run_digest_for_profile(
 
     if acquire_lock:
         owner = _lock_owner()
-        db.acquire_run_lock(owner=owner, stale_after_seconds=stale_lock_seconds)
-        try:
-            return run_digest_for_profile(
-                db=db,
-                source=source,
-                analyzer=analyzer,
-                profile_id=profile_id,
-                source_request=source_request,
-                date_selection=date_selection,
-                run_origin=run_origin,
-                now=now,
-                preselector=preselector,
-                synthesis_builder=synthesis_builder,
-                library_context_generator=library_context_generator,
-                automatic_library_context_threshold=automatic_library_context_threshold,
-                relevance_calibration_prompt_probability=(
-                    relevance_calibration_prompt_probability
-                ),
-                calibration_rng=calibration_rng,
-                acquire_lock=False,
-                stale_lock_seconds=stale_lock_seconds,
+        with cancellation_signal_scope():
+            stop_abandoned_provider_processes(
+                db,
+                stale_after_seconds=stale_lock_seconds,
             )
-        finally:
-            db.release_run_lock(owner=owner)
+            db.acquire_run_lock(owner=owner, stale_after_seconds=stale_lock_seconds)
+            try:
+                return run_digest_for_profile(
+                    db=db,
+                    source=source,
+                    analyzer=analyzer,
+                    profile_id=profile_id,
+                    source_request=source_request,
+                    date_selection=date_selection,
+                    run_origin=run_origin,
+                    now=now,
+                    preselector=preselector,
+                    synthesis_builder=synthesis_builder,
+                    library_context_generator=library_context_generator,
+                    automatic_library_context_threshold=automatic_library_context_threshold,
+                    relevance_calibration_prompt_probability=(
+                        relevance_calibration_prompt_probability
+                    ),
+                    calibration_rng=calibration_rng,
+                    acquire_lock=False,
+                    stale_lock_seconds=stale_lock_seconds,
+                )
+            finally:
+                db.release_run_lock(owner=owner)
 
+    active_source_request = _resolve_source_request(
+        db=db,
+        source=source,
+        source_request=source_request,
+    )
+    effective_source_request = _use_stored_corpus_when_complete(
+        db=db,
+        source_request=active_source_request,
+        date_selection=date_selection,
+    )
     digest = run_digest(
         db=db,
         source=source,
         analyzer=analyzer,
-        source_request=source_request,
+        source_request=effective_source_request,
         date_selection=date_selection,
         run_origin=run_origin,
         profile_id=profile_id,
         now=now,
         preselector=preselector,
+        defer_terminalization=True,
     )
-    active_synthesis_builder = synthesis_builder or DeterministicCrossPaperSynthesizer()
-    synthesis = active_synthesis_builder.build(
-        items=digest.items,
-        threshold=digest.profile.relevance_threshold,
-    )
-    if library_context_generator is not None:
-        if automatic_library_context_threshold is None:
-            raise DigestPipelineError("automatic Library context threshold is missing")
-        try:
-            generate_automatic_library_context_for_digest(
+    try:
+        with bind_run_cancellation(db, digest.run_id):
+            raise_if_cancelled()
+            active_synthesis_builder = synthesis_builder or DeterministicCrossPaperSynthesizer()
+            synthesis = active_synthesis_builder.build(
+                items=digest.items,
+                threshold=digest.profile.relevance_threshold,
+            )
+            raise_if_cancelled()
+            if library_context_generator is not None:
+                if automatic_library_context_threshold is None:
+                    raise DigestPipelineError("automatic Library context threshold is missing")
+                try:
+                    generate_automatic_library_context_for_digest(
+                        db,
+                        digest=digest,
+                        generator=library_context_generator,
+                        threshold=automatic_library_context_threshold,
+                    )
+                except Exception as exc:
+                    _ = sanitize_error(exc)
+            raise_if_cancelled()
+            persist_run_snapshot(db=db, digest=digest, synthesis=synthesis)
+            raise_if_cancelled()
+            maybe_create_quantitative_calibration_prompt(
                 db,
                 digest=digest,
-                generator=library_context_generator,
-                threshold=automatic_library_context_threshold,
+                probability=relevance_calibration_prompt_probability,
+                rng=calibration_rng,
             )
-        except Exception as exc:
-            _ = sanitize_error(exc)
-    persist_run_snapshot(db=db, digest=digest, synthesis=synthesis)
-    mark_digest_coverage(
-        db=db,
-        digest=digest,
-        source_name=source_request.source_name if source_request is not None else SOURCE_ARXIV,
-    )
-    maybe_create_quantitative_calibration_prompt(
-        db,
-        digest=digest,
-        probability=relevance_calibration_prompt_probability,
-        rng=calibration_rng,
-    )
-    return ProfileDigestRun(
-        digest=digest,
-        calibration=_build_calibration(db, digest),
-        synthesis=synthesis,
-    )
+            raise_if_cancelled()
+            calibration = _build_calibration(db, digest)
+            effective_status = _finish_digest_result(
+                db,
+                digest=digest,
+                status=digest.run_status,
+                error_message=digest.error_message,
+            )
+            if effective_status == APP_RUN_CANCELLED:
+                raise RunCancelled(digest.run_id)
+            return ProfileDigestRun(
+                digest=digest,
+                calibration=calibration,
+                synthesis=synthesis,
+            )
+    except BaseException as exc:
+        cancelled = isinstance(exc, RunCancelled) or db.app_run_cancellation_requested(
+            digest.run_id
+        )
+        _finish_digest_result(
+            db,
+            digest=digest,
+            status=APP_RUN_CANCELLED if cancelled else APP_RUN_FAILED,
+            error_message="Cancelled by user." if cancelled else sanitize_error(exc),
+        )
+        raise
 
 
 def run_digest_for_enabled_profiles(
@@ -228,27 +284,32 @@ def run_digest_for_enabled_profiles(
     """Run the digest workflow for every enabled profile."""
 
     owner = _lock_owner()
-    db.acquire_run_lock(owner=owner, stale_after_seconds=stale_lock_seconds)
-    try:
-        return _run_digest_for_enabled_profiles_unlocked(
-            db=db,
-            source=source,
-            analyzer=analyzer,
-            source_request=source_request,
-            date_selection=date_selection,
-            run_origin=run_origin,
-            now=now,
-            preselector=preselector,
-            synthesis_builder=synthesis_builder,
-            library_context_generator=library_context_generator,
-            automatic_library_context_threshold=automatic_library_context_threshold,
-            relevance_calibration_prompt_probability=(
-                relevance_calibration_prompt_probability
-            ),
-            stale_lock_seconds=stale_lock_seconds,
+    with cancellation_signal_scope():
+        stop_abandoned_provider_processes(
+            db,
+            stale_after_seconds=stale_lock_seconds,
         )
-    finally:
-        db.release_run_lock(owner=owner)
+        db.acquire_run_lock(owner=owner, stale_after_seconds=stale_lock_seconds)
+        try:
+            return _run_digest_for_enabled_profiles_unlocked(
+                db=db,
+                source=source,
+                analyzer=analyzer,
+                source_request=source_request,
+                date_selection=date_selection,
+                run_origin=run_origin,
+                now=now,
+                preselector=preselector,
+                synthesis_builder=synthesis_builder,
+                library_context_generator=library_context_generator,
+                automatic_library_context_threshold=automatic_library_context_threshold,
+                relevance_calibration_prompt_probability=(
+                    relevance_calibration_prompt_probability
+                ),
+                stale_lock_seconds=stale_lock_seconds,
+            )
+        finally:
+            db.release_run_lock(owner=owner)
 
 
 def run_automatic_digest_for_enabled_profiles(
@@ -270,27 +331,32 @@ def run_automatic_digest_for_enabled_profiles(
     """Run scheduled date-native catch-up for every enabled profile."""
 
     owner = _lock_owner()
-    db.acquire_run_lock(owner=owner, stale_after_seconds=stale_lock_seconds)
-    try:
-        return _run_automatic_digest_for_enabled_profiles_unlocked(
-            db=db,
-            source=source,
-            analyzer=analyzer,
-            coverage_start_date=coverage_start_date,
-            catch_up_missed_dates=catch_up_missed_dates,
-            source_request=source_request,
-            now=now,
-            preselector=preselector,
-            synthesis_builder=synthesis_builder,
-            library_context_generator=library_context_generator,
-            automatic_library_context_threshold=automatic_library_context_threshold,
-            relevance_calibration_prompt_probability=(
-                relevance_calibration_prompt_probability
-            ),
-            stale_lock_seconds=stale_lock_seconds,
+    with cancellation_signal_scope():
+        stop_abandoned_provider_processes(
+            db,
+            stale_after_seconds=stale_lock_seconds,
         )
-    finally:
-        db.release_run_lock(owner=owner)
+        db.acquire_run_lock(owner=owner, stale_after_seconds=stale_lock_seconds)
+        try:
+            return _run_automatic_digest_for_enabled_profiles_unlocked(
+                db=db,
+                source=source,
+                analyzer=analyzer,
+                coverage_start_date=coverage_start_date,
+                catch_up_missed_dates=catch_up_missed_dates,
+                source_request=source_request,
+                now=now,
+                preselector=preselector,
+                synthesis_builder=synthesis_builder,
+                library_context_generator=library_context_generator,
+                automatic_library_context_threshold=automatic_library_context_threshold,
+                relevance_calibration_prompt_probability=(
+                    relevance_calibration_prompt_probability
+                ),
+                stale_lock_seconds=stale_lock_seconds,
+            )
+        finally:
+            db.release_run_lock(owner=owner)
 
 
 def _run_automatic_digest_for_enabled_profiles_unlocked(
@@ -329,7 +395,6 @@ def _run_automatic_digest_for_enabled_profiles_unlocked(
     source_config = cast(ArxivSourceConfig, active_source_request.config)
     plan = build_automatic_coverage_plan(
         db=db,
-        profiles=profiles,
         source_name=active_source_request.source_name,
         source_config=source_config,
         latest_resolver=active_source_request.adapter,
@@ -337,28 +402,22 @@ def _run_automatic_digest_for_enabled_profiles_unlocked(
         catch_up_missed_dates=catch_up_missed_dates,
     )
     aggregate_date_selection = plan.date_selection
-    if aggregate_date_selection is None:
-        return HeadlessDigestRun(
-            profiles=(),
-            date_selection=None,
-            pending_source_dates=plan.pending_dates,
-            latest_available_source_date=plan.latest_available_date,
-        )
 
     runs: list[HeadlessProfileRun] = []
     for profile in profiles:
         if profile.id is None:
             raise DigestPipelineError("enabled interest profile is missing an id")
-        profile_plan = build_automatic_coverage_plan(
-            db=db,
-            profiles=(profile,),
-            source_name=active_source_request.source_name,
-            source_config=source_config,
-            latest_resolver=active_source_request.adapter,
-            coverage_start_date=coverage_start_date,
-            catch_up_missed_dates=catch_up_missed_dates,
-        )
-        profile_date_selection = profile_plan.date_selection
+        profile_date_selection = aggregate_date_selection
+        if profile_date_selection is None:
+            profile_date_selection = date_selection_from_dates(
+                _pending_local_profile_analysis_dates(
+                    db=db,
+                    profile_id=profile.id,
+                    profile_fingerprint=profile_semantic_fingerprint(profile),
+                    source_request=active_source_request,
+                    candidate_dates=plan.candidate_dates,
+                )
+            )
         if profile_date_selection is None:
             continue
         try:
@@ -475,9 +534,46 @@ def _run_digest_for_enabled_profiles_unlocked(
 
 
 def _profile_digest_succeeded(digest: ProfileDigestRun) -> bool:
-    if digest.digest.date_selection is not None:
-        return digest_is_coverage_eligible(digest.digest)
-    return digest.digest.run_status == APP_RUN_COMPLETED
+    if digest.digest.run_status != APP_RUN_COMPLETED:
+        return False
+    return (
+        digest.digest.date_selection is None
+        or digest_is_coverage_eligible(digest.digest)
+    )
+
+
+def _finish_digest_result(
+    db: Database,
+    *,
+    digest: DigestResult,
+    status: str,
+    error_message: str | None,
+) -> str:
+    """Terminalize once while preserving every progress and retrieval fact."""
+
+    return db.finish_app_run(
+        digest.run_id,
+        status=status,
+        retrieved_count=digest.retrieved_count,
+        stored_count=digest.stored_count,
+        preselected_count=digest.preselected_count,
+        skipped_analysis_count=digest.skipped_analysis_count,
+        analyzed_count=digest.analyzed_count,
+        relevant_count=digest.above_threshold_count,
+        error_message=error_message,
+        requested_source_dates=tuple(
+            value.isoformat() for value in digest.requested_source_dates
+        ),
+        covered_source_dates=tuple(
+            value.isoformat() for value in digest.covered_source_dates
+        ),
+        empty_source_dates=tuple(value.isoformat() for value in digest.empty_source_dates),
+        incomplete_source_dates=tuple(
+            value.isoformat() for value in digest.incomplete_source_dates
+        ),
+        retrieval_complete=digest.retrieval_complete,
+        retrieval_safety_limit=digest.retrieval_safety_limit,
+    )
 
 
 def _profile_digest_error_message(digest: ProfileDigestRun) -> str:
@@ -489,6 +585,164 @@ def _profile_digest_error_message(digest: ProfileDigestRun) -> str:
     if not digest.digest.analysis_complete:
         return f"Analysis incomplete for {len(digest.digest.unresolved_articles)} paper(s)."
     return "Digest did not reach the required completed state."
+
+
+def _resolve_source_request(
+    *,
+    db: Database,
+    source: SourceAdapter,
+    source_request: SourceRunRequest[Any] | None,
+) -> SourceRunRequest[Any]:
+    if source_request is not None:
+        return source_request
+    source_config = db.get_arxiv_config()
+    if source_config is None:
+        raise DigestPipelineError("source configuration is missing")
+    return SourceRunRequest(
+        source_name=SOURCE_ARXIV,
+        adapter=source,
+        config=source_config,
+    )
+
+
+def _use_stored_corpus_when_complete(
+    *,
+    db: Database,
+    source_request: SourceRunRequest[Any],
+    date_selection: DateSelection | None,
+) -> SourceRunRequest[Any]:
+    if date_selection is None or not isinstance(source_request.config, ArxivSourceConfig):
+        return source_request
+    selected_dates = date_selection.selected_dates()
+    if not selected_dates:
+        return source_request
+    scope = build_coverage_scope(
+        source_name=source_request.source_name,
+        source_config=source_request.config,
+    )
+    corpora: dict[date, tuple[Article, ...]] = {}
+    for source_date in selected_dates:
+        corpus = db.load_source_date_corpus(
+            source_name=scope.source_name,
+            source_fingerprints=scope.accepted_source_fingerprints,
+            source_date=source_date,
+        )
+        if corpus is None:
+            corpus = _recover_legacy_covered_corpus(
+                db=db,
+                scope=scope,
+                source_config=source_request.config,
+                source_date=source_date,
+            )
+        if corpus is None:
+            return source_request
+        corpora[source_date] = corpus
+    return SourceRunRequest(
+        source_name=source_request.source_name,
+        adapter=StoredDateSource(corpora),
+        config=source_request.config,
+    )
+
+
+def _recover_legacy_covered_corpus(
+    *,
+    db: Database,
+    scope: CoverageScope,
+    source_config: ArxivSourceConfig,
+    source_date: date,
+) -> tuple[Article, ...] | None:
+    """Boundedly reconstruct v16 covered corpora from locally stored articles."""
+
+    covered = any(
+        source_date
+        in db.list_covered_source_dates(
+            source_name=scope.source_name,
+            source_fingerprint=fingerprint,
+            start_date=source_date,
+            end_date=source_date,
+        )
+        for fingerprint in scope.accepted_source_fingerprints
+    )
+    if not covered:
+        return None
+    return db.list_articles_for_source_date(
+        source_name=scope.source_name,
+        source_date=source_date,
+        categories=source_config.categories or (),
+    )
+
+
+def _pending_local_profile_analysis_dates(
+    *,
+    db: Database,
+    profile_id: int,
+    profile_fingerprint: str,
+    source_request: SourceRunRequest[Any],
+    candidate_dates: tuple[date, ...],
+) -> tuple[date, ...]:
+    """Return source-covered dates needing analysis for this profile semantics."""
+
+    if not isinstance(source_request.config, ArxivSourceConfig):
+        return ()
+    scope = build_coverage_scope(
+        source_name=source_request.source_name,
+        source_config=source_request.config,
+    )
+    accepted = set(scope.accepted_source_fingerprints)
+    completed: set[date] = set()
+    candidate_set = set(candidate_dates)
+    for row in db.get_app_runs():
+        if row["profile_id"] is None or int(row["profile_id"]) != profile_id:
+            continue
+        if str(row["profile_fingerprint"] or "") != profile_fingerprint:
+            continue
+        if str(row["source_name"]) != scope.source_name:
+            continue
+        if str(row["source_fingerprint"] or "") not in accepted:
+            continue
+        if str(row["status"]) != APP_RUN_COMPLETED:
+            continue
+        completed.update(
+            _date_values_from_json(row["covered_source_dates_json"]) & candidate_set
+        )
+
+    pending: list[date] = []
+    for source_date in candidate_dates:
+        if source_date in completed:
+            continue
+        corpus = db.load_source_date_corpus(
+            source_name=scope.source_name,
+            source_fingerprints=scope.accepted_source_fingerprints,
+            source_date=source_date,
+        )
+        if corpus is None:
+            corpus = _recover_legacy_covered_corpus(
+                db=db,
+                scope=scope,
+                source_config=source_request.config,
+                source_date=source_date,
+            )
+        if corpus is not None:
+            pending.append(source_date)
+    return tuple(pending)
+
+
+def _date_values_from_json(value: object) -> set[date]:
+    try:
+        payload = json.loads(str(value))
+    except (json.JSONDecodeError, TypeError):
+        return set()
+    if not isinstance(payload, list):
+        return set()
+    dates: set[date] = set()
+    for item in payload:
+        if not isinstance(item, str):
+            continue
+        try:
+            dates.add(date.fromisoformat(item))
+        except ValueError:
+            continue
+    return dates
 
 
 def _lock_owner() -> str:

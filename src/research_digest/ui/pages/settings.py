@@ -12,8 +12,8 @@ from research_digest.automation import (
     install_or_update_schedule,
     read_schedule_status,
     remove_schedule,
-    run_automatic_digest_now,
 )
+from research_digest.background import start_automatic_digest_worker
 from research_digest.backup import BackupResult, run_backup
 from research_digest.config import (
     AppConfig,
@@ -26,7 +26,6 @@ from research_digest.config import (
     save_automation_settings,
 )
 from research_digest.coverage import (
-    build_automatic_coverage_plan,
     build_date_coverage_statuses,
     digest_is_coverage_eligible,
 )
@@ -42,14 +41,15 @@ from research_digest.doctor import DoctorCheck, DoctorReport, DoctorSeverity, ru
 from research_digest.errors import sanitize_error
 from research_digest.models import profile_semantic_fingerprint
 from research_digest.scheduler import ScheduleOperationResult, ScheduleStatus
-from research_digest.sources.arxiv import ArxivSource
 from research_digest.suggested_interests import (
     create_profile_from_suggestion,
     dismiss_suggested_interest,
     refresh_suggested_interests,
 )
-from research_digest.ui.common import get_analyzer, get_database
+from research_digest.ui.article_header import render_article_header
+from research_digest.ui.common import get_database
 from research_digest.ui.date_status import month_bounds, render_date_status_grid
+from research_digest.ui.run_status import remember_digest_launch, render_active_digest_control
 
 _RUN_NOW_NOTICE_KEY = "automation_run_now_notice"
 
@@ -361,9 +361,14 @@ def _render_suggested_interests(db: Database) -> None:
                     for article_id in suggestion.evidence_article_ids:
                         article = db.get_article(article_id)
                         if article is not None:
-                            st.write(
-                                f"{article.source}:{article.source_article_id} - "
-                                f"{article.title}"
+                            render_article_header(
+                                article,
+                                context=(
+                                    f"settings:suggested-interest:{suggestion.id}:"
+                                    f"{article.source}:{article.source_article_id}"
+                                ),
+                                title_style="markdown",
+                                show_all_authors=False,
                             )
                 with st.form(f"suggested_interest_{suggestion.id}", border=False):
                     name = st.text_input("Profile name", value=suggestion.suggested_name)
@@ -405,7 +410,10 @@ def _render_suggested_interests(db: Database) -> None:
         )
 
 
-def _render_automation(config: AppConfig, db: Database) -> None:
+def _render_automation(
+    config: AppConfig,
+    db: Database,
+) -> None:
     import streamlit as st
 
     st.subheader("Automation")
@@ -485,9 +493,14 @@ def _render_automation(config: AppConfig, db: Database) -> None:
 
         _render_coverage_overview(config, db)
         _render_run_now_notice()
+        active_digest = render_active_digest_control(db)
 
         with st.container(horizontal=True):
-            if st.button("Run now", icon=":material/play_arrow:"):
+            if st.button(
+                "Run now",
+                icon=":material/play_arrow:",
+                disabled=active_digest,
+            ):
                 _run_automatic_now(config, db)
             if st.button(
                 "Disable schedule",
@@ -552,16 +565,10 @@ def _render_coverage_overview(config: AppConfig, db: Database) -> None:
     import streamlit as st
 
     source_config = db.get_arxiv_config()
-    profiles = db.list_interest_profiles(enabled_only=True)
-    if source_config is None or not profiles:
-        st.info("Coverage status is available after arXiv and an enabled profile are configured.")
+    if source_config is None:
+        st.info("Coverage status is available after arXiv is configured.")
         return
-    selected_profile = st.selectbox(
-        "Coverage profile",
-        options=profiles,
-        format_func=lambda profile: profile.name,
-        key="automation_coverage_profile",
-    )
+    st.caption("Coverage tracks complete source retrieval and is independent of profiles.")
     st.caption(f"Catch up from: {config.automatic_coverage_start_date.isoformat()}")
     st.caption("Latest available source date: checked when Run now starts.")
     st.caption("Pending source dates: checked when Run now starts.")
@@ -573,7 +580,6 @@ def _render_coverage_overview(config: AppConfig, db: Database) -> None:
     render_date_status_grid(
         statuses=build_date_coverage_statuses(
             db=db,
-            profile=selected_profile,
             source_name=SOURCE_ARXIV,
             source_config=source_config,
             start_date=start_date,
@@ -595,59 +601,20 @@ def _run_automatic_now(config: AppConfig, db: Database) -> None:
             icon=":material/warning:",
         )
         return
-    source = ArxivSource()
     try:
-        plan = build_automatic_coverage_plan(
-            db=db,
-            profiles=tuple(profiles),
-            source_name=SOURCE_ARXIV,
-            source_config=source_config,
-            latest_resolver=source,
-            coverage_start_date=config.automatic_coverage_start_date,
-            catch_up_missed_dates=config.automatic_catch_up_enabled,
-        )
+        launch = start_automatic_digest_worker()
     except Exception as exc:
         st.error(
-            "Run now could not resolve pending dates: " + sanitize_error(exc),
+            "Run now could not start: " + sanitize_error(exc),
             icon=":material/error:",
         )
         return
-    if not plan.pending_dates:
-        message = run_now_noop_message(
-            coverage_start_date=config.automatic_coverage_start_date,
-            latest_available_source_date=plan.latest_available_date,
-        )
-        st.session_state[_RUN_NOW_NOTICE_KEY] = ("info", message)
-        st.info(message, icon=":material/info:")
-        return
-
-    analyzer, analyzer_message = get_analyzer()
-    if analyzer_message is not None:
-        st.warning(
-            "Analysis provider needs attention: "
-            f"{sanitize_error(analyzer_message)}",
-            icon=":material/warning:",
-        )
-    with st.status("Running automatic digest now...", expanded=True) as status:
-        try:
-            result = run_automatic_digest_now(
-                config=config,
-                db=db,
-                source=source,
-                analyzer=analyzer,
-                use_configured_preselector=True,
-            )
-        except Exception as exc:
-            status.update(label="Run now failed", state="error")
-            message = sanitize_error(exc)
-            st.session_state[_RUN_NOW_NOTICE_KEY] = ("error", message)
-            st.error(message, icon=":material/error:")
-            return
-        notice_level = run_now_notice_level(result)
-        status_state = "error" if notice_level == "error" else "complete"
-        status.update(label="Run now completed", state=status_state)
-        st.session_state[_RUN_NOW_NOTICE_KEY] = (notice_level, run_now_summary(result))
-        st.rerun()
+    remember_digest_launch(launch)
+    st.session_state[_RUN_NOW_NOTICE_KEY] = (
+        "info",
+        "Automatic digest worker started. The schedule remains unchanged.",
+    )
+    st.rerun()
 
 
 def _render_run_now_notice() -> None:

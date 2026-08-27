@@ -7,16 +7,24 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Literal, TypeAlias, TypeGuard
 
-from research_digest.analysis.providers import build_configured_preselector
+from research_digest.background import start_manual_digest_worker
 from research_digest.calibration import CalibrationSummary, build_calibration_summary
 from research_digest.config import (
-    DEFAULT_AUTOMATIC_LIBRARY_CONTEXT_THRESHOLD,
     ConfigError,
     load_config,
 )
 from research_digest.coverage import build_date_coverage_statuses
-from research_digest.db import SOURCE_ARXIV, Database
+from research_digest.db import (
+    APP_RUN_ANALYSIS_UNAVAILABLE,
+    APP_RUN_CANCELLED,
+    APP_RUN_COMPLETED,
+    APP_RUN_FAILED,
+    APP_RUN_PARTIAL,
+    SOURCE_ARXIV,
+    Database,
+)
 from research_digest.errors import sanitize_error
+from research_digest.history import reconstruct_digest_result
 from research_digest.library_context import (
     dismiss_context_suggestion,
     generate_library_context_for_item,
@@ -34,7 +42,6 @@ from research_digest.models import (
     FeedbackAnswer,
     InterestProfile,
     ModelValidationError,
-    RunOrigin,
     above_threshold_digest_items,
     below_threshold_digest_items,
     canonical_arxiv_categories,
@@ -43,19 +50,22 @@ from research_digest.models import (
     profile_semantic_signature,
     sorted_digest_items,
 )
-from research_digest.pipeline import DigestPipelineError
 from research_digest.quantitative_calibration import (
     dismiss_quantitative_calibration,
     submit_quantitative_calibration,
 )
-from research_digest.service import run_digest_for_profile
-from research_digest.sources.arxiv import ArxivSource
-from research_digest.sources.base import LatestAvailableDateResolver, SourceError
+from research_digest.sources.base import LatestAvailableDateResolver
 from research_digest.synthesis import CrossPaperSynthesis, build_cross_paper_synthesis
 from research_digest.ui.abstracts import render_abstract_control
-from research_digest.ui.common import get_analyzer, get_database, get_library_context_generator
+from research_digest.ui.article_header import render_article_header
+from research_digest.ui.common import get_database, get_library_context_generator
 from research_digest.ui.date_status import month_bounds, render_date_status_grid
 from research_digest.ui.library_controls import render_library_control
+from research_digest.ui.run_status import (
+    latest_terminal_digest_run_id,
+    remember_digest_launch,
+    render_active_digest_control,
+)
 from research_digest.ui.tag_controls import context_action_key
 
 DigestInputSignature: TypeAlias = tuple[str, str]
@@ -114,6 +124,7 @@ def render() -> None:
     profiles = db.list_interest_profiles(enabled_only=True)
     source_config = db.get_arxiv_config()
     if source_config is None:
+        render_active_digest_control(db)
         st.error("arXiv source configuration is missing.")
         return
 
@@ -125,6 +136,7 @@ def render() -> None:
     )
 
     if not profiles:
+        render_active_digest_control(db)
         st.info(
             "Create and enable an interest profile on the Interests page before running a digest.",
             icon=":material/info:",
@@ -154,7 +166,6 @@ def render() -> None:
         render_date_status_grid(
             statuses=build_date_coverage_statuses(
                 db=db,
-                profile=profile,
                 source_name=SOURCE_ARXIV,
                 source_config=source_config,
                 start_date=start_date,
@@ -172,82 +183,81 @@ def render() -> None:
         else None
     )
 
+    active_digest = render_active_digest_control(db)
+
     if st.button(
         "Run digest",
         type="primary",
         icon=":material/play_arrow:",
-        disabled=date_selection is None,
+        disabled=date_selection is None or active_digest,
     ):
-        with st.spinner("Fetching and analyzing selected source date(s)..."):
-            try:
-                source = ArxivSource()
-                analyzer, analyzer_message = get_analyzer()
-                library_context_generator = None
-                if active_config is None or active_config.automatic_library_connections_enabled:
-                    library_context_generator, _library_context_message = (
-                        get_library_context_generator()
-                    )
-                if analyzer_message is not None:
-                    st.warning(
-                        "Analysis provider needs attention: "
-                        f"{sanitize_error(analyzer_message)}. "
-                        "Run `research-digest doctor` for details.",
-                        icon=":material/warning:",
-                    )
-                if profile.id is None:
-                    raise DigestPipelineError("selected interest profile is missing an id")
-                if date_selection is None:
-                    raise DigestPipelineError("select source date(s) before running a digest")
-                preselector_connection = (
-                    build_configured_preselector(active_config)
-                    if active_config is not None
-                    else None
+        try:
+            if profile.id is None or date_selection is None:
+                raise ModelValidationError("profile and source dates are required")
+            launch = start_manual_digest_worker(
+                profile_id=profile.id,
+                date_selection=date_selection,
+            )
+        except Exception as exc:
+            st.error(f"Digest start failed: {sanitize_error(exc)}", icon=":material/error:")
+        else:
+            remember_digest_launch(launch)
+            st.info(
+                "Digest worker started. This page will reattach to its durable progress.",
+                icon=":material/progress_activity:",
+            )
+            st.rerun()
+
+    terminal_run_id = latest_terminal_digest_run_id()
+    current_result = st.session_state.get(_LAST_DIGEST_RESULT_KEY)
+    terminal_run = db.get_app_run(terminal_run_id) if terminal_run_id is not None else None
+    terminal_status = str(terminal_run["status"]) if terminal_run is not None else None
+    if (
+        not active_digest
+        and terminal_run_id is not None
+        and (
+            not isinstance(current_result, DigestResult)
+            or current_result.run_id != terminal_run_id
+        )
+    ):
+        st.session_state.pop(_LAST_DIGEST_RESULT_KEY, None)
+        st.session_state.pop(_LAST_DIGEST_SIGNATURE_KEY, None)
+        if terminal_status in {
+            APP_RUN_COMPLETED,
+            APP_RUN_PARTIAL,
+            APP_RUN_ANALYSIS_UNAVAILABLE,
+        }:
+            durable_result = reconstruct_digest_result(db, run_id=terminal_run_id)
+            if durable_result is not None and durable_result.date_selection is not None:
+                st.session_state[_LAST_DIGEST_RESULT_KEY] = durable_result
+                st.session_state[_LAST_DIGEST_SIGNATURE_KEY] = digest_input_signature(
+                    durable_result.profile,
+                    durable_result.source_config,
+                    durable_result.date_selection,
                 )
-                if preselector_connection is not None and preselector_connection.message:
-                    st.warning(
-                        "Stage-1 abstract preselection is unavailable, so cache-miss "
-                        "papers will be allowed through to full analysis: "
-                        f"{sanitize_error(preselector_connection.message)}",
-                        icon=":material/warning:",
-                    )
-                service_result = run_digest_for_profile(
-                    db=db,
-                    source=source,
-                    analyzer=analyzer,
-                    profile_id=profile.id,
-                    date_selection=date_selection,
-                    run_origin=RunOrigin.MANUAL,
-                    preselector=(
-                        preselector_connection.preselector
-                        if preselector_connection is not None
-                        else None
-                    ),
-                    library_context_generator=library_context_generator,
-                    automatic_library_context_threshold=(
-                        active_config.automatic_library_context_threshold
-                        if active_config is not None
-                        else DEFAULT_AUTOMATIC_LIBRARY_CONTEXT_THRESHOLD
-                    ),
-                    relevance_calibration_prompt_probability=(
-                        active_config.relevance_calibration_prompt_probability
-                        if active_config is not None
-                        else 0.20
-                    ),
-                )
-                result = service_result.digest
-            except (DigestPipelineError, SourceError, ModelValidationError) as exc:
-                st.error(sanitize_error(exc), icon=":material/error:")
-            except Exception as exc:
-                st.error(f"Digest run failed: {sanitize_error(exc)}", icon=":material/error:")
-            else:
-                st.session_state[_LAST_DIGEST_RESULT_KEY] = result
-                st.session_state[_LAST_DIGEST_SIGNATURE_KEY] = current_signature
-                st.rerun()
+
+    if not active_digest and terminal_run_id is not None:
+        if terminal_status == APP_RUN_CANCELLED:
+            st.warning(
+                f"Digest run #{terminal_run_id} was cancelled. Persisted work is preserved.",
+                icon=":material/cancel:",
+            )
+        elif (
+            terminal_status == APP_RUN_FAILED
+            and terminal_run is not None
+            and terminal_run["error_message"]
+        ):
+            st.error(
+                f"Digest run #{terminal_run_id} stopped: "
+                f"{sanitize_error(str(terminal_run['error_message']))}",
+                icon=":material/error:",
+            )
 
     result = st.session_state.get(_LAST_DIGEST_RESULT_KEY)
     result_signature = st.session_state.get(_LAST_DIGEST_SIGNATURE_KEY)
     if (
         current_signature is not None
+        and not active_digest
         and is_current_digest_result(result, result_signature, current_signature)
     ):
         _render_run_confirmation(result)
@@ -504,10 +514,19 @@ def _render_run_confirmation(result: DigestResult) -> None:
     import streamlit as st
 
     completed_at = result.completed_at or result.started_at
-    st.success(
+    completion_message = (
         f"Digest for {result_period_label(result)} completed: "
         f"#{result.run_id} at {completed_at:%Y-%m-%d %H:%M:%S UTC}"
     )
+    if result.run_status == APP_RUN_CANCELLED:
+        st.warning(
+            f"Digest run #{result.run_id} was cancelled. Persisted work is preserved.",
+            icon=":material/cancel:",
+        )
+    elif result.run_status == APP_RUN_FAILED:
+        st.error(completion_message.replace(" completed:", " stopped:"))
+    else:
+        st.success(completion_message)
     if not result.retrieval_complete:
         incomplete = ", ".join(_format_date(value) for value in result.incomplete_source_dates)
         st.warning(
@@ -714,13 +733,9 @@ def _render_item(
     )
 
     with st.container(border=True):
-        st.subheader(article.title)
-        authors = ", ".join(article.authors) if article.authors else "Unknown authors"
-        categories = ", ".join(article.categories) if article.categories else "Uncategorized"
-        st.caption(
-            f"{article.source}:{article.source_article_id} | {authors} | "
-            f"Published {article.published_at:%Y-%m-%d %H:%M UTC} | "
-            f"Categories: {categories}"
+        render_article_header(
+            article,
+            context=f"{context}:header:{article.source}:{article.source_article_id}",
         )
         score_col, priority_col, origin_col, status_col = st.columns(4)
         score_col.metric("Relevance score", f"{analysis.relevance_score:.2f}")
@@ -797,7 +812,15 @@ def _render_library_context(item: DigestItem, db: Database, run_id: int | None) 
                 st.caption(
                     f"Suggested relationship{collection_label}{confidence}"
                 )
-                st.markdown(f"**{display.related_article.title}**")
+                render_article_header(
+                    display.related_article,
+                    context=(
+                        f"today:library-context:{article_id}:{suggestion.id}:"
+                        f"{display.related_article.source}:"
+                        f"{display.related_article.source_article_id}"
+                    ),
+                    title_style="markdown",
+                )
                 st.caption(suggestion.relation_label)
                 st.write(suggestion.rationale)
                 if suggestion.id is not None and st.button(
@@ -873,13 +896,12 @@ def _render_preselected_out_articles(result: DigestResult, db: Database) -> None
     )
     for article in sorted(result.skipped_articles, key=_article_sort_key):
         with st.container(border=True):
-            st.subheader(article.title)
-            authors = ", ".join(article.authors) if article.authors else "Unknown authors"
-            categories = ", ".join(article.categories) if article.categories else "Uncategorized"
-            st.caption(
-                f"{article.source}:{article.source_article_id} | {authors} | "
-                f"Published {article.published_at:%Y-%m-%d %H:%M UTC} | "
-                f"Categories: {categories}"
+            render_article_header(
+                article,
+                context=(
+                    f"today:{result.run_id}:preselected:header:"
+                    f"{article.source}:{article.source_article_id}"
+                ),
             )
             if article.abstract_url:
                 st.link_button("arXiv", article.abstract_url)
@@ -914,8 +936,13 @@ def _render_unresolved_articles(result: DigestResult, db: Database) -> None:
     st.caption("These papers were retrieved but did not receive a valid analysis yet.")
     for article in sorted(result.unresolved_articles, key=_article_sort_key):
         with st.container(border=True):
-            st.subheader(article.title)
-            st.caption(f"{article.source}:{article.source_article_id}")
+            render_article_header(
+                article,
+                context=(
+                    f"today:{result.run_id}:unresolved:header:"
+                    f"{article.source}:{article.source_article_id}"
+                ),
+            )
             if article.abstract_url:
                 st.link_button("arXiv", article.abstract_url)
             render_abstract_control(
@@ -966,7 +993,14 @@ def _render_quantitative_calibration_prompt(db: Database, result: DigestResult) 
         st.caption("0 = no meaningful connection to this profile")
         st.caption("0.5 = related / adjacent")
         st.caption("1 = directly central to this profile")
-        st.markdown(f"**{article.title}**")
+        render_article_header(
+            article,
+            context=(
+                f"today:{result.run_id}:calibration:"
+                f"{article.source}:{article.source_article_id}"
+            ),
+            title_style="markdown",
+        )
         st.caption(result.profile.description)
         st.text(article.abstract or "Abstract unavailable")
         with st.form(f"quantitative_calibration_{prompt.id}", border=False):

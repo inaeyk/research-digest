@@ -8,6 +8,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from research_digest.analysis.base import AnalyzerUnavailable, LLMAnalyzer, article_analysis_key
+from research_digest.cancellation import raise_if_cancelled
 from research_digest.config import (
     DEFAULT_OPENAI_MODEL,
     DEFAULT_PRESELECTION_FRACTION,
@@ -46,6 +47,7 @@ class OpenAIAnalyzer(LLMAnalyzer):
         return cls()
 
     def analyze(self, *, profile: InterestProfile, article: Article) -> AnalysisResult:
+        raise_if_cancelled()
         prompt = _analysis_prompt(profile=profile, article=article)
         response = self._client.responses.create(
             model=self.model,
@@ -68,6 +70,7 @@ class OpenAIAnalyzer(LLMAnalyzer):
                 }
             },
         )
+        raise_if_cancelled()
         return _parse_response(response)
 
     def analyze_many(
@@ -76,10 +79,14 @@ class OpenAIAnalyzer(LLMAnalyzer):
         profile: InterestProfile,
         articles: Sequence[Article],
     ) -> Mapping[str, AnalysisResult]:
-        return {
-            article_analysis_key(article): self.analyze(profile=profile, article=article)
-            for article in articles
-        }
+        analyses: dict[str, AnalysisResult] = {}
+        for article in articles:
+            raise_if_cancelled()
+            analyses[article_analysis_key(article)] = self.analyze(
+                profile=profile,
+                article=article,
+            )
+        return analyses
 
 
 class OpenAIAbstractPreselector(AbstractPreselector):
@@ -129,6 +136,7 @@ class OpenAIAbstractPreselector(AbstractPreselector):
                 break
             next_remaining: list[Article] = []
             for chunk in _article_chunks(remaining, active_size):
+                raise_if_cancelled()
                 chunk_scores = self._score_chunk(profile=profile, articles=chunk)
                 for article in chunk:
                     key = article_analysis_key(article)
@@ -137,6 +145,7 @@ class OpenAIAbstractPreselector(AbstractPreselector):
                         next_remaining.append(article)
                     else:
                         scores[key] = score
+                raise_if_cancelled()
             remaining = next_remaining
 
         decisions: list[AbstractPreselectionDecision] = []
@@ -178,6 +187,7 @@ class OpenAIAbstractPreselector(AbstractPreselector):
         profile: InterestProfile,
         articles: Sequence[Article],
     ) -> dict[str, float]:
+        raise_if_cancelled()
         try:
             response = self._client.responses.create(
                 model=self.model,
@@ -202,6 +212,7 @@ class OpenAIAbstractPreselector(AbstractPreselector):
             )
         except Exception:
             return {}
+        raise_if_cancelled()
         return _parse_preselection_response(response, requested_articles=articles)
 
 

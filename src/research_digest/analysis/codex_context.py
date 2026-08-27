@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from research_digest.analysis.base import AnalyzerError, AnalyzerUnavailable
+from research_digest.cancellation import run_owned_subprocess
 from research_digest.config import DEFAULT_CODEX_TIMEOUT_SECONDS
 from research_digest.connections import article_candidate_id
 from research_digest.library_context import (
@@ -302,15 +303,13 @@ def _run_codex(
     env: Mapping[str, str],
     timeout_seconds: float,
 ) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        list(command),
-        input=input_text,
+    return run_owned_subprocess(
+        command,
+        input_text=input_text,
         cwd=cwd,
-        env=dict(env),
-        timeout=timeout_seconds,
-        check=False,
-        capture_output=True,
-        text=True,
+        env=env,
+        timeout_seconds=timeout_seconds,
+        call_kind="codex-library-context",
     )
 
 

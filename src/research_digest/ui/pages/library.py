@@ -24,7 +24,7 @@ from research_digest.connections import (
 from research_digest.errors import sanitize_error
 from research_digest.library import LibraryItem, LibrarySort, list_library_items
 from research_digest.library_context import build_collection_intelligence_snapshot
-from research_digest.models import Article, LibraryCollection, LibraryRelevanceContext, TagOrigin
+from research_digest.models import LibraryCollection, LibraryRelevanceContext, TagOrigin
 from research_digest.tags import (
     TagValidationError,
     add_user_tag,
@@ -34,6 +34,7 @@ from research_digest.tags import (
     remove_user_tag,
 )
 from research_digest.ui.abstracts import render_abstract_control
+from research_digest.ui.article_header import render_article_header
 from research_digest.ui.common import get_ai_tag_generator, get_connection_generator, get_database
 from research_digest.ui.library_controls import render_library_control
 from research_digest.ui.tag_controls import (
@@ -113,8 +114,10 @@ def _render_library_item(item: LibraryItem) -> None:
 
     article = item.article
     with st.container(border=True):
-        st.subheader(article.title)
-        st.caption(_article_caption(article))
+        render_article_header(
+            article,
+            context=f"library:header:{article.source}:{article.source_article_id}",
+        )
         metric_cols = st.columns(3)
         metric_cols[0].metric("Saved", f"{item.entry.saved_at:%Y-%m-%d}")
         metric_cols[1].metric("Published", f"{article.published_at:%Y-%m-%d}")
@@ -270,7 +273,14 @@ def _render_connections(item: LibraryItem) -> None:
             connection = relation.connection
             with st.container(border=True):
                 st.caption("Suggested relationship")
-                st.markdown(f"**{related_article.title}**")
+                render_article_header(
+                    related_article,
+                    context=(
+                        f"library:connection:{article.id}:"
+                        f"{related_article.source}:{related_article.source_article_id}"
+                    ),
+                    title_style="markdown",
+                )
                 confidence = (
                     f" | confidence {connection.confidence:.2f}"
                     if connection.confidence is not None
@@ -531,16 +541,6 @@ def _render_collection_intelligence(collection: LibraryCollection) -> None:
             st.error(sanitize_error(exc), icon=":material/error:")
         else:
             st.rerun()
-
-
-def _article_caption(article: Article) -> str:
-    authors = ", ".join(article.authors) if article.authors else "Unknown authors"
-    categories = ", ".join(article.categories) if article.categories else "Uncategorized"
-    return (
-        f"{article.source}:{article.source_article_id} | {authors} | "
-        f"Published {article.published_at:%Y-%m-%d %H:%M UTC} | "
-        f"Categories: {categories}"
-    )
 
 
 def _render_relevance_metric(column: Any, context: LibraryRelevanceContext | None) -> None:

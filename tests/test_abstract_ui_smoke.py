@@ -26,13 +26,14 @@ def _article(
     title: str,
     abstract: str,
     hour: int,
+    authors: list[str] | None = None,
 ) -> Article:
     return Article(
         id=None,
         source="arxiv",
         source_article_id=source_article_id,
         title=title,
-        authors=["Ada Lovelace"],
+        authors=authors or ["Ada Lovelace"],
         abstract=abstract,
         categories=["hep-th"],
         published_at=datetime(2026, 8, 14, hour, 0, tzinfo=UTC),
@@ -98,6 +99,7 @@ class AbstractUiSmokeTests(unittest.TestCase):
                 "Above threshold paper",
                 "Above threshold source abstract.",
                 10,
+                ["Relevant Result Author"],
             )
         )
         below, _ = self.db.upsert_article(
@@ -106,6 +108,7 @@ class AbstractUiSmokeTests(unittest.TestCase):
                 "Below threshold paper",
                 "Below threshold source abstract.",
                 9,
+                ["Below Threshold Author"],
             )
         )
         skipped, _ = self.db.upsert_article(
@@ -114,6 +117,7 @@ class AbstractUiSmokeTests(unittest.TestCase):
                 "Preselected-out paper",
                 "Preselected-out source abstract.",
                 8,
+                ["Preselected Out Author"],
             )
         )
         self.result = DigestResult(
@@ -166,6 +170,8 @@ class AbstractUiSmokeTests(unittest.TestCase):
             args=(self.result, self.db),
         ).run()
         self.assert_no_streamlit_exceptions(at)
+        self.assert_text_present(at, "Relevant Result Author")
+        self.assert_text_present(at, "Preselected Out Author")
 
         self.click_button(at, "Show abstract", occurrence=0).run()
         self.assert_no_streamlit_exceptions(at)
@@ -177,10 +183,16 @@ class AbstractUiSmokeTests(unittest.TestCase):
 
         at.segmented_control[0].set_value("below_threshold").run()
         self.assert_no_streamlit_exceptions(at)
+        self.assert_text_present(at, "Below Threshold Author")
         self.assert_button_present(at, "Find Library connections")
         self.click_button(at, "Show abstract", occurrence=0).run()
         self.assert_no_streamlit_exceptions(at)
         self.assert_text_present(at, "Below threshold source abstract.")
+
+        at.segmented_control[0].set_value("all_analyzed").run()
+        self.assert_no_streamlit_exceptions(at)
+        self.assert_text_present(at, "Relevant Result Author")
+        self.assert_text_present(at, "Below Threshold Author")
 
     def test_today_preselected_out_abstract_renders_when_no_items_are_analyzed(self) -> None:
         skipped = self.result.skipped_articles[0]
@@ -213,6 +225,7 @@ class AbstractUiSmokeTests(unittest.TestCase):
             args=(result, self.db),
         ).run()
         self.assert_no_streamlit_exceptions(at)
+        self.assert_text_present(at, "Preselected Out Author")
         self.assert_text_not_containing(at, "Generated summary")
         self.assert_text_not_containing(at, "Generated reason")
         self.assert_text_not_containing(at, "Priority")
@@ -234,6 +247,9 @@ class AbstractUiSmokeTests(unittest.TestCase):
                     "title": "Analyzed historical paper",
                     "source": "arxiv",
                     "source_article_id": "2608.above",
+                    "authors": ["Historical Author One", "Historical Author Two"],
+                    "categories": ["hep-th"],
+                    "published_at": "2026-08-14T10:00:00+00:00",
                     "relevance_score": 0.9,
                     "reading_priority": "HIGH",
                     "analysis_origin": "NEW_THIS_RUN",
@@ -248,6 +264,9 @@ class AbstractUiSmokeTests(unittest.TestCase):
                     "title": "Historical preselected-out paper",
                     "source": "arxiv",
                     "source_article_id": "2608.skipped",
+                    "authors": ["Skipped History Author"],
+                    "categories": ["gr-qc"],
+                    "published_at": "2026-08-14T08:00:00+00:00",
                     "abstract_url": "http://arxiv.org/abs/2608.skipped",
                     "abstract": "Historical preselected-out source abstract.",
                     "summary": "Generated prose must not render.",
@@ -263,6 +282,8 @@ class AbstractUiSmokeTests(unittest.TestCase):
             args=(snapshot, self.db),
         ).run()
         self.assert_no_streamlit_exceptions(at)
+        self.assert_text_present(at, "Historical Author One, Historical Author Two")
+        self.assert_text_present(at, "Skipped History Author")
         self.assert_text_present(at, "Generated analyzed summary.")
         self.assert_text_not_containing(at, "Generated prose must not render")
         self.assert_text_not_containing(at, "Generated reason must not render")
@@ -271,6 +292,32 @@ class AbstractUiSmokeTests(unittest.TestCase):
         self.assert_no_streamlit_exceptions(at)
         self.assert_text_present(at, "Historical preselected-out source abstract.")
         self.assert_text_not_containing(at, "Generated prose must not render")
+
+    def test_older_history_snapshot_without_authors_shows_unavailable(self) -> None:
+        snapshot = {
+            "run_id": 45,
+            "profile_id": self.profile.id,
+            "source": "arxiv",
+            "items": [
+                {
+                    "title": "Older historical paper",
+                    "source": "arxiv",
+                    "source_article_id": "2608.older",
+                    "relevance_score": 0.8,
+                    "reading_priority": "HIGH",
+                    "analysis_origin": "REUSED",
+                }
+            ],
+        }
+
+        at = AppTest.from_function(
+            _history_snapshot_app,
+            default_timeout=5,
+            args=(snapshot, self.db),
+        ).run()
+
+        self.assert_no_streamlit_exceptions(at)
+        self.assert_text_present(at, "Authors unavailable")
 
     def test_today_feedback_controls_are_two_clear_unselected_questions(self) -> None:
         at = AppTest.from_function(
@@ -354,6 +401,7 @@ class AbstractUiSmokeTests(unittest.TestCase):
         ).run()
         self.assert_no_streamlit_exceptions(at)
         self.assert_text_present(at, "Help calibrate Research Digest")
+        self.assert_text_present(at, "Below Threshold Author")
         self.assert_text_absent(at, "Research Digest score")
 
         at.slider[0].set_value(0.35).run()

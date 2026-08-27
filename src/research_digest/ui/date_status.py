@@ -9,9 +9,9 @@ from research_digest.coverage import DateCoverageStatus
 
 WEEKDAY_LABELS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 STATUS_LEGEND: tuple[tuple[str, str], ...] = (
-    ("Done", "Completed digest"),
-    ("Failed", "Failed digest"),
-    ("Partial", "Partial/incomplete digest"),
+    ("Done", "Source covered"),
+    ("Failed", "Source retrieval failed"),
+    ("Partial", "Partial/incomplete source retrieval"),
     ("Empty", "Checked: no submissions"),
     ("Pending", "Pending/uncovered"),
     ("Sel", "Currently selected"),
@@ -106,8 +106,6 @@ def date_status_detail_rows(
                 "Status": status.label,
                 "Run": f"#{status.run_id}" if status.run_id is not None else "",
                 "Retrieved": status.retrieved_count if status.retrieved_count is not None else "",
-                "Analyzed": status.analyzed_count if status.analyzed_count is not None else "",
-                "Relevant": status.relevant_count if status.relevant_count is not None else "",
             }
         )
     return rows

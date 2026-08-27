@@ -6,6 +6,7 @@ from datetime import date
 
 from research_digest.db import (
     APP_RUN_ANALYSIS_UNAVAILABLE,
+    APP_RUN_CANCELLED,
     APP_RUN_COMPLETED,
     APP_RUN_FAILED,
     APP_RUN_PARTIAL,
@@ -14,6 +15,7 @@ from research_digest.db import (
 from research_digest.history import RunHistoryEntry, get_run_snapshot, list_run_history
 from research_digest.models import InterestProfile, profile_semantic_fingerprint
 from research_digest.ui.abstracts import render_abstract_control
+from research_digest.ui.article_header import render_snapshot_article_header
 from research_digest.ui.common import get_database
 from research_digest.ui.library_controls import render_library_control_for_source_identity
 
@@ -114,7 +116,15 @@ def _render_snapshot(snapshot: dict[str, object], db: Database) -> None:
             if not isinstance(item, dict):
                 continue
             with st.container(border=True):
-                st.markdown(f"**{item.get('title', 'Untitled paper')}**")
+                source, source_article_id = _snapshot_source_identity(item, snapshot)
+                render_snapshot_article_header(
+                    item,
+                    context=(
+                        f"history:{snapshot.get('run_id', 'unknown')}:header:"
+                        f"{source}:{source_article_id}"
+                    ),
+                    fallback_source=source,
+                )
                 st.caption(
                     f"Score: {float(item.get('relevance_score', 0.0)):.2f}. "
                     f"Priority: {item.get('reading_priority', '-')}. "
@@ -129,7 +139,6 @@ def _render_snapshot(snapshot: dict[str, object], db: Database) -> None:
                 url = item.get("abstract_url")
                 if isinstance(url, str) and url:
                     st.link_button("Open arXiv", url)
-                source, source_article_id = _snapshot_source_identity(item, snapshot)
                 render_abstract_control(
                     source=source,
                     source_article_id=source_article_id,
@@ -158,9 +167,15 @@ def _render_snapshot(snapshot: dict[str, object], db: Database) -> None:
             if not isinstance(article, dict):
                 continue
             with st.container(border=True):
-                st.markdown(f"**{article.get('title', 'Untitled paper')}**")
                 source, source_article_id = _snapshot_source_identity(article, snapshot)
-                st.caption(f"{source}:{source_article_id}")
+                render_snapshot_article_header(
+                    article,
+                    context=(
+                        f"history:{snapshot.get('run_id', 'unknown')}:preselected:header:"
+                        f"{source}:{source_article_id}"
+                    ),
+                    fallback_source=source,
+                )
                 url = article.get("abstract_url")
                 if isinstance(url, str) and url:
                     st.link_button("Open arXiv", url)
@@ -192,9 +207,15 @@ def _render_snapshot(snapshot: dict[str, object], db: Database) -> None:
             if not isinstance(article, dict):
                 continue
             with st.container(border=True):
-                st.markdown(f"**{article.get('title', 'Untitled paper')}**")
                 source, source_article_id = _snapshot_source_identity(article, snapshot)
-                st.caption(f"{source}:{source_article_id}")
+                render_snapshot_article_header(
+                    article,
+                    context=(
+                        f"history:{snapshot.get('run_id', 'unknown')}:unresolved:header:"
+                        f"{source}:{source_article_id}"
+                    ),
+                    fallback_source=source,
+                )
                 url = article.get("abstract_url")
                 if isinstance(url, str) and url:
                     st.link_button("Open arXiv", url)
@@ -282,6 +303,8 @@ def origin_label(entry: RunHistoryEntry) -> str:
 
 
 def history_status_label(entry: RunHistoryEntry) -> str:
+    if entry.status == APP_RUN_CANCELLED:
+        return "Cancelled by user"
     if entry.empty_source_dates and not entry.retrieved_count:
         return "No submissions"
     if entry.status == APP_RUN_COMPLETED:

@@ -21,6 +21,11 @@ from research_digest.automation import (
     run_automatic_digest_now,
 )
 from research_digest.backup import run_backup
+from research_digest.cancellation import (
+    RunCancelled,
+    request_run_cancellation,
+    stop_abandoned_provider_processes,
+)
 from research_digest.config import AppConfig, load_config
 from research_digest.db import Database, RunAlreadyActiveError, RunLockError
 from research_digest.doctor import DoctorReport, run_doctor, run_doctor_from_environment
@@ -34,6 +39,7 @@ from research_digest.scheduler import (
     select_scheduler_backend,
 )
 from research_digest.service import (
+    DEFAULT_RUN_LOCK_STALE_SECONDS,
     HeadlessDigestRun,
     HeadlessProfileRun,
 )
@@ -107,6 +113,14 @@ def run_cli(
             config=config,
             db=db,
             scheduler_backend=scheduler_backend,
+        )
+    if args.command == "cancel":
+        return _cancel_command(
+            args=args,
+            stdout=stdout,
+            stderr=stderr,
+            config=config,
+            db=db,
         )
     if args.command == "doctor":
         return _doctor_command(
@@ -182,6 +196,21 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     status_parser = subparsers.add_parser("status", help="Show local application status.")
     status_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print a machine-readable JSON result.",
+    )
+    cancel_parser = subparsers.add_parser(
+        "cancel",
+        help="Cancel one active digest and preserve completed work.",
+    )
+    cancel_parser.add_argument(
+        "--run-id",
+        type=int,
+        required=True,
+        help="Active app run id to cancel.",
+    )
+    cancel_parser.add_argument(
         "--json",
         action="store_true",
         help="Print a machine-readable JSON result.",
@@ -300,6 +329,10 @@ def _run_digest_command(
             preselector=active_preselector,
             use_configured_preselector=True,
         )
+    except RunCancelled as exc:
+        message = sanitize_error(exc)
+        _write_failure(stdout, stderr, json_output=json_output, message=message)
+        return 2
     except Exception as exc:
         message = sanitize_error(exc)
         _write_failure(stdout, stderr, json_output=json_output, message=message)
@@ -328,6 +361,47 @@ def _run_digest_command(
             command_failed=command_failed,
         )
     return 1 if command_failed else 0
+
+
+def _cancel_command(
+    *,
+    args: argparse.Namespace,
+    stdout: TextIO,
+    stderr: TextIO,
+    config: AppConfig | None,
+    db: Database | None,
+) -> int:
+    try:
+        active_config = config or load_config()
+        active_db = db or Database(active_config.db_path)
+        result = request_run_cancellation(active_db, run_id=int(args.run_id))
+    except Exception as exc:
+        message = sanitize_error(exc)
+        if bool(args.json):
+            json.dump({"status": "failed", "error_message": message}, stdout)
+            stdout.write("\n")
+        else:
+            stderr.write(f"Research Digest cancellation failed: {message}\n")
+        return 1
+
+    payload = {
+        "run_id": result.run_id,
+        "accepted": result.accepted,
+        "status": result.status,
+        "owner_stopped": result.owner_stopped,
+    }
+    if bool(args.json):
+        json.dump(payload, stdout)
+        stdout.write("\n")
+    elif result.accepted:
+        stdout.write(
+            f"Cancellation requested for digest run #{result.run_id}: {result.status}.\n"
+        )
+    else:
+        stdout.write(
+            f"Digest run #{result.run_id} is already terminal: {result.status}.\n"
+        )
+    return 0
 
 
 def _write_failure(
@@ -464,6 +538,12 @@ def _recover_abandoned_run_command(
     try:
         active_config = config or load_config()
         active_db = db or Database(active_config.db_path)
+        stop_abandoned_provider_processes(
+            active_db,
+            stale_after_seconds=DEFAULT_RUN_LOCK_STALE_SECONDS,
+            run_id=int(args.run_id),
+            force_uninspectable_owner=bool(args.force_uninspectable_owner),
+        )
         result = active_db.recover_abandoned_run(
             run_id=int(args.run_id),
             force_uninspectable_owner=bool(args.force_uninspectable_owner),
@@ -619,6 +699,12 @@ def _last_run_to_mapping(row: object) -> dict[str, object]:
         "incomplete_source_dates": json.loads(str(values["incomplete_source_dates_json"])),
         "retrieval_complete": bool(values["retrieval_complete"]),
         "retrieval_safety_limit": values["retrieval_safety_limit"],
+        "cancel_requested_at": values["cancel_requested_at"],
+        "cancel_reason": (
+            sanitize_error(str(values["cancel_reason"]))
+            if values["cancel_reason"] is not None
+            else None
+        ),
     }
 
 

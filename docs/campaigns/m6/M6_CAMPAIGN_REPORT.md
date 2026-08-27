@@ -1596,3 +1596,96 @@ Final release boundary:
 - SQLite schema version is `16`.
 - JSON config version is `5`.
 - No public tag, push, package publication, or GitHub release was created.
+
+## Post-v0.3 Integrated Runtime and UI Repair Freeze
+
+State date: 2026-08-27.
+
+Integrated scope accepted by the human:
+
+- Source coverage is keyed only by canonical source semantics and source date;
+  profile edits do not invalidate successful complete retrieval.
+- SQLite schema 17 consolidates prior profile-scoped coverage facts into
+  source-scoped coverage and adds reusable local source-date corpus manifests.
+- Digest execution uses a detached local worker boundary with durable run
+  ownership, explicit application cancellation, exact provider-process-group
+  termination, partial-work preservation, and immediate lock release.
+- SQLite schema 18 adds durable cancellation request and run ownership fields
+  plus exact run-owned provider process records.
+- Today and Settings rediscover durable active runs, display progress, and offer
+  the shared **Cancel digest** action across refresh, browser reconnect, server
+  restart, and localhost port changes.
+- Paper cards consistently render title, ordered stored source authors, then
+  publication/source metadata. Long lists show five authors plus `+N more` and
+  expose the complete local list. History uses immutable snapshot author
+  metadata, with `Authors unavailable` for older snapshots that lack it.
+
+Human live-smoke acceptance:
+
+- Source-scoped coverage persistence and category-scope behavior: PASS.
+- True application cancellation, partial-work preservation, lock release, and
+  worker reattachment: PASS.
+- Today human-facing cancellation control and active-run progress: PASS.
+- Author metadata across Today, below-threshold and preselected-out cards,
+  History, Library/search, long lists, and browser refresh: PASS.
+- Launcher work was deliberately excluded.
+
+Focused audits:
+
+- Source-coverage/profile-analysis separation and migration audit: PASS.
+- Cancellation lifecycle, provider ownership, race, and lock-release audit:
+  PASS after qualified repairs.
+- Today cancellation presentation/reattachment audit: PASS after qualified
+  repair.
+- Source-author correctness, order, History immutability, missing fallback,
+  side-effect safety, and minimal preselected-out card audit: PASS with no
+  findings.
+
+Migration and compatibility boundary:
+
+- Package/runtime version remains `0.3.0`.
+- SQLite schema version is `18`.
+- JSON config version remains `5`; no configuration migration is required.
+- Schema 17 safely collapses successful profile-scoped coverage rows that share
+  source semantics/date and preserves immutable profile-specific app-run and
+  analysis history.
+- Schema 18 is additive and preserves existing runs/history while adding
+  cancellation and exact subprocess ownership metadata.
+- Existing database upgrade still creates a recoverable pre-migration backup.
+- Author snapshot enrichment is additive JSON only; no schema migration or
+  historical remote backfill is performed.
+
+Deferred regression debt:
+
+- Running `.venv/bin/pytest -q tests/test_db.py` in isolation currently exposes
+  a pre-existing package import cycle between `research_digest.preselection`
+  and `research_digest.analysis.__init__`/`codex_cli` during collection. The
+  normal complete suite passes because its import order differs. This is
+  recorded in `docs/TECHNICAL_DEBT.md`; it is not repaired in this freeze.
+
+Final freeze boundary:
+
+- Complete deterministic, Streamlit AppTest, migration, package-build, isolated
+  installation, and installed-CLI qualification passed immediately before the
+  authorized local commit.
+- No push, tag, package publication, release, or launcher work is part of this
+  freeze.
+
+Final integrated qualification:
+
+- `pytest -q`: PASS, 447 passed and 9 subtests passed.
+- Explicit Streamlit AppTest suites: PASS, 62 passed.
+- Migration/upgrade/backup qualification: PASS, 45 passed.
+- `ruff check .`: PASS.
+- `mypy --strict src tests`: PASS, 109 source files checked.
+- `python -m compileall src tests`: PASS.
+- `git diff --check`: PASS.
+- Wheel build: PASS, `research_digest-0.3.0-py3-none-any.whl`.
+- Fresh isolated no-deps wheel installation: PASS.
+- Installed CLI `research-digest --version`: PASS, reported `0.3.0`.
+- Installed CLI `status --json`: PASS, initialized SQLite schema `18` and JSON
+  config `5`. Windows Task Scheduler inspection remained unavailable in this
+  Linux/WSL sandbox and returned the existing sanitized diagnostic.
+- Installed CLI `backup --json`: PASS at schema `18`.
+- Wheel content inspection: PASS; expected package modules and console-script
+  metadata present, with no cache or bytecode artifacts.

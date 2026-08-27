@@ -3,12 +3,13 @@ from __future__ import annotations
 import tempfile
 import unittest
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 
 from research_digest.analysis.fake import FakeAnalyzer
 from research_digest.db import APP_RUN_ANALYSIS_UNAVAILABLE, Database
-from research_digest.history import get_run_snapshot, list_run_history
+from research_digest.history import build_run_snapshot, get_run_snapshot, list_run_history
 from research_digest.models import (
     AnalysisResult,
     Article,
@@ -18,6 +19,7 @@ from research_digest.models import (
     RunOrigin,
 )
 from research_digest.service import run_digest_for_profile
+from research_digest.synthesis import build_cross_paper_synthesis
 from research_digest.ui.pages.history import (
     _run_label,
     history_period_label,
@@ -125,6 +127,8 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual(snapshot["run_id"], result.digest.run_id)
         self.assertEqual(snapshot["profile_name"], "Gravity")
         self.assertEqual(snapshot["items"][0]["title"], "History paper")
+        self.assertEqual(snapshot["items"][0]["authors"], ["Ada Lovelace"])
+        self.assertEqual(snapshot["items"][0]["categories"], ["hep-th"])
         self.assertEqual(snapshot["items"][0]["source"], "arxiv")
         self.assertEqual(snapshot["items"][0]["source_article_id"], "2608.history01")
         self.assertEqual(
@@ -152,6 +156,30 @@ class HistoryTests(unittest.TestCase):
         self.assertIsNotNone(snapshot)
         assert snapshot is not None
         self.assertEqual(snapshot["unresolved_articles"][0]["source_article_id"], "2608.history02")
+        self.assertEqual(snapshot["unresolved_articles"][0]["authors"], ["Ada Lovelace"])
+        self.assertEqual(snapshot["unresolved_articles"][0]["categories"], ["hep-th"])
+
+    def test_new_preselected_out_snapshots_freeze_author_metadata(self) -> None:
+        result = run_digest_for_profile(
+            db=self.db,
+            source=StaticSource([article("2608.history-skipped", "Skipped snapshot paper")]),
+            analyzer=FakeAnalyzer(),
+            profile_id=self.profile.id or 0,
+        )
+        skipped_article = result.digest.items[0].article
+        digest = replace(
+            result.digest,
+            items=[],
+            skipped_articles=[skipped_article],
+        )
+
+        snapshot = build_run_snapshot(
+            digest=digest,
+            synthesis=build_cross_paper_synthesis(items=(), threshold=0.5),
+        )
+
+        self.assertEqual(snapshot["skipped_articles"][0]["authors"], ["Ada Lovelace"])
+        self.assertEqual(snapshot["skipped_articles"][0]["categories"], ["hep-th"])
 
     def test_current_profile_changes_do_not_mutate_history_snapshot(self) -> None:
         result = run_digest_for_profile(
@@ -173,6 +201,7 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual(before, after)
         assert after is not None
         self.assertEqual(after["profile_name"], "Gravity")
+        self.assertEqual(after["items"][0]["authors"], ["Ada Lovelace"])
 
     def test_history_limit_is_bounded(self) -> None:
         for index in range(3):
