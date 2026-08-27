@@ -26,7 +26,7 @@ from research_digest.cancellation import (
     request_run_cancellation,
     stop_abandoned_provider_processes,
 )
-from research_digest.config import AppConfig, load_config
+from research_digest.config import AppConfig, load_config, resolve_data_dir
 from research_digest.db import Database, RunAlreadyActiveError, RunLockError
 from research_digest.doctor import DoctorReport, run_doctor, run_doctor_from_environment
 from research_digest.errors import sanitize_error
@@ -45,6 +45,22 @@ from research_digest.service import (
 )
 from research_digest.sources.base import SourceAdapter
 from research_digest.sources.registry import ARXIV_SOURCE_DEFINITION
+from research_digest.ui_server import (
+    DEFAULT_UI_PORT,
+    DEFAULT_UI_STARTUP_TIMEOUT_SECONDS,
+    UILaunchResult,
+    UIServerController,
+    UIServerManager,
+    UIServerStatus,
+    UIStopResult,
+)
+from research_digest.windows_launcher import (
+    WINDOWS_LAUNCHER_ID,
+    WindowsLauncherController,
+    WindowsLauncherResult,
+    build_windows_launcher_request,
+    select_windows_launcher_backend,
+)
 
 DEFAULT_SERVE_PORT = 8501
 SERVE_PORT_SCAN_LIMIT = 50
@@ -69,6 +85,8 @@ def run_cli(
     preselector: AbstractPreselector | None = None,
     scheduler_backend: SchedulerBackend | None = None,
     process_launcher: ProcessLauncher | None = None,
+    ui_server_manager: UIServerController | None = None,
+    windows_launcher_backend: WindowsLauncherController | None = None,
 ) -> int:
     try:
         args = _build_parser().parse_args(argv)
@@ -103,7 +121,47 @@ def run_cli(
             args=args,
             stdout=stdout,
             stderr=stderr,
+            config=config,
             process_launcher=process_launcher,
+        )
+    if args.command == "launch":
+        return _launch_ui_command(
+            args=args,
+            stdout=stdout,
+            stderr=stderr,
+            config=config,
+            manager=ui_server_manager,
+        )
+    if args.command == "ui-status":
+        return _ui_status_command(
+            args=args,
+            stdout=stdout,
+            stderr=stderr,
+            config=config,
+            manager=ui_server_manager,
+        )
+    if args.command == "ui-stop":
+        return _ui_stop_command(
+            args=args,
+            stdout=stdout,
+            stderr=stderr,
+            config=config,
+            manager=ui_server_manager,
+        )
+    if args.command == "install-launcher":
+        return _install_launcher_command(
+            args=args,
+            stdout=stdout,
+            stderr=stderr,
+            config=config,
+            backend=windows_launcher_backend,
+        )
+    if args.command == "uninstall-launcher":
+        return _uninstall_launcher_command(
+            args=args,
+            stdout=stdout,
+            stderr=stderr,
+            backend=windows_launcher_backend,
         )
     if args.command == "status":
         return _status_command(
@@ -149,7 +207,7 @@ def run_cli(
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="research-digest",
-        description="Run Research Digest without opening Streamlit.",
+        description="Run Research Digest and manage its local UI.",
     )
     parser.add_argument(
         "--version",
@@ -193,6 +251,69 @@ def _build_parser() -> argparse.ArgumentParser:
         "--host",
         default="localhost",
         help="Host name to print in the usable URL. Defaults to localhost.",
+    )
+    launch_parser = subparsers.add_parser(
+        "launch",
+        help="Open or start the detached Research Digest UI and open its browser URL.",
+    )
+    launch_parser.add_argument(
+        "--port",
+        type=int,
+        default=DEFAULT_UI_PORT,
+        help=f"Preferred local UI port. Defaults to {DEFAULT_UI_PORT}.",
+    )
+    launch_parser.add_argument(
+        "--startup-timeout",
+        type=_ui_timeout,
+        default=DEFAULT_UI_STARTUP_TIMEOUT_SECONDS,
+        help="Bounded UI startup wait in seconds. Defaults to 30.",
+    )
+    launch_parser.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="Start or reuse the UI without opening the Windows browser.",
+    )
+    launch_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print a machine-readable JSON result.",
+    )
+    launch_parser.add_argument(
+        "--launcher-id",
+        choices=(WINDOWS_LAUNCHER_ID,),
+        help=argparse.SUPPRESS,
+    )
+    for name, help_text in (
+        ("ui-status", "Show detached Research Digest UI-server status."),
+        ("ui-stop", "Stop only the exact owned Research Digest UI server."),
+    ):
+        command_parser = subparsers.add_parser(name, help=help_text)
+        command_parser.add_argument(
+            "--json",
+            action="store_true",
+            help="Print a machine-readable JSON result.",
+        )
+    install_launcher_parser = subparsers.add_parser(
+        "install-launcher",
+        help="Create or update the owned Windows Desktop shortcut.",
+    )
+    install_launcher_parser.add_argument(
+        "--distro",
+        help="WSL distribution name. Defaults to WSL_DISTRO_NAME.",
+    )
+    install_launcher_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print a machine-readable JSON result.",
+    )
+    uninstall_launcher_parser = subparsers.add_parser(
+        "uninstall-launcher",
+        help="Remove only the Research Digest-owned Windows Desktop shortcut.",
+    )
+    uninstall_launcher_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print a machine-readable JSON result.",
     )
     status_parser = subparsers.add_parser("status", help="Show local application status.")
     status_parser.add_argument(
@@ -423,9 +544,26 @@ def _serve_command(
     args: argparse.Namespace,
     stdout: TextIO,
     stderr: TextIO,
+    config: AppConfig | None,
     process_launcher: ProcessLauncher | None,
 ) -> int:
     try:
+        if process_launcher is None:
+            manager = _build_ui_server_manager(
+                config=config,
+                preferred_port=int(args.port),
+                public_host=str(args.host),
+            )
+            server = manager.start_foreground()
+            stdout.write(f"Research Digest UI: {server.registration.url}\n")
+            stdout.write(
+                "Existing UI server reused.\n"
+                if server.reused
+                else "Foreground UI server started; press Ctrl+C to stop the UI only.\n"
+            )
+            stdout.flush()
+            return server.wait()
+
         port = _select_available_port(int(args.port))
         command = [
             sys.executable,
@@ -436,15 +574,234 @@ def _serve_command(
             f"--server.port={port}",
             "--server.headless=true",
         ]
-        launcher = process_launcher or _launch_process
-        launcher(command)
         url = f"http://{args.host}:{port}"
         stdout.write(f"Research Digest UI: {url}\n")
         stdout.write("Command: " + subprocess.list2cmdline(command) + "\n")
+        stdout.flush()
+        process_launcher(command)
         return 0
     except Exception as exc:
         stderr.write(f"Research Digest serve failed: {sanitize_error(exc)}\n")
         return 1
+
+
+def _launch_ui_command(
+    *,
+    args: argparse.Namespace,
+    stdout: TextIO,
+    stderr: TextIO,
+    config: AppConfig | None,
+    manager: UIServerController | None,
+) -> int:
+    try:
+        active_manager = manager or _build_ui_server_manager(
+            config=config,
+            preferred_port=int(args.port),
+            startup_timeout_seconds=float(args.startup_timeout),
+        )
+        result = active_manager.launch(open_browser=not bool(args.no_browser))
+    except Exception as exc:
+        return _write_launcher_failure(
+            args=args,
+            stdout=stdout,
+            stderr=stderr,
+            operation="launch",
+            error=exc,
+        )
+    _write_ui_launch_result(stdout, result, json_output=bool(args.json))
+    return 0
+
+
+def _ui_status_command(
+    *,
+    args: argparse.Namespace,
+    stdout: TextIO,
+    stderr: TextIO,
+    config: AppConfig | None,
+    manager: UIServerController | None,
+) -> int:
+    try:
+        active_manager = manager or _build_ui_server_manager(config=config)
+        status = active_manager.status()
+    except Exception as exc:
+        return _write_launcher_failure(
+            args=args,
+            stdout=stdout,
+            stderr=stderr,
+            operation="UI status",
+            error=exc,
+        )
+    _write_ui_status(stdout, status, json_output=bool(args.json))
+    return 0
+
+
+def _ui_stop_command(
+    *,
+    args: argparse.Namespace,
+    stdout: TextIO,
+    stderr: TextIO,
+    config: AppConfig | None,
+    manager: UIServerController | None,
+) -> int:
+    try:
+        active_manager = manager or _build_ui_server_manager(config=config)
+        result = active_manager.stop()
+    except Exception as exc:
+        return _write_launcher_failure(
+            args=args,
+            stdout=stdout,
+            stderr=stderr,
+            operation="UI stop",
+            error=exc,
+        )
+    _write_ui_stop_result(stdout, result, json_output=bool(args.json))
+    return 0
+
+
+def _install_launcher_command(
+    *,
+    args: argparse.Namespace,
+    stdout: TextIO,
+    stderr: TextIO,
+    config: AppConfig | None,
+    backend: WindowsLauncherController | None,
+) -> int:
+    try:
+        request = build_windows_launcher_request(config=config, distro=args.distro)
+        active_backend = backend or select_windows_launcher_backend()
+        result = active_backend.install(request)
+    except Exception as exc:
+        return _write_launcher_failure(
+            args=args,
+            stdout=stdout,
+            stderr=stderr,
+            operation="launcher installation",
+            error=exc,
+        )
+    _write_windows_launcher_result(stdout, result, json_output=bool(args.json))
+    return 0
+
+
+def _uninstall_launcher_command(
+    *,
+    args: argparse.Namespace,
+    stdout: TextIO,
+    stderr: TextIO,
+    backend: WindowsLauncherController | None,
+) -> int:
+    try:
+        active_backend = backend or select_windows_launcher_backend()
+        result = active_backend.uninstall()
+    except Exception as exc:
+        return _write_launcher_failure(
+            args=args,
+            stdout=stdout,
+            stderr=stderr,
+            operation="launcher removal",
+            error=exc,
+        )
+    _write_windows_launcher_result(stdout, result, json_output=bool(args.json))
+    return 0
+
+
+def _build_ui_server_manager(
+    *,
+    config: AppConfig | None,
+    preferred_port: int = DEFAULT_UI_PORT,
+    startup_timeout_seconds: float = DEFAULT_UI_STARTUP_TIMEOUT_SECONDS,
+    public_host: str = "localhost",
+) -> UIServerManager:
+    data_dir = config.data_dir if config is not None else resolve_data_dir()
+    return UIServerManager(
+        data_dir=data_dir,
+        preferred_port=preferred_port,
+        startup_timeout_seconds=startup_timeout_seconds,
+        public_host=public_host,
+    )
+
+
+def _write_ui_launch_result(
+    stdout: TextIO,
+    result: UILaunchResult,
+    *,
+    json_output: bool,
+) -> None:
+    if json_output:
+        json.dump({"status": "completed", **result.to_mapping()}, stdout)
+        stdout.write("\n")
+        return
+    action = "reused" if result.reused else "started"
+    stdout.write(f"Research Digest UI {action}: {result.status.url}\n")
+    stdout.write(f"PID: {result.status.pid}; log: {result.status.log_path}\n")
+    stdout.write("Windows browser opened.\n" if result.browser_opened else "Browser not opened.\n")
+
+
+def _write_ui_status(
+    stdout: TextIO,
+    status: UIServerStatus,
+    *,
+    json_output: bool,
+) -> None:
+    if json_output:
+        json.dump({"status": "completed", **status.to_mapping()}, stdout)
+        stdout.write("\n")
+        return
+    stdout.write(f"Research Digest UI: {status.state}\n")
+    if status.pid is not None:
+        stdout.write(f"PID: {status.pid}; URL: {status.url}; log: {status.log_path}\n")
+
+
+def _write_ui_stop_result(
+    stdout: TextIO,
+    result: UIStopResult,
+    *,
+    json_output: bool,
+) -> None:
+    if json_output:
+        json.dump({"status": "completed", **result.to_mapping()}, stdout)
+        stdout.write("\n")
+        return
+    if result.stopped:
+        stdout.write("Research Digest UI server stopped. Digest workers and schedule unchanged.\n")
+    elif result.stale_registration_removed:
+        stdout.write("Stale Research Digest UI registration removed; no process was stopped.\n")
+    else:
+        stdout.write("Research Digest UI server is not running.\n")
+
+
+def _write_windows_launcher_result(
+    stdout: TextIO,
+    result: WindowsLauncherResult,
+    *,
+    json_output: bool,
+) -> None:
+    if json_output:
+        json.dump({"status": "completed", **result.to_mapping()}, stdout)
+        stdout.write("\n")
+        return
+    if result.operation == "installed_or_updated":
+        stdout.write(f"Research Digest Windows launcher installed: {result.path}\n")
+    elif result.operation == "removed":
+        stdout.write(f"Research Digest Windows launcher removed: {result.path}\n")
+    else:
+        stdout.write("Research Digest Windows launcher is not installed.\n")
+
+
+def _write_launcher_failure(
+    *,
+    args: argparse.Namespace,
+    stdout: TextIO,
+    stderr: TextIO,
+    operation: str,
+    error: Exception,
+) -> int:
+    message = sanitize_error(error)
+    if bool(args.json):
+        json.dump({"status": "failed", "error_message": message}, stdout)
+        stdout.write("\n")
+    else:
+        stderr.write(f"Research Digest {operation} failed: {message}\n")
+    return 1
 
 
 def _status_command(
@@ -632,6 +989,16 @@ def _doctor_network_timeout(value: str) -> float:
     return timeout
 
 
+def _ui_timeout(value: str) -> float:
+    try:
+        timeout = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a positive finite number") from exc
+    if timeout <= 0 or timeout != timeout or timeout == float("inf") or timeout > 120:
+        raise argparse.ArgumentTypeError("must be a positive finite number no greater than 120")
+    return timeout
+
+
 def _status_payload(
     config: AppConfig,
     db: Database,
@@ -811,7 +1178,7 @@ def _is_port_available(port: int) -> bool:
 
 
 def _launch_process(command: Sequence[str]) -> object:
-    return subprocess.Popen(command)
+    return subprocess.run(list(command), check=False)
 
 
 def _schedule_command(

@@ -1689,3 +1689,91 @@ Final integrated qualification:
 - Installed CLI `backup --json`: PASS at schema `18`.
 - Wheel content inspection: PASS; expected package modules and console-script
   metadata present, with no cache or bytecode artifacts.
+
+## Separate Windows Launcher Qualified Freeze
+
+State date: 2026-08-27.
+
+Baseline and scope:
+
+- The launcher is a separate qualified change on top of integrated baseline
+  `534e4e2450b4eb0b9332a62504a013a034143495`.
+- It owns only the Streamlit UI-server singleton and Windows browser opening.
+- It does not start or cancel digests, modify schedules, change coverage,
+  trigger catch-up, or invoke source/model/Library/scientific work.
+- Package/runtime version remains `0.3.0`, SQLite schema remains `18`, JSON
+  config remains `5`, and the additive local UI-registration format is version
+  `1`.
+
+Qualified launcher boundary:
+
+- `research-digest launch` starts or reuses one detached exact Research Digest
+  Streamlit server, waits for its health endpoint, and opens its actual URL in
+  the Windows default browser.
+- `research-digest ui-status --json` reports exact durable UI process and
+  endpoint diagnostics; `research-digest ui-stop` stops only that UI process.
+- Foreground `research-digest serve` remains available for manual/debug use and
+  participates in the same exact UI registration so `launch` does not create a
+  duplicate server.
+- Registration identity includes PID, Linux process start ticks, boot identity,
+  nonce, exact app/command/port, application version, and startup timestamp.
+- A bounded launcher `flock` closes rapid-launch check/spawn races. Port policy
+  prefers 8501 and scans only the ten-port range through 8510.
+- The Windows Desktop shortcut is created through PowerShell/`WScript.Shell`,
+  targets discovered `wsl.exe` and the discovered WSL distribution, invokes
+  the absolute installed Research Digest entry point, and embeds no secrets.
+  Install/update is idempotent; uninstall refuses non-owned shortcut artifacts.
+- Detached Streamlit logs and registration live under the Research Digest user
+  data directory rather than the repository.
+
+Human Windows launcher acceptance:
+
+- `install-launcher` created the owned **Research Digest** Desktop shortcut.
+- Double-click opened Research Digest in the Windows default browser without a
+  terminal remaining open.
+- Launch itself created no digest and invoked no scientific/provider work.
+- Repeated and rapid launches reused exactly one UI PID and port.
+- A real Codex-backed digest started from the Windows-opened UI reached
+  provider-backed Stage-1 and full analysis.
+- Closing the browser did not stop the digest.
+- `ui-stop` stopped only Streamlit while the detached digest worker continued.
+- Double-click relaunch rediscovered the same durable run, progress, and
+  **Cancel digest** control; cancellation then worked normally.
+- A real unrelated listener on 8501 remained untouched; Research Digest chose
+  a bounded fallback port and opened the correct fallback URL.
+
+Explicit deferred post-freeze smoke:
+
+- Not run: `wsl --shutdown` -> double-click **Research Digest** -> verify WSL
+  cold-start and UI open -> run a real Codex-backed digest.
+- Reason: unrelated live Worker/Auditor sessions were running inside WSL and a
+  forced shutdown would have terminated them.
+- Disposition: environment/cold-start acceptance item only, not a launcher
+  failure. Perform it after this freeze when WSL can be shut down safely.
+
+Qualification and audit evidence before the authorized freeze:
+
+- Full `pytest -q`: PASS, 485 passed and 9 subtests passed.
+- Explicit Streamlit AppTest suites: PASS, 62 passed.
+- `ruff check .`: PASS.
+- `mypy --strict src tests`: PASS, 114 source files checked.
+- `python -m compileall src tests`: PASS.
+- `git diff --check`: PASS.
+- Wheel build and isolated no-dependency wheel install: PASS.
+- Installed launcher CLI/version/status/help smokes: PASS.
+- Generated PowerShell install/uninstall script parsing: PASS.
+- Real detached start/reuse/stop, foreground-serve reuse, port-collision, and
+  exact-stop process smokes: PASS.
+- Fresh focused launcher Auditor: PASS after validating singleton races, exact
+  process ownership, port safety, Windows/WSL quoting, startup side-effect
+  freedom, active-run reattachment, shortcut ownership, lifecycle separation,
+  package contents, and secrets handling.
+- Final diagnostic delta audit: PASS; stopped/stale `ui-status` exposes the
+  deterministic log path without changing lifecycle behavior.
+
+Freeze boundary:
+
+- The local commit containing this record freezes only the intended launcher,
+  tests, README/user guidance, and campaign documentation.
+- No tag, push, package publication, public release, database migration, or
+  config migration is part of this freeze.

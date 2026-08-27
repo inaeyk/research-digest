@@ -61,6 +61,39 @@ research-digest --version
 research-digest status
 ```
 
+### Everyday Windows Launch
+
+On Windows 11 with WSL2, create the supported Desktop shortcut once:
+
+```bash
+research-digest install-launcher
+```
+
+After that, double-click **Research Digest** on the Windows Desktop. Research
+Digest starts or reuses one local UI server and opens it in the Windows default
+browser. No Linux terminal needs to remain open.
+
+Power-user UI commands are:
+
+```bash
+research-digest launch
+research-digest ui-status --json
+research-digest ui-stop
+research-digest uninstall-launcher
+```
+
+`launch` is idempotent: repeated or rapid launches reuse the same exact server.
+If port 8501 belongs to another application, Research Digest leaves it alone and
+uses a bounded fallback port. UI logs and process registration live below the
+Research Digest user-data directory, not in the repository.
+
+The lifecycles are deliberately separate:
+
+- Closing the browser does not stop or cancel a digest.
+- `ui-stop` stops only the Streamlit UI server; an active digest continues.
+- **Cancel digest** stops the active digest but does not disable its schedule.
+- Stopping or restarting the UI does not change source coverage or start catch-up.
+
 ### Codex Authentication
 
 The default analyzer can use the Codex CLI and its saved ChatGPT
@@ -75,13 +108,19 @@ ChatGPT subscription access and OpenAI API billing are separate. Codex-backed
 operation uses the Codex CLI login state. OpenAI API mode is optional and uses
 `OPENAI_API_KEY`.
 
-Launch the app through the supported command:
+The Windows shortcut intentionally never stores API keys or authentication
+tokens. If optional OpenAI API mode is used, `OPENAI_API_KEY` must already be
+available to non-interactive processes in the target WSL distribution; Codex
+CLI authentication continues to use its normal saved login state.
+
+For foreground/manual debugging, the existing server command remains available:
 
 ```bash
 research-digest serve
 ```
 
-The CLI prints the local browser URL. You normally do not need to run
+`serve` prints the local browser URL and keeps the manual Streamlit server path
+separate from the everyday detached launcher. You normally do not need to run
 `streamlit run` directly.
 
 To use OpenAI API mode instead of Codex:
@@ -157,9 +196,10 @@ analysis, or Library work. Streamlit's top-right Stop control only stops the cur
 page script; it is not the Research Digest cancellation control.
 
 The worker is local and independent of the Streamlit server. If the browser is
-refreshed or `research-digest serve` is restarted, the UI reattaches to the active
-run and offers the same cancellation control. Completed retrieval and valid partial
-analyses are preserved for retry. Power users can use the same cancellation service:
+refreshed or the UI is stopped and reopened with `research-digest launch`, the UI
+reattaches to the active run and offers the same cancellation control. Completed
+retrieval and valid partial analyses are preserved for retry. Power users can use
+the same cancellation service:
 
 ```bash
 research-digest cancel --run-id RUN_ID
@@ -486,6 +526,11 @@ users, automation, and recovery.
 
 ```bash
 research-digest --version
+research-digest launch [--port 8501] [--no-browser] [--json]
+research-digest ui-status [--json]
+research-digest ui-stop [--json]
+research-digest install-launcher [--distro NAME] [--json]
+research-digest uninstall-launcher [--json]
 research-digest serve [--port 8501] [--host localhost]
 research-digest run [--json]
 research-digest status [--json]
@@ -509,6 +554,16 @@ Start with:
 research-digest doctor
 research-digest status
 ```
+
+For Windows shortcut or UI-server problems, inspect:
+
+```bash
+research-digest ui-status --json
+```
+
+The status includes the exact owned PID, actual URL, and UI log path when a
+registered server exists. A failed `launch` does not open a dead browser tab and
+reports the diagnostic log path.
 
 If Codex analysis fails, check:
 
