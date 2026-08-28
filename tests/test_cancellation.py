@@ -61,7 +61,7 @@ from research_digest.models import (
     profile_semantic_fingerprint,
 )
 from research_digest.pipeline import run_digest
-from research_digest.platform_runtime import ExactProcessState, process_start_identity
+from research_digest.platform_runtime import ExactProcessState, NativeProcessInfo
 from research_digest.preselection import (
     AbstractPreselectionDecision,
     AbstractPreselectionResult,
@@ -740,63 +740,92 @@ class CancellationTests(unittest.TestCase):
         self.assertEqual(run["error_message"], "Cancelled by user.")
         self.db.release_run_lock(owner=owner_b)
 
-    @unittest.skipUnless(os.name == "posix", "POSIX process-group test")
     def test_stale_recovery_stops_registered_orphan_provider(self) -> None:
-        provider = subprocess.Popen(  # noqa: S603
-            [sys.executable, "-c", "import time; time.sleep(30)"],
-            start_new_session=True,
-        )
-        reaper: threading.Thread | None = None
+        provider_pid = 43_210
+        provider_start_identity = 987_654
+        provider_alive = True
         owner = "dead-worker-owner"
         replacement = "replacement-owner"
-        try:
-            self.db.acquire_run_lock(owner=owner, stale_after_seconds=60.0)
-            run_id = self.db.create_app_run(
-                profile_id=self.profile_id,
-                source_name="arxiv",
+
+        def provider_info(pid: int) -> NativeProcessInfo | None:
+            self.assertEqual(pid, provider_pid)
+            if not provider_alive:
+                return None
+            return NativeProcessInfo(
+                start_identity=provider_start_identity,
+                state="2",
+                process_group_id=provider_pid,
             )
-            self.db.mark_app_run_running(run_id)
-            self.db.register_provider_process(
-                run_id=run_id,
-                call_kind="orphan-test",
-                pid=provider.pid,
-                process_group_id=os.getpgid(provider.pid),
-                process_start_ticks=process_start_identity(provider.pid),
-            )
-            # A real provider orphan is adopted and reaped by the operating
-            # system after its worker dies. This provider is the test process's
-            # child, so reap it concurrently; otherwise Darwin can correctly
-            # report the exited-but-unreaped interval as UNKNOWN.
-            reaper = threading.Thread(target=provider.wait, daemon=True)
-            reaper.start()
-            with mock.patch(
+
+        def provider_exists(pid: int) -> bool:
+            self.assertEqual(pid, provider_pid)
+            return provider_alive
+
+        def stop_exact_provider_group(
+            process_group_id: int,
+            requested_signal: signal.Signals,
+        ) -> None:
+            nonlocal provider_alive
+            self.assertEqual(process_group_id, provider_pid)
+            self.assertEqual(requested_signal, signal.SIGTERM)
+            provider_alive = False
+
+        runtime = mock.Mock()
+        runtime.process_info.side_effect = provider_info
+        runtime.pid_exists.side_effect = provider_exists
+
+        self.db.acquire_run_lock(owner=owner, stale_after_seconds=60.0)
+        run_id = self.db.create_app_run(
+            profile_id=self.profile_id,
+            source_name="arxiv",
+        )
+        self.db.mark_app_run_running(run_id)
+        self.db.register_provider_process(
+            run_id=run_id,
+            call_kind="orphan-test",
+            pid=provider_pid,
+            process_group_id=provider_pid,
+            process_start_ticks=provider_start_identity,
+        )
+        with (
+            mock.patch(
                 "research_digest.cancellation.process_run_owner_state",
                 return_value=RunOwnerState.DEAD,
-            ):
-                stopped = stop_abandoned_provider_processes(
-                    self.db,
-                    stale_after_seconds=60.0,
-                )
-            reaper.join(timeout=3.0)
-            self.assertFalse(reaper.is_alive())
-            self.assertEqual(stopped, 1)
-            self.assertEqual(self.db.list_active_provider_processes(run_id=run_id), [])
-
-            self.db.acquire_run_lock(
-                owner=replacement,
+            ),
+            mock.patch(
+                "research_digest.platform_runtime.select_platform_runtime",
+                return_value=runtime,
+            ),
+            mock.patch(
+                "research_digest.cancellation.os.getpgid",
+                return_value=provider_pid,
+            ) as get_process_group,
+            mock.patch(
+                "research_digest.cancellation._signal_process_group",
+                side_effect=stop_exact_provider_group,
+            ) as signal_group,
+        ):
+            stopped = stop_abandoned_provider_processes(
+                self.db,
                 stale_after_seconds=60.0,
-                owner_state_checker=lambda _owner: RunOwnerState.DEAD,
             )
-            run = self.db.get_app_run(run_id)
-            assert run is not None
-            self.assertEqual(run["status"], "FAILED")
-            self.db.release_run_lock(owner=replacement)
-        finally:
-            if provider.poll() is None:
-                provider.kill()
-                provider.wait(timeout=3.0)
-            if reaper is not None:
-                reaper.join(timeout=3.0)
+
+        self.assertEqual(stopped, 1)
+        self.assertEqual(runtime.process_info.call_count, 3)
+        self.assertEqual(runtime.pid_exists.call_count, 2)
+        get_process_group.assert_called_once_with(provider_pid)
+        signal_group.assert_called_once_with(provider_pid, signal.SIGTERM)
+        self.assertEqual(self.db.list_active_provider_processes(run_id=run_id), [])
+
+        self.db.acquire_run_lock(
+            owner=replacement,
+            stale_after_seconds=60.0,
+            owner_state_checker=lambda _owner: RunOwnerState.DEAD,
+        )
+        run = self.db.get_app_run(run_id)
+        assert run is not None
+        self.assertEqual(run["status"], "FAILED")
+        self.db.release_run_lock(owner=replacement)
 
     def test_persistence_failure_cannot_claim_source_coverage(self) -> None:
         with mock.patch.object(
