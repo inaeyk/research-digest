@@ -1,4 +1,4 @@
-# Research Digest v0.4.0
+# Research Digest v0.4.1 distribution candidate
 
 Research Digest is a local-first, personalized research-monitoring
 application. It currently monitors arXiv, screens new papers against
@@ -38,148 +38,187 @@ Papers rejected during abstract preselection do not receive expensive full
 analysis or generated commentary. They remain visible with source metadata,
 links, their original abstract on demand, and a Save to Library action.
 
-## v0.4.0 highlights
+## Install Research Digest
 
-- Source-date coverage now represents complete source retrieval, independent
-  of Interest Profile analysis, and survives application or machine restarts.
-- Retrieved source-date corpora remain reusable across profile edits, so those
-  edits do not require redundant source retrieval. Completed analyses remain
-  reusable across retries when their profile and analysis semantics are
-  unchanged.
-- Digest workers run independently from the browser and Streamlit UI. Active
-  runs can be rediscovered after UI restart and explicitly cancelled while
-  retaining completed work and source coverage.
-- Article headers consistently show source-provided author metadata.
-- Windows 11 with WSL2 has an owned Desktop launcher and Task Scheduler
-  automation; macOS has an owned `Research Digest.app` and launchd automation.
-- Linux/WSL and Darwin use exact process ownership for UI and provider lifecycle
-  operations. The macOS bootstrap rejects Python older than 3.11 before it
-  creates a virtual environment.
-
-Windows 11 with WSL2 and macOS are human-qualified on their tested
-environments. Two environment-only smokes remain deferred: Windows launch plus
-real Codex execution immediately after `wsl --shutdown`, and macOS login/logout
-or full restart. Finder launch, real Codex analysis, cancellation, fallback
-ports, and launchd invocation passed on real Mac hardware.
-
-## Installation and First Run
+Ordinary users install the versioned wheel and installer assets from the exact
+GitHub release. They do not clone or retain this source repository, create a
+virtual environment, or run Research Digest from a Git checkout. The v0.4.1
+commands below become usable when those release assets are published; this
+repository currently contains the implementation candidate only.
 
 ### macOS prerequisites
 
 - macOS
-- Git
 - Python 3.11 or newer
 - the Codex CLI installed and authenticated for the default analyzer
 
 Follow the [official Codex CLI instructions](https://developers.openai.com/codex/cli/)
 to install and sign in to Codex. Before installing or using Research Digest,
-confirm that the CLI is available and authenticated:
+confirm that the CLI is available and authenticated before installation:
 
 ```bash
 codex login status
 ```
 
-### Install v0.4.0 on macOS
+### macOS
 
-Clone the published v0.4.0 tag and run the guarded bootstrap:
-
-```bash
-cd "$HOME"
-git clone \
-  --branch v0.4.0 \
-  --depth 1 \
-  https://github.com/inaeyk/research-digest.git \
-  research-digest
-cd "$HOME/research-digest"
-./scripts/bootstrap_macos.sh
-```
-
-The bootstrap validates Python, creates and owns `.venv`, installs Research
-Digest, and refuses unsupported Python before creating an environment. Do not
-create or activate a virtual environment manually. Run the first diagnostics
-and install the Finder launcher through the bootstrap-created command:
+Download and run the exact v0.4.1 installer asset. It verifies its own installer
+core and the wheel against the release `SHA256SUMS` manifest before creating a
+runtime:
 
 ```bash
-./.venv/bin/research-digest doctor
-./.venv/bin/research-digest install-launcher
+curl --fail --location --proto '=https' --tlsv1.2 \
+  --output install-research-digest-macos.sh \
+  https://github.com/inaeyk/research-digest/releases/download/v0.4.1/install-research-digest-macos.sh
+sh install-research-digest-macos.sh
 ```
 
-The launcher is created at `~/Applications/Research Digest.app` and targets the
-installed command in `~/research-digest/.venv/bin/research-digest` for the
-checkout above.
+The installer searches compatible Python commands instead of failing merely
+because the shell's first `python3` is too old. It creates and verifies:
 
-### Everyday use on macOS
+```text
+~/Library/Application Support/Research Digest/runtime/0.4.1/venv/
+~/Applications/Research Digest.app
+```
 
-Open `~/Applications/Research Digest.app` from Finder, and optionally place it
-in the Dock. It opens the default browser and starts or reuses the local UI;
-ordinary use does not require Terminal. Opening the app alone does not create a
-digest.
+No `sudo`, Git checkout, or manual virtual-environment setup is required. Open
+**Research Digest.app** from Finder and optionally place it in the Dock.
 
-The one-time setup is therefore: install and authenticate Codex, install
-Research Digest, and run `research-digest install-launcher` through the
-bootstrap-created command. Everyday use is opening **Research Digest.app**.
-
-### Python troubleshooting on macOS
-
-The normal `./scripts/bootstrap_macos.sh` path searches `python3` and compatible
-versioned Python 3.11–3.14 commands automatically. If discovery does not select
-the intended interpreter, use an explicit installed executable as a fallback.
-For example, the clean-install smoke used:
+If automatic Python discovery needs help, set the exact executable path. For
+example:
 
 ```bash
 RESEARCH_DIGEST_PYTHON=/opt/homebrew/bin/python3.12 \
-  ./scripts/bootstrap_macos.sh
+  sh install-research-digest-macos.sh
 ```
 
-The actual path may differ; use the concrete path of a Python 3.11-or-newer
-installation on the current Mac. If no compatible interpreter is installed,
-install one from python.org or Homebrew, then rerun the normal bootstrap.
+The actual Python path may differ. The override is troubleshooting, not the
+normal copy/paste path.
+
+### Windows 11 with WSL2
+
+Prerequisites are WSL2, Python 3.11 or newer inside the intended WSL
+distribution, and Codex installed and authenticated inside that same
+distribution. Confirm authentication from WSL with `codex login status`.
+
+From Windows PowerShell, download and run the exact installer:
+
+```powershell
+Invoke-WebRequest `
+  -Uri "https://github.com/inaeyk/research-digest/releases/download/v0.4.1/install-research-digest-windows.ps1" `
+  -OutFile ".\install-research-digest-windows.ps1"
+powershell -ExecutionPolicy Bypass -File ".\install-research-digest-windows.ps1"
+```
+
+If more than one WSL distribution is installed, choose one explicitly:
+
+```powershell
+powershell -ExecutionPolicy Bypass `
+  -File ".\install-research-digest-windows.ps1" `
+  -Distribution "Research Debian"
+```
+
+The distribution name above is only an example; use the exact output from
+`wsl.exe --list --quiet`. The installer creates the private runtime at:
+
+```text
+~/.local/share/research-digest/runtime/0.4.1/venv/
+```
+
+It then installs or updates the owned **Research Digest** Windows Desktop
+shortcut. Double-click that shortcut for everyday use; no WSL Terminal or
+source checkout needs to remain open.
+
+### What the installer verifies
+
+Both platform entry points are pinned to v0.4.1 and verify the exact wheel
+SHA-256 before installation. The shared installer then checks:
+
+```text
+research-digest --version
+research-digest doctor
+research-digest ui-status --json
+```
+
+Installation does not fetch arXiv, invoke an analyzer, create an `app_run`, or
+acquire a digest lock. It does not store API keys, ChatGPT tokens, or Codex
+authentication material.
 
 ### First-run doctor warnings
 
-Immediately after a clean bootstrap, before normal application initialization,
-`research-digest doctor` may warn that the config file, data directory, SQLite
-database, schema, schedule, and last run do not exist yet, and that network
-checks were skipped. Those warnings are normal on first run. The installation
-criterion is:
+Immediately after installation, `research-digest doctor` may warn that the
+config file, SQLite database, schema, schedule, and last run do not exist yet,
+and that network checks were skipped. Those warnings are normal on first run.
+The installation criterion is:
 
 ```text
 Failures: 0
 ```
 
-After `research-digest status --json` initializes fresh application state, the
-expected versions are schema `18` and config `5`; `last_run` and `run_lock` are
-null, and the launchd schedule is not installed until it is enabled.
+The installer creates the private runtime directory, so that directory's
+existence is not a warning. On first normal initialization the expected
+versions remain schema `18` and config `5`; no schema or config migration was
+introduced for distribution packaging.
 
-### Other source checkouts and development
+### Upgrading an existing source-checkout installation
 
-For a non-macOS source checkout or a development environment, create and manage
-the Python environment appropriate to that platform:
+Run the same release installer. It builds and verifies the private v0.4.1
+runtime before repointing the owned launcher. If a Research Digest-owned daily
+schedule already exists, the installer repoints it while preserving its exact
+daily time and enabled or disabled state. If no schedule exists, none is
+created. Database, config, Library, History, profiles, coverage, and Codex login
+state remain in their established locations.
+
+The old checkout and its `.venv` are never deleted. After launching and
+verifying the new installation, they may be removed manually if they are not
+needed for development.
+
+### Uninstalling
+
+Normal uninstall removes the owned launcher and private runtime while
+preserving personal data. If a daily schedule exists, explicitly choose to
+remove that owned schedule too; the uninstaller will not leave a schedule
+pointing at deleted runtime files.
+
+macOS:
 
 ```bash
+sh install-research-digest-macos.sh uninstall
+# If automation is installed:
+sh install-research-digest-macos.sh uninstall --remove-schedule
+```
+
+Windows PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass `
+  -File ".\install-research-digest-windows.ps1" `
+  -Action Uninstall `
+  -Distribution "Research Debian" `
+  -RemoveSchedule
+```
+
+A destructive data purge is a separate option and requires the exact explicit
+confirmation phrase printed by the installer. Back up first. Normal uninstall
+does not delete the database, config, Library, History, notes, collections,
+feedback, coverage, or profiles.
+
+### Development and contributing
+
+The GitHub repository and GitHub-generated source archives are for developers
+and contributors. They intentionally include tests, CI, campaign records,
+qualification evidence, and developer tooling. To work on the source:
+
+```bash
+git clone https://github.com/inaeyk/research-digest.git
+cd research-digest
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e .
 python -m pip install -e ".[dev]"
 ```
 
-Check the installed command with:
-
-```bash
-research-digest --version
-research-digest status
-```
-
-### Everyday Windows launch
-
-On Windows 11 with WSL2, install the platform launcher once:
-
-```bash
-research-digest install-launcher
-```
-
-This creates the owned **Research Digest** Desktop shortcut. Everyday use is a
-double-click on that shortcut; no WSL Terminal window needs to remain open.
+Editable installation remains a developer workflow. The wheel plus platform
+installer is the recommended ordinary-user distribution.
 
 ### Codex authentication details
 
@@ -696,11 +735,10 @@ codex login
 On macOS, the launcher and launchd schedule capture the exact non-secret PATH
 needed for the installed Research Digest and Codex commands, because Finder and
 launchd do not load interactive shell startup files. If Research Digest, Codex,
-Homebrew, npm, or a supporting interpreter moves, rerun
-`./.venv/bin/research-digest install-launcher` and update the automatic schedule
-from Settings. The owned launchd log is `scheduler.log` in the Research Digest
-data directory. Normal users should manage the schedule through Settings, not
-raw `launchctl` commands.
+Homebrew, npm, or a supporting interpreter moves, rerun the pinned v0.4.1
+installer and update the automatic schedule from Settings. The owned launchd
+log is `scheduler.log` in the Research Digest data directory. Normal users
+should manage the schedule through Settings, not raw `launchctl` commands.
 
 If automation looks wrong, inspect Settings -> Automation. A schedule can be
 enabled, disabled, or unavailable/unknown if the scheduler cannot be inspected.
@@ -732,9 +770,10 @@ profile text.
 - Analysis is abstract-level; full-paper/PDF deep reading is deferred.
 - Model scores are ordinal judgments, not calibrated probabilities.
 - Library connections are model inferences and should be reviewed critically.
-- Windows/WSL and macOS are human-qualified on their tested environments. The
+- The prior v0.4.0 source-checkout installation was human-qualified on Windows/WSL
+  and macOS. Release-asset-only v0.4.1 smokes remain pending, including the
   documented Windows cold-WSL-start/real-Codex and macOS login/logout or
-  full-restart smokes remain deferred.
+  full-restart checks.
 - Research Digest is local and single-user; it has no multi-user or cloud
   collaboration layer.
 

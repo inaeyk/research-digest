@@ -262,6 +262,8 @@ class SchedulerTests(unittest.TestCase):
                     "next_run_time": "2026-08-16T07:30:00.0000000",
                     "execute": "wsl.exe",
                     "arguments": "-d Ubuntu --exec research-digest run",
+                    "time_of_day": "07:30",
+                    "owned": True,
                 }
             )
         )
@@ -273,6 +275,8 @@ class SchedulerTests(unittest.TestCase):
         self.assertEqual(status.state, "Ready")
         self.assertEqual(status.last_task_result, 0)
         self.assertEqual(status.execute, "wsl.exe")
+        self.assertEqual(status.time_of_day, "07:30")
+        self.assertTrue(status.owned)
 
     def test_windows_status_accepts_large_unsigned_task_result(self) -> None:
         runner = FakeRunner(
@@ -297,6 +301,37 @@ class SchedulerTests(unittest.TestCase):
         self.assertEqual(status.last_task_result, 3221225786)
         self.assertEqual(status.next_run_time, "2026-08-19T06:00:00.0000000")
 
+    def test_windows_status_recovers_exact_private_command_with_spaces(self) -> None:
+        arguments = (
+            '-d "Research Debian" --exec env '
+            '"PATH=/home/person/npm with spaces/bin:/usr/bin" '
+            '"/home/person/private runtime/0.4.1/venv/bin/research-digest" run'
+        )
+        runner = FakeRunner(
+            stdout=json.dumps(
+                {
+                    "installed": True,
+                    "state": "Disabled",
+                    "execute": "wsl.exe",
+                    "arguments": arguments,
+                    "time_of_day": "19:10",
+                    "owned": True,
+                }
+            )
+        )
+
+        status = WindowsTaskSchedulerBackend(
+            powershell_path="powershell.exe",
+            runner=runner,
+        ).status(task_name=DEFAULT_TASK_NAME)
+
+        self.assertEqual(
+            status.command_executable,
+            "/home/person/private runtime/0.4.1/venv/bin/research-digest",
+        )
+        self.assertEqual(status.time_of_day, "19:10")
+        self.assertTrue(status.owned)
+
     def test_windows_status_script_uses_64_bit_last_task_result(self) -> None:
         runner = FakeRunner(
             stdout=json.dumps(
@@ -313,6 +348,65 @@ class SchedulerTests(unittest.TestCase):
         script = runner.calls[0][-1]
         self.assertIn("[int64]$info.LastTaskResult", script)
         self.assertNotIn("[int]$info.LastTaskResult", script)
+
+    def test_windows_install_and_remove_scripts_check_task_ownership(self) -> None:
+        runner = FakeRunner(stdout=json.dumps({"removed": True}))
+        backend = WindowsTaskSchedulerBackend(powershell_path="powershell.exe", runner=runner)
+        with mock.patch(
+            "research_digest.scheduler.shutil.which",
+            side_effect=lambda name: "/home/researcher/bin/codex" if name == "codex" else None,
+        ):
+            request = build_schedule_request(
+                time_of_day="06:15",
+                config=config(Path("/tmp/research-digest.sqlite3")),
+                wsl_distro="Research Debian",
+                wsl_executable="C:\\Windows\\System32\\wsl.exe",
+                command_executable="/private runtime/venv/bin/research-digest",
+            )
+        backend.install(request)
+        backend.remove(task_name=DEFAULT_TASK_NAME)
+
+        install_script = runner.calls[0][-1]
+        remove_script = runner.calls[1][-1]
+        self.assertIn("Refusing to overwrite", install_script)
+        self.assertIn("org.research-digest.windows-schedule.v1", install_script)
+        self.assertIn("Export-ScheduledTask", install_script)
+        self.assertIn("prior state was restored", install_script)
+        self.assertIn("Refusing to remove", remove_script)
+        self.assertIn("Run Research Digest once per day from WSL.", remove_script)
+
+    def test_windows_snapshot_and_restore_preserve_exact_xml_and_disabled_state(self) -> None:
+        xml = "<Task><Settings><StartWhenAvailable>true</StartWhenAvailable></Settings></Task>"
+        runner = FakeRunner(
+            stdout=json.dumps(
+                {
+                    "installed": True,
+                    "owned": True,
+                    "enabled": False,
+                    "xml": xml,
+                }
+            )
+        )
+        backend = WindowsTaskSchedulerBackend(powershell_path="powershell.exe", runner=runner)
+
+        snapshot = backend.snapshot(task_name=DEFAULT_TASK_NAME)
+        runner.stdout = "{}"
+        backend.restore(snapshot)
+
+        self.assertEqual(snapshot.artifact, xml.encode("utf-8"))
+        restore_script = runner.calls[1][-1]
+        self.assertIn(xml, restore_script)
+        self.assertIn("Disable-ScheduledTask", restore_script)
+        self.assertIn("Register-ScheduledTask", restore_script)
+
+    def test_windows_snapshot_refuses_unowned_task(self) -> None:
+        runner = FakeRunner(
+            stdout=json.dumps({"installed": True, "owned": False})
+        )
+        backend = WindowsTaskSchedulerBackend(powershell_path="powershell.exe", runner=runner)
+
+        with self.assertRaisesRegex(ScheduleError, "without verified ownership"):
+            backend.snapshot(task_name=DEFAULT_TASK_NAME)
 
     def test_windows_backend_sanitizes_nonzero_failure_at_cli_layer(self) -> None:
         runner = FakeRunner(returncode=1, stderr="failed with OPENAI_API_KEY=sk-secret123456789")

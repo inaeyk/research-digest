@@ -1,5 +1,45 @@
 # Changelog
 
+## [0.4.1] - Unreleased
+
+### Added
+
+- Exact GitHub Release end-user asset set: a universal wheel, a shared
+  standard-library installer core, thin macOS and Windows/WSL entry points, and
+  `SHA256SUMS`.
+- Versioned private runtimes below the established platform data directory,
+  with wheel-hash provenance, atomic current/prior runtime records, and exact
+  native scheduler snapshots for rollback.
+- Safe normal uninstall that preserves personal data and requires an explicit
+  choice before removing an installed schedule; destructive data purge requires
+  a separate exact confirmation phrase.
+
+### Changed
+
+- Ordinary-user installation no longer requires a Git clone, retained source
+  checkout, manual virtual environment, tests, campaign records, CI files, or
+  developer tools.
+- Owned desktop launchers and existing owned schedules can be repointed to the
+  verified private runtime. Schedule time and enabled/disabled state are
+  preserved, and no schedule is created when none existed.
+- The wheel excludes the deterministic fake analyzer used only by tests and is
+  emitted with actual DEFLATE compression.
+
+### Compatibility
+
+- Scientific and digest runtime semantics are unchanged from v0.4.0.
+- SQLite schema remains version 18.
+- JSON config remains version 5.
+- UI registration remains version 1.
+- No user-data migration is required for this packaging change.
+
+### Release status
+
+- Candidate packaging only. No v0.4.1 tag, GitHub Release, or published asset
+  exists until the release procedure is explicitly authorized and completed.
+- Clean release-asset-only human smokes on macOS and Windows/WSL remain release
+  acceptance steps after candidate artifacts are staged.
+
 ## [0.4.0] - 2026-08-27
 
 ### Added

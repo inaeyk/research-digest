@@ -54,6 +54,10 @@ def install_or_update_schedule(
     scheduler_backend: SchedulerBackend | None = None,
     task_name: str = DEFAULT_TASK_NAME,
     wsl_distro: str | None = None,
+    command_executable: str | None = None,
+    enabled: bool = True,
+    loaded: bool | None = None,
+    platform: str | None = None,
 ) -> ScheduleOperationResult:
     backend = scheduler_backend or select_scheduler_backend()
     request = build_schedule_request(
@@ -61,6 +65,10 @@ def install_or_update_schedule(
         time_of_day=time_of_day,
         config=config,
         wsl_distro=wsl_distro,
+        command_executable=command_executable,
+        enabled=enabled,
+        loaded=loaded,
+        platform=platform,
     )
     return backend.install(request)
 

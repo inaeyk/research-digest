@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 import unittest
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 from unittest import mock
@@ -31,16 +32,31 @@ class FakeLaunchctl:
         *,
         print_returncode: int = 0,
         fail_operation: str | None = None,
+        disabled: bool = False,
     ) -> None:
         self.calls: list[tuple[str, ...]] = []
         self.print_returncode = print_returncode
         self.fail_operation = fail_operation
+        self.disabled = disabled
 
     def __call__(self, command: Sequence[str]) -> subprocess.CompletedProcess[str]:
         values = tuple(command)
         self.calls.append(values)
+        if values[1] == "print-disabled":
+            return subprocess.CompletedProcess(
+                values,
+                0,
+                f'{{ "{LAUNCHD_DEFAULT_LABEL}" => {str(self.disabled).lower()} }}',
+                "",
+            )
         if self.fail_operation is not None and self.fail_operation in values:
             returncode = 1
+        elif values[1] == "disable":
+            self.disabled = True
+            returncode = 0
+        elif values[1] == "enable":
+            self.disabled = False
+            returncode = 0
         else:
             returncode = self.print_returncode if "print" in values else 0
         return subprocess.CompletedProcess(values, returncode, "", "not loaded")
@@ -52,13 +68,16 @@ class StatefulLaunchctl:
         *,
         loaded: bool,
         fail_next_bootstrap: bool = False,
+        fail_bootstrap_always: bool = False,
         fail_enable: bool = False,
         fail_bootout: bool = False,
     ) -> None:
         self.loaded = loaded
         self.fail_next_bootstrap = fail_next_bootstrap
+        self.fail_bootstrap_always = fail_bootstrap_always
         self.fail_enable = fail_enable
         self.fail_bootout = fail_bootout
+        self.disabled = False
         self.calls: list[tuple[str, ...]] = []
 
     def __call__(self, command: Sequence[str]) -> subprocess.CompletedProcess[str]:
@@ -67,6 +86,13 @@ class StatefulLaunchctl:
         operation = values[1]
         if operation == "print":
             returncode = 0 if self.loaded else 113
+        elif operation == "print-disabled":
+            return subprocess.CompletedProcess(
+                values,
+                0,
+                f'{{ "{LAUNCHD_DEFAULT_LABEL}" => {str(self.disabled).lower()} }}',
+                "",
+            )
         elif operation == "bootout":
             if self.fail_bootout:
                 returncode = 1
@@ -74,14 +100,23 @@ class StatefulLaunchctl:
                 self.loaded = False
                 returncode = 0
         elif operation == "bootstrap":
-            if self.fail_next_bootstrap:
+            if self.fail_bootstrap_always:
+                returncode = 1
+            elif self.fail_next_bootstrap:
                 self.fail_next_bootstrap = False
                 returncode = 1
             else:
                 self.loaded = True
                 returncode = 0
-        elif operation == "enable" and self.fail_enable:
-            returncode = 1
+        elif operation == "enable":
+            if self.fail_enable:
+                returncode = 1
+            else:
+                self.disabled = False
+                returncode = 0
+        elif operation == "disable":
+            self.disabled = True
+            returncode = 0
         else:
             returncode = 0
         return subprocess.CompletedProcess(values, returncode, "", "simulated failure")
@@ -169,7 +204,70 @@ class LaunchdSchedulerTests(unittest.TestCase):
         self.assertTrue(status.installed)
         self.assertEqual(status.state, "enabled")
         self.assertEqual(status.execute, str(self.command))
+        self.assertEqual(status.time_of_day, "07:35")
+        self.assertTrue(status.owned)
         self.assertEqual(status.environment, request.environment)
+
+    def test_disabled_schedule_update_remains_installed_and_unloaded(self) -> None:
+        runner = StatefulLaunchctl(loaded=False)
+        backend = LaunchdSchedulerBackend(home=self.root, runner=runner, uid=508)
+        request = self.request()
+
+        backend.install(request)
+        runner.calls.clear()
+        backend.install(
+            replace(
+                request,
+                command_executable=str(self.root / "private" / "research-digest"),
+                enabled=False,
+            )
+        )
+        status = backend.status(task_name=DEFAULT_TASK_NAME)
+
+        self.assertEqual(status.state, "disabled")
+        self.assertEqual(status.time_of_day, "07:35")
+        self.assertIn("disable", [call[1] for call in runner.calls])
+        self.assertNotIn("bootstrap", [call[1] for call in runner.calls])
+
+    def test_successful_replacement_preserves_all_enabled_loaded_combinations(
+        self,
+    ) -> None:
+        for enabled in (False, True):
+            for loaded in (False, True):
+                with (
+                    self.subTest(enabled=enabled, loaded=loaded),
+                    tempfile.TemporaryDirectory() as tmp,
+                ):
+                    root = Path(tmp)
+                    agent = (
+                        root
+                        / "Library"
+                        / "LaunchAgents"
+                        / f"{LAUNCHD_DEFAULT_LABEL}.plist"
+                    )
+                    runner = StatefulLaunchctl(loaded=False)
+                    backend = LaunchdSchedulerBackend(home=root, runner=runner, uid=511)
+                    request = replace(
+                        self.request(),
+                        command_executable=str(root / "old runtime" / "research-digest"),
+                        working_directory=root / "data",
+                        launch_agent_path=agent,
+                        enabled=enabled,
+                        loaded=loaded,
+                    )
+                    backend.install(request)
+                    self.assertEqual((runner.disabled, runner.loaded), (not enabled, loaded))
+
+                    backend.install(
+                        replace(
+                            request,
+                            command_executable=str(
+                                root / "new runtime" / "research-digest"
+                            ),
+                        )
+                    )
+
+                    self.assertEqual((runner.disabled, runner.loaded), (not enabled, loaded))
 
     def test_unrelated_launch_agent_is_untouched_by_install_and_remove(self) -> None:
         self.agent.parent.mkdir(parents=True)
@@ -210,7 +308,7 @@ class LaunchdSchedulerTests(unittest.TestCase):
         before = self.agent.read_bytes()
         backend = LaunchdSchedulerBackend(
             home=self.root,
-            runner=FakeLaunchctl(print_returncode=113),
+            runner=FakeLaunchctl(print_returncode=113, disabled=True),
         )
 
         status = backend.status(task_name=DEFAULT_TASK_NAME)
@@ -218,6 +316,68 @@ class LaunchdSchedulerTests(unittest.TestCase):
         self.assertTrue(status.installed)
         self.assertEqual(status.state, "disabled")
         self.assertEqual(self.agent.read_bytes(), before)
+
+    def test_status_distinguishes_enabled_but_temporarily_unloaded_job(self) -> None:
+        LaunchdSchedulerBackend(home=self.root, runner=FakeLaunchctl()).install(self.request())
+        backend = LaunchdSchedulerBackend(
+            home=self.root,
+            runner=FakeLaunchctl(print_returncode=113, disabled=False),
+        )
+
+        status = backend.status(task_name=DEFAULT_TASK_NAME)
+
+        self.assertEqual(status.state, "enabled")
+        self.assertIn("not currently loaded", status.message or "")
+
+    def test_status_honors_durable_disabled_state_even_while_loaded(self) -> None:
+        LaunchdSchedulerBackend(home=self.root, runner=FakeLaunchctl()).install(self.request())
+        backend = LaunchdSchedulerBackend(
+            home=self.root,
+            runner=FakeLaunchctl(print_returncode=0, disabled=True),
+        )
+
+        status = backend.status(task_name=DEFAULT_TASK_NAME)
+
+        self.assertEqual(status.state, "disabled")
+
+    def test_snapshot_restore_recovers_exact_plist_and_live_state(self) -> None:
+        runner = StatefulLaunchctl(loaded=False)
+        backend = LaunchdSchedulerBackend(home=self.root, runner=runner, uid=509)
+        backend.install(self.request())
+        snapshot = backend.snapshot(task_name=DEFAULT_TASK_NAME)
+        original = self.agent.read_bytes()
+
+        backend.install(
+            replace(
+                self.request(),
+                command_executable=str(self.root / "new runtime" / "research-digest"),
+                enabled=False,
+            )
+        )
+        backend.restore(snapshot)
+
+        self.assertEqual(self.agent.read_bytes(), original)
+        self.assertTrue(runner.loaded)
+        self.assertFalse(runner.disabled)
+
+    def test_restore_failure_is_explicit_for_previously_loaded_schedule(self) -> None:
+        setup_runner = StatefulLaunchctl(loaded=False)
+        LaunchdSchedulerBackend(home=self.root, runner=setup_runner, uid=510).install(
+            self.request()
+        )
+        snapshot = LaunchdSchedulerBackend(
+            home=self.root,
+            runner=setup_runner,
+            uid=510,
+        ).snapshot(task_name=DEFAULT_TASK_NAME)
+        failing_runner = StatefulLaunchctl(
+            loaded=False,
+            fail_bootstrap_always=True,
+        )
+        backend = LaunchdSchedulerBackend(home=self.root, runner=failing_runner, uid=510)
+
+        with self.assertRaisesRegex(ScheduleError, "launchd command failed"):
+            backend.restore(snapshot)
 
     def test_failed_bootstrap_does_not_leave_false_installed_artifact(self) -> None:
         backend = LaunchdSchedulerBackend(
@@ -262,11 +422,12 @@ class LaunchdSchedulerTests(unittest.TestCase):
 
         self.assertEqual(self.agent.read_bytes(), previous)
         self.assertFalse(runner.loaded)
+        self.assertFalse(runner.disabled)
         operations = [call[1] for call in runner.calls]
         self.assertNotIn("bootout", operations)
         self.assertEqual(operations.count("bootstrap"), 1)
 
-    def test_failed_enable_keeps_truthful_new_artifact_when_bootout_fails(self) -> None:
+    def test_failed_enable_reports_when_override_cleanup_also_fails(self) -> None:
         runner = StatefulLaunchctl(
             loaded=False,
             fail_enable=True,
@@ -274,14 +435,11 @@ class LaunchdSchedulerTests(unittest.TestCase):
         )
         backend = LaunchdSchedulerBackend(home=self.root, runner=runner, uid=507)
 
-        with self.assertRaisesRegex(ScheduleError, "matching owned plist was retained"):
+        with self.assertRaisesRegex(ScheduleError, "exact rollback also failed"):
             backend.install(self.request())
 
-        self.assertTrue(runner.loaded)
-        self.assertTrue(self.agent.exists())
-        with self.agent.open("rb") as handle:
-            plist = plistlib.load(handle)
-        self.assertEqual(plist["ResearchDigestOwner"], LAUNCHD_OWNER_ID)
+        self.assertFalse(self.agent.exists())
+        self.assertFalse(runner.disabled)
 
     def test_plist_write_failure_does_not_unload_existing_agent(self) -> None:
         LaunchdSchedulerBackend(

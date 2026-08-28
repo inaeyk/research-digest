@@ -14,6 +14,9 @@ from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 SOURCE_ROOT = PROJECT_ROOT / "src"
+WHEEL_EXCLUDED_PACKAGE_FILES = {
+    "research_digest/analysis/fake.py",
+}
 
 
 def get_requires_for_build_wheel(
@@ -101,7 +104,11 @@ def _build_package_wheel(wheel_directory: str, *, editable: bool) -> str:
 
             record_name = f"{dist_info}/RECORD"
             record_entries.append((record_name, "", ""))
-            archive.writestr(record_name, _record_text(record_entries))
+            _write_archive_raw(
+                archive,
+                _record_text(record_entries).encode("utf-8"),
+                record_name,
+            )
 
     return wheel_name
 
@@ -186,6 +193,7 @@ def _package_files() -> list[Path]:
         path
         for path in package_root.rglob("*")
         if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc"
+        and path.relative_to(SOURCE_ROOT).as_posix() not in WHEEL_EXCLUDED_PACKAGE_FILES
     )
 
 
@@ -208,11 +216,22 @@ def _write_archive_bytes(
     *,
     mode: int = 0o644,
 ) -> None:
+    _write_archive_raw(archive, data, archive_name, mode=mode)
+    record_entries.append((archive_name, _hash_record(data), len(data)))
+
+
+def _write_archive_raw(
+    archive: zipfile.ZipFile,
+    data: bytes,
+    archive_name: str,
+    *,
+    mode: int = 0o644,
+) -> None:
     info = zipfile.ZipInfo(archive_name)
     info.date_time = (2026, 8, 17, 0, 0, 0)
     info.external_attr = mode << 16
+    info.compress_type = zipfile.ZIP_DEFLATED
     archive.writestr(info, data)
-    record_entries.append((archive_name, _hash_record(data), len(data)))
 
 
 def _hash_record(data: bytes) -> str:

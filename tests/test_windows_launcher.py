@@ -18,9 +18,14 @@ from research_digest.windows_launcher import (
     WindowsLauncherBackend,
     WindowsLauncherError,
     WindowsLauncherRequest,
+    _launcher_file_transaction_function,
     build_windows_launcher_request,
     resolve_research_digest_command,
     run_windows_powershell,
+)
+
+WINDOWS_POWERSHELL = Path(
+    "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
 )
 
 
@@ -92,7 +97,14 @@ class WindowsLauncherTests(unittest.TestCase):
         self.assertNotIn("OPENAI_API_KEY", request.windows_arguments)
 
     def test_request_uses_current_wsl_distribution_without_hard_coding_ubuntu(self) -> None:
-        with mock.patch.dict(os.environ, {"WSL_DISTRO_NAME": "Debian Research"}, clear=True):
+        with mock.patch.dict(
+            os.environ,
+            {
+                "WSL_DISTRO_NAME": "Debian Research",
+                "PATH": "/home/researcher/.nvm/bin:/usr/bin:/bin",
+            },
+            clear=True,
+        ):
             request = build_windows_launcher_request(
                 config=self.config,
                 wsl_executable="wsl.exe",
@@ -101,6 +113,7 @@ class WindowsLauncherTests(unittest.TestCase):
 
         self.assertEqual(request.distro, "Debian Research")
         self.assertNotIn("Ubuntu", request.windows_arguments)
+        self.assertEqual(request.environment["PATH"], "/home/researcher/.nvm/bin:/usr/bin:/bin")
 
     def test_missing_wsl_distribution_fails_actionably(self) -> None:
         with (
@@ -152,7 +165,76 @@ class WindowsLauncherTests(unittest.TestCase):
         self.assertIn(WINDOWS_LAUNCHER_ID, script)
         self.assertIn("Refusing to overwrite", script)
         self.assertIn("WindowStyle = 7", script)
+        self.assertIn("Install-ResearchDigestLauncherFile", script)
+        self.assertIn("Move-Item -LiteralPath $Candidate -Destination $Destination", script)
+        self.assertIn("Move-Item -LiteralPath $Backup -Destination $Destination", script)
+        self.assertIn("-ErrorAction SilentlyContinue", script)
         self.assertNotIn("sk-never-embed-this", script)
+
+    @unittest.skipUnless(
+        os.environ.get("RESEARCH_DIGEST_RUN_WINDOWS_NATIVE_TESTS") == "1"
+        and WINDOWS_POWERSHELL.exists(),
+        "requires explicitly enabled native Windows PowerShell boundary",
+    )
+    def test_native_launcher_file_transaction_restores_prior_file_on_swap_failure(
+        self,
+    ) -> None:
+        function = "\n".join(_launcher_file_transaction_function())
+        test_script = "\n".join(
+            [
+                "$ErrorActionPreference = 'Stop'",
+                function,
+                "$root = Join-Path ([IO.Path]::GetTempPath()) "
+                "('rd-launcher-test-' + [guid]::NewGuid().ToString('N'))",
+                "New-Item -ItemType Directory -Path $root | Out-Null",
+                "try {",
+                "  $destination = Join-Path $root 'Research Digest.lnk'",
+                "  $candidate = Join-Path $root 'candidate.lnk'",
+                "  $backup = Join-Path $root 'backup.lnk'",
+                "  [IO.File]::WriteAllText($destination, 'old launcher')",
+                "  [IO.File]::WriteAllText($candidate, 'new launcher')",
+                "  $script:moveCalls = 0",
+                "  function Move-Item {",
+                "    param([string]$LiteralPath, [string]$Destination)",
+                "    $script:moveCalls += 1",
+                "    if ($script:moveCalls -eq 2) { throw 'injected candidate swap failure' }",
+                "    Microsoft.PowerShell.Management\\Move-Item "
+                "-LiteralPath $LiteralPath -Destination $Destination",
+                "  }",
+                "  try {",
+                "    Install-ResearchDigestLauncherFile -Candidate $candidate "
+                "-Destination $destination -Backup $backup",
+                "    throw 'expected launcher transaction failure'",
+                "  } catch {",
+                "    if ($_.Exception.Message -notlike '*prior launcher was preserved*') { throw }",
+                "  }",
+                "  if ([IO.File]::ReadAllText($destination) "
+                "-ne 'old launcher') { throw 'prior launcher was not restored' }",
+                "  if (Test-Path -LiteralPath $candidate) { throw 'candidate was not cleaned' }",
+                "  Write-Output 'native launcher rollback: passed'",
+                "} finally {",
+                "  Microsoft.PowerShell.Management\\Remove-Item "
+                "-LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue",
+                "}",
+            ]
+        )
+
+        completed = subprocess.run(
+            [
+                str(WINDOWS_POWERSHELL),
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                test_script,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("native launcher rollback: passed", completed.stdout)
 
     def test_uninstall_checks_ownership_and_removes_only_owned_shortcut(self) -> None:
         runner = RecordingRunner(

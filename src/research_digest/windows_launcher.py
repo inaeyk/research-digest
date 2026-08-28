@@ -160,6 +160,12 @@ def build_windows_launcher_request(
         "RESEARCH_DIGEST_DATA_DIR": str(active_config.data_dir.resolve()),
         "RESEARCH_DIGEST_DB": str(active_config.db_path.resolve()),
     }
+    runtime_path = os.environ.get("PATH")
+    if runtime_path and runtime_path.strip():
+        # Windows shortcuts launch WSL non-interactively. Preserve the current
+        # non-secret login PATH so Codex installed through npm/nvm or another
+        # user-local toolchain remains resolvable by detached workers.
+        environment["PATH"] = runtime_path
     try:
         resolved_wsl_executable = wsl_executable or resolve_windows_wsl_executable()
     except Exception as exc:
@@ -249,6 +255,7 @@ def _install_launcher_script(request: WindowsLauncherRequest) -> str:
     arguments = _ps_quote(request.windows_arguments)
     return "\n".join(
         [
+            *_launcher_file_transaction_function(),
             "$ErrorActionPreference = 'Stop'",
             "$desktop = [Environment]::GetFolderPath('Desktop')",
             (
@@ -267,15 +274,88 @@ def _install_launcher_script(request: WindowsLauncherRequest) -> str:
             "    throw 'Refusing to overwrite a launcher not owned by Research Digest.'",
             "  }",
             "}",
-            "$shortcut = $shell.CreateShortcut($path)",
-            f"$shortcut.TargetPath = {target}",
-            f"$shortcut.Arguments = {arguments}",
-            f"$shortcut.Description = {description}",
-            "$shortcut.WindowStyle = 7",
-            "$shortcut.Save()",
+            (
+                "$temporary = Join-Path $desktop ('.Research Digest.' + "
+                "[guid]::NewGuid().ToString('N') + '.tmp.lnk')"
+            ),
+            (
+                "$backup = Join-Path $desktop ('.Research Digest.' + "
+                "[guid]::NewGuid().ToString('N') + '.backup.lnk')"
+            ),
+            "try {",
+            "  $shortcut = $shell.CreateShortcut($temporary)",
+            f"  $shortcut.TargetPath = {target}",
+            f"  $shortcut.Arguments = {arguments}",
+            f"  $shortcut.Description = {description}",
+            "  $shortcut.WindowStyle = 7",
+            "  $shortcut.Save()",
+            "  if (-not (Test-Path -LiteralPath $temporary)) {",
+            "    throw 'The new launcher was not written.'",
+            "  }",
+            "}",
+            "catch {",
+            "  if (Test-Path -LiteralPath $temporary) {",
+            (
+                "    Remove-Item -LiteralPath $temporary -Force "
+                "-ErrorAction SilentlyContinue"
+            ),
+            "  }",
+            "  throw",
+            "}",
+            (
+                "Install-ResearchDigestLauncherFile -Candidate $temporary "
+                "-Destination $path -Backup $backup"
+            ),
             "@{ path = $path; installed = $true } | ConvertTo-Json -Compress",
         ]
     )
+
+
+def _launcher_file_transaction_function() -> list[str]:
+    return [
+        "# BEGIN RESEARCH DIGEST LAUNCHER FILE TRANSACTION",
+        "function Install-ResearchDigestLauncherFile {",
+        "  param([string]$Candidate, [string]$Destination, [string]$Backup)",
+        "  try {",
+        "    if (Test-Path -LiteralPath $Destination) {",
+        "      Move-Item -LiteralPath $Destination -Destination $Backup",
+        "    }",
+        "    Move-Item -LiteralPath $Candidate -Destination $Destination",
+        "  } catch {",
+        "    $replacementError = $_.Exception.Message",
+        "    if (Test-Path -LiteralPath $Candidate) {",
+        (
+            "      Remove-Item -LiteralPath $Candidate -Force "
+            "-ErrorAction SilentlyContinue"
+        ),
+        "    }",
+        (
+            "    if ((Test-Path -LiteralPath $Backup) -and "
+            "-not (Test-Path -LiteralPath $Destination)) {"
+        ),
+        "      try {",
+        "        Move-Item -LiteralPath $Backup -Destination $Destination",
+        "      } catch {",
+        (
+            "        throw ('Launcher update failed and exact rollback also failed: ' + "
+            "$replacementError)"
+        ),
+        "      }",
+        "    }",
+        (
+            "    throw ('Launcher update failed; prior launcher was preserved: ' + "
+            "$replacementError)"
+        ),
+        "  }",
+        "  if (Test-Path -LiteralPath $Backup) {",
+        (
+            "    Remove-Item -LiteralPath $Backup -Force "
+            "-ErrorAction SilentlyContinue"
+        ),
+        "  }",
+        "}",
+        "# END RESEARCH DIGEST LAUNCHER FILE TRANSACTION",
+    ]
 
 
 def _uninstall_launcher_script() -> str:

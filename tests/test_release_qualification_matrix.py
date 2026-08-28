@@ -243,13 +243,14 @@ class ReleaseQualificationMatrixTests(unittest.TestCase):
             with zipfile.ZipFile(wheels[0]) as wheel:
                 names = set(wheel.namelist())
                 entry_points = wheel.read(
-                    "research_digest-0.4.0.dist-info/entry_points.txt"
+                    "research_digest-0.4.1.dist-info/entry_points.txt"
                 ).decode("utf-8")
-                metadata = wheel.read("research_digest-0.4.0.dist-info/METADATA").decode(
+                metadata = wheel.read("research_digest-0.4.1.dist-info/METADATA").decode(
                     "utf-8"
                 )
 
         self.assertIn("research_digest/cli.py", names)
+        self.assertNotIn("research_digest/analysis/fake.py", names)
         self.assertFalse(any("__pycache__" in name or name.endswith(".pyc") for name in names))
         self.assertIn("research-digest = research_digest.cli:main", entry_points)
         self.assertIn("Provides-Extra: dev", metadata)
@@ -290,7 +291,7 @@ class ReleaseQualificationMatrixTests(unittest.TestCase):
                 text=True,
             )
 
-        self.assertEqual(result.stdout.strip(), "research-digest 0.4.0")
+        self.assertEqual(result.stdout.strip(), "research-digest 0.4.1")
 
 
 def _isolated_env(tmp: str) -> dict[str, str]:

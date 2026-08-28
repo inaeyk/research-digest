@@ -9,6 +9,7 @@ import shlex
 import shutil
 import sys
 from collections.abc import Mapping
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
@@ -82,13 +83,23 @@ class MacLauncherBackend:
                 bundle.replace(backup)
             temporary.replace(bundle)
         except BaseException:
+            try:
+                if backup.exists() and not bundle.exists():
+                    backup.replace(bundle)
+            except OSError as rollback_exc:
+                raise MacLauncherError(
+                    "macOS launcher update failed and exact rollback also failed."
+                ) from rollback_exc
             if temporary.exists():
-                shutil.rmtree(temporary)
-            if backup.exists() and not bundle.exists():
-                backup.replace(bundle)
+                with suppress(OSError):
+                    shutil.rmtree(temporary)
             raise
         if backup.exists():
-            shutil.rmtree(backup)
+            # The owned launcher swap is already committed. Failure to remove
+            # the hidden backup must not report activation failure while the
+            # new launcher is live; a later installer run can clean it up.
+            with suppress(OSError):
+                shutil.rmtree(backup)
         return MacLauncherResult(
             operation="installed_or_updated",
             installed=True,

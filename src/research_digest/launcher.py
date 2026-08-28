@@ -43,13 +43,21 @@ def install_launcher(
     windows_backend: WindowsLauncherController | None = None,
     macos_backend: MacLauncherController | None = None,
     platform: str | None = None,
+    command_executable: str | None = None,
 ) -> LauncherResult:
     selected = platform or sys.platform
     if selected == "darwin":
-        macos_request = build_macos_launcher_request(config=config)
+        macos_request = build_macos_launcher_request(
+            config=config,
+            command_executable=command_executable,
+        )
         return (macos_backend or MacLauncherBackend()).install(macos_request)
     if selected.startswith("linux") and (is_wsl() or windows_backend is not None):
-        windows_request = build_windows_launcher_request(config=config, distro=distro)
+        windows_request = build_windows_launcher_request(
+            config=config,
+            distro=distro,
+            command_executable=command_executable,
+        )
         return (windows_backend or select_windows_launcher_backend()).install(windows_request)
     raise LauncherPlatformError(
         "Launcher installation is supported on macOS and on Windows through WSL."

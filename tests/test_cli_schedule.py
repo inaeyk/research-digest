@@ -14,6 +14,7 @@ from research_digest.scheduler import (
     ScheduleOperationResult,
     SchedulerBackend,
     ScheduleRequest,
+    ScheduleSnapshot,
     ScheduleStatus,
 )
 
@@ -57,6 +58,12 @@ class FakeSchedulerBackend(SchedulerBackend):
             last_task_result=0,
             next_run_time="2026-08-16T07:30:00",
         )
+
+    def snapshot(self, *, task_name: str) -> ScheduleSnapshot:
+        raise AssertionError(f"CLI schedule commands do not snapshot {task_name}")
+
+    def restore(self, snapshot: ScheduleSnapshot) -> None:
+        raise AssertionError(f"CLI schedule commands do not restore {snapshot.task_name}")
 
 
 def config(db_path: Path) -> AppConfig:

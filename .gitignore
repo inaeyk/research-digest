@@ -13,6 +13,7 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+dist/
 
 # Streamlit/local tooling state
 .streamlit/secrets.toml

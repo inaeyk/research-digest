@@ -141,6 +141,71 @@ class MacLauncherTests(unittest.TestCase):
         self.assertIn(str(replacement), script)
         self.assertNotIn(str(self.command), script)
 
+    def test_post_swap_backup_cleanup_failure_does_not_report_activation_failure(self) -> None:
+        backend = MacLauncherBackend()
+        backend.install(self.request())
+        replacement = self.root / "private runtime" / "bin" / "research-digest"
+        replacement.parent.mkdir(parents=True)
+        replacement.write_text("#!/bin/sh\n", encoding="utf-8")
+        replacement.chmod(0o755)
+        updated = build_macos_launcher_request(
+            config=_config(self.root),
+            bundle_path=self.bundle,
+            command_executable=str(replacement),
+            codex_executable=str(self.codex),
+        )
+
+        with mock.patch(
+            "research_digest.macos_launcher.shutil.rmtree",
+            side_effect=OSError("simulated backup cleanup failure"),
+        ):
+            result = backend.install(updated)
+
+        self.assertEqual(result.target, str(replacement))
+        script = (
+            self.bundle / "Contents" / "MacOS" / MACOS_EXECUTABLE_NAME
+        ).read_text(encoding="utf-8")
+        self.assertIn(str(replacement), script)
+
+    def test_candidate_swap_failure_restores_exact_prior_launcher(self) -> None:
+        backend = MacLauncherBackend()
+        backend.install(self.request())
+        old_script = (
+            self.bundle / "Contents" / "MacOS" / MACOS_EXECUTABLE_NAME
+        ).read_bytes()
+        replacement = self.root / "private runtime" / "bin" / "research-digest"
+        replacement.parent.mkdir(parents=True)
+        replacement.write_text("#!/bin/sh\n", encoding="utf-8")
+        replacement.chmod(0o755)
+        updated = build_macos_launcher_request(
+            config=_config(self.root),
+            bundle_path=self.bundle,
+            command_executable=str(replacement),
+            codex_executable=str(self.codex),
+        )
+        real_replace = Path.replace
+
+        def replace_with_candidate_failure(source: Path, target: Path) -> Path:
+            if source.name.endswith(".tmp") and target == self.bundle:
+                raise OSError("simulated candidate swap failure")
+            return real_replace(source, target)
+
+        with (
+            mock.patch.object(
+                Path,
+                "replace",
+                autospec=True,
+                side_effect=replace_with_candidate_failure,
+            ),
+            self.assertRaisesRegex(OSError, "candidate swap failure"),
+        ):
+            backend.install(updated)
+
+        self.assertEqual(
+            (self.bundle / "Contents" / "MacOS" / MACOS_EXECUTABLE_NAME).read_bytes(),
+            old_script,
+        )
+
     def test_unrelated_bundle_is_never_overwritten_or_removed(self) -> None:
         self.bundle.mkdir(parents=True)
         unrelated = self.bundle / "unrelated.txt"

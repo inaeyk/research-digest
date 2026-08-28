@@ -28,7 +28,14 @@ from research_digest.cancellation import (
 )
 from research_digest.config import AppConfig, load_config, resolve_data_dir
 from research_digest.db import Database, RunAlreadyActiveError, RunLockError
-from research_digest.doctor import DoctorReport, run_doctor, run_doctor_from_environment
+from research_digest.distribution import DistributionError, activate_distribution
+from research_digest.doctor import (
+    DoctorReport,
+    DoctorSeverity,
+    inspect_doctor_target,
+    run_doctor,
+    run_doctor_from_environment,
+)
 from research_digest.errors import sanitize_error
 from research_digest.launcher import (
     LauncherResult,
@@ -167,6 +174,16 @@ def run_cli(
             args=args,
             stdout=stdout,
             stderr=stderr,
+            windows_backend=windows_launcher_backend,
+            macos_backend=macos_launcher_backend,
+        )
+    if args.command == "distribution":
+        return _distribution_command(
+            args=args,
+            stdout=stdout,
+            stderr=stderr,
+            config=config,
+            scheduler_backend=scheduler_backend,
             windows_backend=windows_launcher_backend,
             macos_backend=macos_launcher_backend,
         )
@@ -322,6 +339,25 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print a machine-readable JSON result.",
     )
+    distribution_parser = subparsers.add_parser(
+        "distribution",
+        help="Installer-only private-runtime activation.",
+    )
+    distribution_subparsers = distribution_parser.add_subparsers(
+        dest="distribution_command",
+        required=True,
+    )
+    activate_parser = distribution_subparsers.add_parser("activate", help=argparse.SUPPRESS)
+    activate_parser.add_argument("--runtime-root", type=Path, required=True)
+    activate_parser.add_argument("--version", dest="distribution_version", required=True)
+    activate_parser.add_argument(
+        "--command",
+        dest="command_executable",
+        type=Path,
+        required=True,
+    )
+    activate_parser.add_argument("--distro")
+    activate_parser.add_argument("--json", action="store_true")
     status_parser = subparsers.add_parser("status", help="Show local application status.")
     status_parser.add_argument(
         "--json",
@@ -715,6 +751,67 @@ def _uninstall_launcher_command(
             error=exc,
         )
     _write_launcher_result(stdout, result, json_output=bool(args.json))
+    return 0
+
+
+def _distribution_command(
+    *,
+    args: argparse.Namespace,
+    stdout: TextIO,
+    stderr: TextIO,
+    config: AppConfig | None,
+    scheduler_backend: SchedulerBackend | None,
+    windows_backend: WindowsLauncherController | None,
+    macos_backend: MacLauncherController | None,
+) -> int:
+    """Activate a verified private runtime for the standalone installers."""
+
+    try:
+        if args.distribution_command != "activate":
+            raise DistributionError(
+                f"Unsupported distribution command: {args.distribution_command}"
+            )
+        if config is None:
+            target = inspect_doctor_target()
+            if any(
+                check.severity == DoctorSeverity.FAILURE for check in target.setup_checks
+            ):
+                raise DistributionError(
+                    "Persistent configuration is not safe to activate; run doctor and "
+                    "resolve its failures without using the installer to migrate data."
+                )
+            active_config = target.config
+        else:
+            active_config = config
+        result = activate_distribution(
+            config=active_config,
+            runtime_root=args.runtime_root,
+            version=args.distribution_version,
+            command_executable=args.command_executable,
+            distro=args.distro,
+            scheduler_backend=scheduler_backend,
+            windows_launcher_backend=windows_backend,
+            macos_launcher_backend=macos_backend,
+        )
+    except Exception as exc:
+        message = sanitize_error(exc)
+        if args.json:
+            json.dump({"status": "failed", "error_message": message}, stdout)
+            stdout.write("\n")
+        else:
+            stderr.write(f"Research Digest runtime activation failed: {message}\n")
+        return 1
+
+    payload = {"status": "completed", **result.to_mapping()}
+    if args.json:
+        json.dump(payload, stdout)
+        stdout.write("\n")
+    else:
+        stdout.write("Research Digest private runtime activated.\n")
+        stdout.write(f"Runtime: {result.command}\n")
+        if result.schedule_migrated:
+            state = "enabled" if result.schedule_enabled else "disabled"
+            stdout.write(f"Existing daily schedule preserved ({state}).\n")
     return 0
 
 
