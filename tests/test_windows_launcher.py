@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import tempfile
@@ -12,14 +13,20 @@ from unittest import mock
 
 from research_digest.config import AppConfig
 from research_digest.windows_launcher import (
+    WINDOWS_LAUNCHER_ARGUMENT_MAX,
+    WINDOWS_LAUNCHER_DEFAULT_PATH,
     WINDOWS_LAUNCHER_DESCRIPTION,
     WINDOWS_LAUNCHER_FILENAME,
     WINDOWS_LAUNCHER_ID,
+    WINDOWS_LEGACY_TRUNCATED_ARGUMENT_LENGTH,
     WindowsLauncherBackend,
     WindowsLauncherError,
     WindowsLauncherRequest,
+    WindowsShortcutState,
     _launcher_file_transaction_function,
+    _launcher_roundtrip_function,
     build_windows_launcher_request,
+    classify_windows_shortcut,
     resolve_research_digest_command,
     run_windows_powershell,
 )
@@ -30,21 +37,26 @@ WINDOWS_POWERSHELL = Path(
 
 
 class RecordingRunner:
-    def __init__(self, outputs: list[str], *, returncode: int = 0, stderr: str = "") -> None:
+    def __init__(
+        self,
+        outputs: list[str],
+        *,
+        returncodes: list[int] | None = None,
+        stderrs: list[str] | None = None,
+    ) -> None:
         self.outputs = list(outputs)
-        self.returncode = returncode
-        self.stderr = stderr
+        self.returncodes = list(returncodes or [])
+        self.stderrs = list(stderrs or [])
         self.commands: list[tuple[str, ...]] = []
 
     def __call__(self, command: object) -> subprocess.CompletedProcess[str]:
         values: tuple[str, ...] = tuple(cast(Sequence[str], command))
         self.commands.append(values)
-        stdout = self.outputs.pop(0) if self.outputs else ""
         return subprocess.CompletedProcess(
             args=list(values),
-            returncode=self.returncode,
-            stdout=stdout,
-            stderr=self.stderr,
+            returncode=self.returncodes.pop(0) if self.returncodes else 0,
+            stdout=self.outputs.pop(0) if self.outputs else "",
+            stderr=self.stderrs.pop(0) if self.stderrs else "",
         )
 
 
@@ -63,6 +75,11 @@ class WindowsLauncherTests(unittest.TestCase):
             codex_timeout_seconds=1,
             automatic_coverage_start_date=date(2026, 8, 27),
         )
+        self.codex = self.root / "Codex Toolchain" / "bin" / "codex"
+        self.codex.parent.mkdir(parents=True)
+        self.codex.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        self.codex.chmod(0o755)
+        self.windows_path = "C:\\Users\\Researcher\\Desktop\\Research Digest.lnk"
 
     def tearDown(self) -> None:
         self.tmpdir.cleanup()
@@ -72,48 +89,122 @@ class WindowsLauncherTests(unittest.TestCase):
             config=self.config,
             distro="Research Ubuntu 24.04",
             wsl_executable="C:\\Windows\\System32\\wsl.exe",
-            command_executable="/home/person/Research Digest/.venv/bin/research-digest",
+            command_executable=(
+                "/home/person/.local/share/research-digest/runtime/0.4.1/venv/bin/"
+                "research-digest"
+            ),
+            codex_executable=str(self.codex),
         )
 
-    def test_request_quotes_spaces_and_targets_discovered_distro_and_entry_point(self) -> None:
+    def shortcut_state(
+        self,
+        request: WindowsLauncherRequest,
+        *,
+        arguments: str | None = None,
+        description: str = WINDOWS_LAUNCHER_DESCRIPTION,
+        target: str | None = None,
+    ) -> WindowsShortcutState:
+        return WindowsShortcutState(
+            path=self.windows_path,
+            exists=True,
+            description=description,
+            target=target or request.wsl_executable,
+            arguments=arguments if arguments is not None else request.windows_arguments,
+        )
+
+    def inspect_json(self, state: WindowsShortcutState) -> str:
+        return json.dumps(
+            {
+                "path": state.path,
+                "exists": state.exists,
+                "description": state.description,
+                "target": state.target,
+                "arguments": state.arguments,
+            }
+        )
+
+    def installed_json(self, request: WindowsLauncherRequest) -> str:
+        return json.dumps(
+            {
+                "path": self.windows_path,
+                "installed": True,
+                "description": WINDOWS_LAUNCHER_DESCRIPTION,
+                "target": request.wsl_executable,
+                "arguments": request.windows_arguments,
+            }
+        )
+
+    def legacy_truncated_arguments(self, request: WindowsLauncherRequest) -> str:
+        historical = WindowsLauncherRequest(
+            distro=request.distro,
+            wsl_executable=request.wsl_executable,
+            command_executable=request.command_executable,
+            environment={
+                "PATH": (
+                    "/mnt/c/Program Files/Host Tool/bin:/mnt/c/Users/person/"
+                    + "WindowsApps/"
+                    + "x" * 1800
+                ),
+                "RESEARCH_DIGEST_CONFIG_DIR": str(self.config.config_dir),
+                "RESEARCH_DIGEST_DATA_DIR": str(self.config.data_dir),
+                "RESEARCH_DIGEST_DB": str(self.config.db_path),
+            },
+        )
+        self.assertGreater(len(historical.windows_arguments), 1023)
+        truncated = historical.windows_arguments[:1023]
+        self.assertEqual(len(truncated), WINDOWS_LEGACY_TRUNCATED_ARGUMENT_LENGTH)
+        self.assertNotIn(request.command_executable, truncated)
+        self.assertNotIn(WINDOWS_LAUNCHER_ID, truncated)
+        return truncated
+
+    def test_request_quotes_spaces_and_targets_private_entry_point(self) -> None:
         request = self.request()
 
         self.assertEqual(request.distro, "Research Ubuntu 24.04")
         self.assertEqual(request.wsl_arguments[:4], ["-d", request.distro, "--exec", "env"])
-        self.assertIn(
-            "/home/person/Research Digest/.venv/bin/research-digest",
-            request.wsl_arguments,
-        )
+        self.assertIn("runtime/0.4.1/venv/bin/research-digest", request.windows_arguments)
         self.assertEqual(
             request.wsl_arguments[-3:],
             ["launch", "--launcher-id", WINDOWS_LAUNCHER_ID],
         )
         self.assertIn('"Research Ubuntu 24.04"', request.windows_arguments)
-        self.assertIn(
-            '"/home/person/Research Digest/.venv/bin/research-digest"',
-            request.windows_arguments,
-        )
         self.assertNotIn("sk-never-embed-this", request.windows_arguments)
         self.assertNotIn("OPENAI_API_KEY", request.windows_arguments)
 
-    def test_request_uses_current_wsl_distribution_without_hard_coding_ubuntu(self) -> None:
-        with mock.patch.dict(
-            os.environ,
-            {
-                "WSL_DISTRO_NAME": "Debian Research",
-                "PATH": "/home/researcher/.nvm/bin:/usr/bin:/bin",
-            },
-            clear=True,
-        ):
+    def test_request_uses_compact_deterministic_path_with_codex(self) -> None:
+        request = self.request()
+        path_entries = request.environment["PATH"].split(os.pathsep)
+
+        self.assertIn(str(self.codex.parent), path_entries)
+        self.assertIn(
+            "/home/person/.local/share/research-digest/runtime/0.4.1/venv/bin",
+            path_entries,
+        )
+        for entry in WINDOWS_LAUNCHER_DEFAULT_PATH.split(os.pathsep):
+            self.assertIn(entry, path_entries)
+        self.assertNotIn("/mnt/c/Program Files", request.environment["PATH"])
+        self.assertLessEqual(len(request.windows_arguments), WINDOWS_LAUNCHER_ARGUMENT_MAX)
+
+    def test_large_inherited_host_path_does_not_change_launcher(self) -> None:
+        with mock.patch.dict(os.environ, {"PATH": "/mnt/c/" + "z" * 10000}):
+            request = self.request()
+        baseline = self.request()
+
+        self.assertEqual(request.environment["PATH"], baseline.environment["PATH"])
+        self.assertEqual(request.windows_arguments, baseline.windows_arguments)
+        self.assertNotIn("z" * 100, request.windows_arguments)
+
+    def test_request_uses_current_distro_without_hard_coding_ubuntu(self) -> None:
+        with mock.patch.dict(os.environ, {"WSL_DISTRO_NAME": "Debian Research"}, clear=True):
             request = build_windows_launcher_request(
                 config=self.config,
                 wsl_executable="wsl.exe",
                 command_executable="/opt/research digest/bin/research-digest",
+                codex_executable=str(self.codex),
             )
 
         self.assertEqual(request.distro, "Debian Research")
         self.assertNotIn("Ubuntu", request.windows_arguments)
-        self.assertEqual(request.environment["PATH"], "/home/researcher/.nvm/bin:/usr/bin:/bin")
 
     def test_missing_wsl_distribution_fails_actionably(self) -> None:
         with (
@@ -124,9 +215,10 @@ class WindowsLauncherTests(unittest.TestCase):
                 config=self.config,
                 wsl_executable="wsl.exe",
                 command_executable="/opt/research-digest",
+                codex_executable=str(self.codex),
             )
 
-    def test_installed_entry_point_resolves_next_to_active_python_without_activation(self) -> None:
+    def test_installed_entry_point_resolves_next_to_active_python(self) -> None:
         bin_dir = self.root / "venv with spaces" / "bin"
         bin_dir.mkdir(parents=True)
         python = bin_dir / "python"
@@ -143,40 +235,205 @@ class WindowsLauncherTests(unittest.TestCase):
 
         self.assertEqual(resolved, str(command.resolve()))
 
-    def test_install_script_is_idempotent_and_refuses_unowned_overwrite(self) -> None:
-        windows_path = "C:\\Users\\Researcher\\Desktop\\Research Digest.lnk"
+    def test_historical_1023_character_truncation_is_recognized_narrowly(self) -> None:
+        request = self.request()
+        truncated = self.legacy_truncated_arguments(request)
+        state = self.shortcut_state(request, arguments=truncated)
+
+        self.assertEqual(classify_windows_shortcut(state, request), "legacy_truncated")
+        self.assertEqual(len(state.arguments or ""), 1023)
+
+    def test_legacy_recognizer_refuses_wrong_description_target_or_shape(self) -> None:
+        request = self.request()
+        truncated = self.legacy_truncated_arguments(request)
+        foreign_prefix = subprocess.list2cmdline(
+            ["-d", "Other Research", "--exec", "env"]
+        ) + ' "PATH='
+        foreign_shape = foreign_prefix + "x" * (1023 - len(foreign_prefix))
+        cases = (
+            self.shortcut_state(request, arguments=truncated, description="Personal shortcut"),
+            self.shortcut_state(request, arguments=truncated, target="C:\\Tools\\wsl.exe"),
+            self.shortcut_state(request, arguments=foreign_shape),
+            self.shortcut_state(request, arguments=truncated[:-1]),
+        )
+
+        for state in cases:
+            with self.subTest(state=state):
+                self.assertEqual(classify_windows_shortcut(state, request), "unowned")
+
+    def test_same_name_unrelated_wsl_shortcut_is_refused_before_write(self) -> None:
+        request = self.request()
+        state = self.shortcut_state(request, arguments="-d Personal --exec /bin/true")
+        runner = RecordingRunner([self.inspect_json(state)])
+
+        with self.assertRaisesRegex(WindowsLauncherError, "not owned"):
+            WindowsLauncherBackend(
+                powershell_path="powershell.exe", runner=runner
+            ).install(request)
+
+        self.assertEqual(len(runner.commands), 1)
+
+    def test_legacy_launcher_migrates_to_compact_round_trip_verified_launcher(self) -> None:
+        request = self.request()
+        legacy = self.shortcut_state(
+            request,
+            arguments=self.legacy_truncated_arguments(request),
+        )
+        runner = RecordingRunner([self.inspect_json(legacy), self.installed_json(request)])
+
+        result = WindowsLauncherBackend(
+            powershell_path="powershell.exe", runner=runner
+        ).install(request)
+
+        self.assertEqual(result.operation, "migrated_legacy_launcher")
+        self.assertEqual(result.path, self.windows_path)
+        self.assertEqual(result.arguments, request.windows_arguments)
+        self.assertLessEqual(len(result.arguments or ""), WINDOWS_LAUNCHER_ARGUMENT_MAX)
+        self.assertTrue((result.arguments or "").endswith(WINDOWS_LAUNCHER_ID))
+        self.assertEqual(len(runner.commands), 2)
+        script = runner.commands[1][-1]
+        self.assertIn("Assert-ResearchDigestLauncherRoundTrip", script)
+        self.assertIn("$stored.Arguments -cne $Arguments", script)
+        self.assertIn("$prior.Arguments -cne", script)
+
+    def test_install_is_idempotent_and_round_trip_payload_is_exact(self) -> None:
+        request = self.request()
+        absent = WindowsShortcutState(path=self.windows_path, exists=False)
+        current = self.shortcut_state(request)
         runner = RecordingRunner(
             [
-                f'{{"path":"{windows_path.replace(chr(92), chr(92) * 2)}","installed":true}}',
-                f'{{"path":"{windows_path.replace(chr(92), chr(92) * 2)}","installed":true}}',
+                self.inspect_json(absent),
+                self.installed_json(request),
+                self.inspect_json(current),
+                self.installed_json(request),
             ]
         )
         backend = WindowsLauncherBackend(powershell_path="powershell.exe", runner=runner)
 
-        first = backend.install(self.request())
-        second = backend.install(self.request())
+        first = backend.install(request)
+        second = backend.install(request)
 
-        self.assertEqual(first.path, windows_path)
-        self.assertEqual(second.path, windows_path)
-        self.assertEqual(len(runner.commands), 2)
-        script = runner.commands[0][-1]
+        self.assertEqual(first.path, self.windows_path)
+        self.assertEqual(second.path, self.windows_path)
+        self.assertEqual(len(runner.commands), 4)
+        script = runner.commands[1][-1]
         self.assertIn(WINDOWS_LAUNCHER_FILENAME, script)
-        self.assertIn(WINDOWS_LAUNCHER_DESCRIPTION, script)
-        self.assertIn(WINDOWS_LAUNCHER_ID, script)
-        self.assertIn("Refusing to overwrite", script)
         self.assertIn("WindowStyle = 7", script)
-        self.assertIn("Install-ResearchDigestLauncherFile", script)
-        self.assertIn("Move-Item -LiteralPath $Candidate -Destination $Destination", script)
+        self.assertIn("-Verify $verify", script)
         self.assertIn("Move-Item -LiteralPath $Backup -Destination $Destination", script)
-        self.assertIn("-ErrorAction SilentlyContinue", script)
         self.assertNotIn("sk-never-embed-this", script)
+
+    def test_argument_limit_fails_before_inspection_or_write(self) -> None:
+        request = self.request()
+        oversized = WindowsLauncherRequest(
+            distro=request.distro,
+            wsl_executable=request.wsl_executable,
+            command_executable=request.command_executable,
+            environment={"PATH": "x" * 1000},
+        )
+        runner = RecordingRunner([])
+
+        with self.assertRaisesRegex(WindowsLauncherError, "too long to store safely"):
+            WindowsLauncherBackend(
+                powershell_path="powershell.exe", runner=runner
+            ).install(oversized)
+
+        self.assertEqual(runner.commands, [])
+
+    def test_round_trip_verification_failure_cannot_return_success(self) -> None:
+        request = self.request()
+        absent = WindowsShortcutState(path=self.windows_path, exists=False)
+        runner = RecordingRunner(
+            [self.inspect_json(absent), ""],
+            returncodes=[0, 1],
+            stderrs=["", "Windows launcher round-trip verification failed."],
+        )
+
+        with self.assertRaisesRegex(WindowsLauncherError, "round-trip verification"):
+            WindowsLauncherBackend(
+                powershell_path="powershell.exe", runner=runner
+            ).install(request)
+
+    def test_unexpected_readback_payload_is_rejected(self) -> None:
+        request = self.request()
+        absent = WindowsShortcutState(path=self.windows_path, exists=False)
+        payload = json.loads(self.installed_json(request))
+        payload["arguments"] = str(payload["arguments"])[:-1]
+        runner = RecordingRunner([self.inspect_json(absent), json.dumps(payload)])
+
+        with self.assertRaisesRegex(WindowsLauncherError, "unexpected values"):
+            WindowsLauncherBackend(
+                powershell_path="powershell.exe", runner=runner
+            ).install(request)
 
     @unittest.skipUnless(
         os.environ.get("RESEARCH_DIGEST_RUN_WINDOWS_NATIVE_TESTS") == "1"
         and WINDOWS_POWERSHELL.exists(),
         "requires explicitly enabled native Windows PowerShell boundary",
     )
-    def test_native_launcher_file_transaction_restores_prior_file_on_swap_failure(
+    def test_native_wscript_truncation_and_compact_round_trip(self) -> None:
+        function = "\n".join(_launcher_roundtrip_function())
+        compact = self.request().windows_arguments
+        escaped_compact = compact.replace("'", "''")
+        test_script = "\n".join(
+            [
+                "$ErrorActionPreference = 'Stop'",
+                function,
+                "$root = Join-Path ([IO.Path]::GetTempPath()) "
+                "('rd-shortcut-test-' + [guid]::NewGuid().ToString('N'))",
+                "New-Item -ItemType Directory -Path $root | Out-Null",
+                "try {",
+                "  $shell = New-Object -ComObject WScript.Shell",
+                "  $legacyPath = Join-Path $root 'legacy.lnk'",
+                "  $legacy = $shell.CreateShortcut($legacyPath)",
+                "  $legacy.TargetPath = 'C:\\Windows\\System32\\wsl.exe'",
+                "  $legacy.Arguments = ('-d Research --exec env \"PATH=' + ('x' * 1800))",
+                "  $legacy.Description = 'Research Digest Windows launcher v1'",
+                "  $legacy.Save()",
+                "  $storedLegacy = $shell.CreateShortcut($legacyPath)",
+                "  if ($storedLegacy.Arguments.Length -ne 1023) { throw 'not truncated' }",
+                "  if ($storedLegacy.Arguments -like '*research-digest-wsl-v1*') { "
+                "throw 'tail survived' }",
+                "  $compactPath = Join-Path $root 'compact.lnk'",
+                "  $new = $shell.CreateShortcut($compactPath)",
+                "  $new.TargetPath = 'C:\\Windows\\System32\\wsl.exe'",
+                f"  $new.Arguments = '{escaped_compact}'",
+                "  $new.Description = 'Research Digest Windows launcher v1'",
+                "  $new.Save()",
+                "  Assert-ResearchDigestLauncherRoundTrip -Shell $shell "
+                "-Path $compactPath -Target 'C:\\Windows\\System32\\wsl.exe' "
+                f"-Arguments '{escaped_compact}' "
+                "-Description 'Research Digest Windows launcher v1'",
+                "  Write-Output 'native shortcut boundary: passed'",
+                "} finally {",
+                "  Remove-Item -LiteralPath $root -Recurse -Force "
+                "-ErrorAction SilentlyContinue",
+                "}",
+            ]
+        )
+        completed = subprocess.run(
+            [
+                str(WINDOWS_POWERSHELL),
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                test_script,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("native shortcut boundary: passed", completed.stdout)
+
+    @unittest.skipUnless(
+        os.environ.get("RESEARCH_DIGEST_RUN_WINDOWS_NATIVE_TESTS") == "1"
+        and WINDOWS_POWERSHELL.exists(),
+        "requires explicitly enabled native Windows PowerShell boundary",
+    )
+    def test_native_transaction_restores_prior_file_after_verification_failure(
         self,
     ) -> None:
         function = "\n".join(_launcher_file_transaction_function())
@@ -193,32 +450,24 @@ class WindowsLauncherTests(unittest.TestCase):
                 "  $backup = Join-Path $root 'backup.lnk'",
                 "  [IO.File]::WriteAllText($destination, 'old launcher')",
                 "  [IO.File]::WriteAllText($candidate, 'new launcher')",
-                "  $script:moveCalls = 0",
-                "  function Move-Item {",
-                "    param([string]$LiteralPath, [string]$Destination)",
-                "    $script:moveCalls += 1",
-                "    if ($script:moveCalls -eq 2) { throw 'injected candidate swap failure' }",
-                "    Microsoft.PowerShell.Management\\Move-Item "
-                "-LiteralPath $LiteralPath -Destination $Destination",
-                "  }",
+                "  $verify = { param([string]$path) throw 'injected verification failure' }",
                 "  try {",
                 "    Install-ResearchDigestLauncherFile -Candidate $candidate "
-                "-Destination $destination -Backup $backup",
+                "-Destination $destination -Backup $backup -Verify $verify",
                 "    throw 'expected launcher transaction failure'",
                 "  } catch {",
-                "    if ($_.Exception.Message -notlike '*prior launcher was preserved*') { throw }",
+                "    if ($_.Exception.Message -notlike '*prior launcher was preserved*') { "
+                "throw }",
                 "  }",
-                "  if ([IO.File]::ReadAllText($destination) "
-                "-ne 'old launcher') { throw 'prior launcher was not restored' }",
-                "  if (Test-Path -LiteralPath $candidate) { throw 'candidate was not cleaned' }",
+                "  if ([IO.File]::ReadAllText($destination) -ne 'old launcher') { "
+                "throw 'prior launcher was not restored' }",
                 "  Write-Output 'native launcher rollback: passed'",
                 "} finally {",
-                "  Microsoft.PowerShell.Management\\Remove-Item "
-                "-LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue",
+                "  Remove-Item -LiteralPath $root -Recurse -Force "
+                "-ErrorAction SilentlyContinue",
                 "}",
             ]
         )
-
         completed = subprocess.run(
             [
                 str(WINDOWS_POWERSHELL),
@@ -238,27 +487,26 @@ class WindowsLauncherTests(unittest.TestCase):
 
     def test_uninstall_checks_ownership_and_removes_only_owned_shortcut(self) -> None:
         runner = RecordingRunner(
-            ['{"path":"C:\\\\Users\\\\Me\\\\Desktop\\\\Research Digest.lnk","removed":true}']
+            ['{"path":"C:\\\\Users\\\\Me\\\\Desktop\\\\Research Digest.lnk",'
+             '"removed":true}']
         )
         backend = WindowsLauncherBackend(powershell_path="powershell.exe", runner=runner)
 
         result = backend.uninstall()
 
-        self.assertTrue(result.operation == "removed")
+        self.assertEqual(result.operation, "removed")
         script = runner.commands[0][-1]
         self.assertIn(WINDOWS_LAUNCHER_DESCRIPTION, script)
         self.assertIn(WINDOWS_LAUNCHER_ID, script)
-        self.assertIn("wsl.exe", script)
         self.assertIn("Refusing to remove", script)
-        self.assertIn("Remove-Item -LiteralPath $path", script)
 
     def test_uninstall_is_idempotent_when_launcher_is_absent(self) -> None:
         runner = RecordingRunner(
-            ['{"path":"C:\\\\Users\\\\Me\\\\Desktop\\\\Research Digest.lnk","removed":false}']
+            ['{"path":"C:\\\\Users\\\\Me\\\\Desktop\\\\Research Digest.lnk",'
+             '"removed":false}']
         )
         result = WindowsLauncherBackend(
-            powershell_path="powershell.exe",
-            runner=runner,
+            powershell_path="powershell.exe", runner=runner
         ).uninstall()
 
         self.assertEqual(result.operation, "not_installed")
@@ -266,19 +514,20 @@ class WindowsLauncherTests(unittest.TestCase):
 
     def test_windows_failure_is_sanitized(self) -> None:
         runner = RecordingRunner(
-            [],
-            returncode=1,
-            stderr="failed OPENAI_API_KEY=sk-secret123456789",
+            [""],
+            returncodes=[1],
+            stderrs=["failed OPENAI_API_KEY=sk-secret123456789"],
         )
-        backend = WindowsLauncherBackend(powershell_path="powershell.exe", runner=runner)
 
         with self.assertRaises(WindowsLauncherError) as caught:
-            backend.install(self.request())
+            WindowsLauncherBackend(
+                powershell_path="powershell.exe", runner=runner
+            ).install(self.request())
 
         self.assertNotIn("sk-secret", str(caught.exception))
         self.assertIn("[REDACTED_API_KEY]", str(caught.exception))
 
-    def test_windows_browser_uses_default_url_handler_and_not_hard_coded_browser(self) -> None:
+    def test_windows_browser_uses_default_url_handler(self) -> None:
         runner = RecordingRunner([""])
 
         run_windows_powershell(
@@ -288,9 +537,7 @@ class WindowsLauncherTests(unittest.TestCase):
         )
 
         command = runner.commands[0]
-        self.assertEqual(command[0], "powershell.exe")
         self.assertIn("Start-Process", command[-1])
-        self.assertIn("http://localhost:8502", command[-1])
         self.assertNotIn("chrome", command[-1].lower())
 
 

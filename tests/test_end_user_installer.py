@@ -258,6 +258,27 @@ class EndUserInstallerTests(unittest.TestCase):
             self.assertEqual((root / installer.CURRENT_STATE).read_bytes(), before)
             self.assertTrue(previous_command.exists())
 
+    def test_launcher_round_trip_failure_cannot_report_installation_completed(self) -> None:
+        with (
+            mock.patch.object(
+                installer,
+                "install",
+                side_effect=installer.InstallError(
+                    "Windows launcher round-trip verification failed."
+                ),
+            ),
+            mock.patch("builtins.print") as print_output,
+        ):
+            exit_code = installer.main(["install"])
+
+        self.assertEqual(exit_code, 1)
+        rendered = "\n".join(
+            " ".join(str(value) for value in call.args)
+            for call in print_output.call_args_list
+        )
+        self.assertIn("round-trip verification failed", rendered)
+        self.assertNotIn("installation completed", rendered.lower())
+
     def test_manifest_rejects_paths_and_duplicates(self) -> None:
         digest = "a" * 64
         with self.assertRaisesRegex(installer.InstallError, "Malformed"):

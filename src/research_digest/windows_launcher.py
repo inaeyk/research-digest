@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import ntpath
 import os
 import shutil
 import subprocess
@@ -10,10 +11,14 @@ import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
 
 from research_digest.config import AppConfig, load_config
 from research_digest.errors import sanitize_error
+from research_digest.executable_environment import (
+    ExecutableEnvironmentError,
+    build_runtime_path,
+)
 from research_digest.scheduler import (
     is_wsl,
     resolve_windows_wsl_executable,
@@ -22,6 +27,13 @@ from research_digest.scheduler import (
 WINDOWS_LAUNCHER_ID = "research-digest-wsl-v1"
 WINDOWS_LAUNCHER_DESCRIPTION = "Research Digest Windows launcher v1"
 WINDOWS_LAUNCHER_FILENAME = "Research Digest.lnk"
+WINDOWS_LAUNCHER_ARGUMENT_MAX = 900
+WINDOWS_LEGACY_TRUNCATED_ARGUMENT_LENGTH = 1023
+WINDOWS_LAUNCHER_DEFAULT_PATH = (
+    "/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
+)
+
+WindowsLauncherOwnership = Literal["absent", "current", "legacy_truncated", "unowned"]
 
 
 class WindowsLauncherError(RuntimeError):
@@ -58,6 +70,15 @@ class WindowsLauncherRequest:
     @property
     def windows_arguments(self) -> str:
         return subprocess.list2cmdline(self.wsl_arguments)
+
+
+@dataclass(frozen=True)
+class WindowsShortcutState:
+    path: str
+    exists: bool
+    description: str | None = None
+    target: str | None = None
+    arguments: str | None = None
 
 
 @dataclass(frozen=True)
@@ -101,14 +122,45 @@ class WindowsLauncherBackend:
         self._runner = runner or _run_command
 
     def install(self, request: WindowsLauncherRequest) -> WindowsLauncherResult:
-        payload = self._run_json(_install_launcher_script(request))
+        arguments = request.windows_arguments
+        if len(arguments) > WINDOWS_LAUNCHER_ARGUMENT_MAX:
+            raise WindowsLauncherError(
+                "Windows launcher arguments are too long to store safely "
+                f"({len(arguments)} characters; maximum "
+                f"{WINDOWS_LAUNCHER_ARGUMENT_MAX})."
+            )
+        state = _shortcut_state_from_payload(self._run_json(_inspect_launcher_script()))
+        ownership = classify_windows_shortcut(state, request)
+        if ownership == "unowned":
+            raise WindowsLauncherError(
+                "Refusing to overwrite a launcher not owned by Research Digest."
+            )
+        payload = self._run_json(_install_launcher_script(request, previous=state))
+        path = _required_payload_string(payload, "path")
+        target = _required_payload_string(payload, "target")
+        stored_arguments = _required_payload_string(payload, "arguments")
+        description = _required_payload_string(payload, "description")
+        if (
+            payload.get("installed") is not True
+            or path != state.path
+            or target != request.wsl_executable
+            or stored_arguments != arguments
+            or description != WINDOWS_LAUNCHER_DESCRIPTION
+        ):
+            raise WindowsLauncherError(
+                "Windows launcher round-trip verification returned unexpected values."
+            )
         return WindowsLauncherResult(
-            operation="installed_or_updated",
+            operation=(
+                "migrated_legacy_launcher"
+                if ownership == "legacy_truncated"
+                else "installed_or_updated"
+            ),
             installed=True,
-            path=_required_payload_string(payload, "path"),
+            path=path,
             distro=request.distro,
-            target=request.wsl_executable,
-            arguments=request.windows_arguments,
+            target=target,
+            arguments=stored_arguments,
         )
 
     def uninstall(self) -> WindowsLauncherResult:
@@ -148,6 +200,7 @@ def build_windows_launcher_request(
     distro: str | None = None,
     wsl_executable: str | None = None,
     command_executable: str | None = None,
+    codex_executable: str | None = None,
 ) -> WindowsLauncherRequest:
     active_config = config or load_config()
     resolved_distro = distro or os.environ.get("WSL_DISTRO_NAME")
@@ -155,17 +208,39 @@ def build_windows_launcher_request(
         raise WindowsLauncherError(
             "WSL_DISTRO_NAME is not set; run from the target WSL distribution or pass --distro"
         )
+    resolved_command = command_executable or resolve_research_digest_command()
+    resolved_codex = codex_executable
+    if resolved_codex is None:
+        candidate = shutil.which("codex")
+        if candidate is not None:
+            resolved_codex = _validated_codex_executable(candidate)
+        elif active_config.analyzer_provider == "codex":
+            raise WindowsLauncherError(
+                "Codex is configured, but the codex executable was not found on PATH. "
+                "Install and authenticate Codex CLI inside WSL, then run "
+                "research-digest install-launcher again."
+            )
+    else:
+        resolved_codex = _validated_codex_executable(resolved_codex)
+    executables = [resolved_command]
+    if resolved_codex is not None:
+        executables.append(resolved_codex)
+    try:
+        runtime_path = build_runtime_path(
+            executables=executables,
+            default_path=WINDOWS_LAUNCHER_DEFAULT_PATH,
+        )
+    except ExecutableEnvironmentError as exc:
+        raise WindowsLauncherError(
+            f"The non-interactive Windows launcher environment is incomplete: {exc} "
+            "Install the required executable runtime, then reinstall the launcher."
+        ) from exc
     environment = {
         "RESEARCH_DIGEST_CONFIG_DIR": str(active_config.config_dir.resolve()),
         "RESEARCH_DIGEST_DATA_DIR": str(active_config.data_dir.resolve()),
         "RESEARCH_DIGEST_DB": str(active_config.db_path.resolve()),
+        "PATH": runtime_path,
     }
-    runtime_path = os.environ.get("PATH")
-    if runtime_path and runtime_path.strip():
-        # Windows shortcuts launch WSL non-interactively. Preserve the current
-        # non-secret login PATH so Codex installed through npm/nvm or another
-        # user-local toolchain remains resolvable by detached workers.
-        environment["PATH"] = runtime_path
     try:
         resolved_wsl_executable = wsl_executable or resolve_windows_wsl_executable()
     except Exception as exc:
@@ -175,7 +250,7 @@ def build_windows_launcher_request(
     return WindowsLauncherRequest(
         distro=resolved_distro.strip(),
         wsl_executable=resolved_wsl_executable,
-        command_executable=command_executable or resolve_research_digest_command(),
+        command_executable=resolved_command,
         environment=environment,
     )
 
@@ -207,6 +282,55 @@ def resolve_research_digest_command() -> str:
     raise WindowsLauncherError(
         "The installed research-digest command could not be found; install the package "
         "before installing the Windows launcher"
+    )
+
+
+def _validated_codex_executable(resolved: str) -> str:
+    path = Path(resolved).expanduser().absolute()
+    if not path.is_file() or not os.access(path, os.X_OK):
+        raise WindowsLauncherError(
+            "The resolved codex executable is not an executable file inside WSL."
+        )
+    return str(path)
+
+
+def classify_windows_shortcut(
+    state: WindowsShortcutState,
+    request: WindowsLauncherRequest,
+) -> WindowsLauncherOwnership:
+    """Recognize current or narrowly qualified truncated historical launchers."""
+
+    if not state.exists:
+        return "absent"
+    if (
+        state.description != WINDOWS_LAUNCHER_DESCRIPTION
+        or state.target is None
+        or not _same_windows_path(state.target, request.wsl_executable)
+        or state.arguments is None
+    ):
+        return "unowned"
+    arguments = state.arguments
+    command_prefix = subprocess.list2cmdline(
+        ["-d", request.distro, "--exec", "env"]
+    )
+    current_tail = subprocess.list2cmdline(
+        ["launch", "--launcher-id", WINDOWS_LAUNCHER_ID]
+    )
+    if arguments.startswith(command_prefix + " ") and arguments.endswith(current_tail):
+        return "current"
+    legacy_prefix = command_prefix + ' "PATH='
+    if (
+        len(arguments) == WINDOWS_LEGACY_TRUNCATED_ARGUMENT_LENGTH
+        and arguments.startswith(legacy_prefix)
+        and WINDOWS_LAUNCHER_ID not in arguments
+    ):
+        return "legacy_truncated"
+    return "unowned"
+
+
+def _same_windows_path(first: str, second: str) -> bool:
+    return ntpath.normcase(ntpath.normpath(first)) == ntpath.normcase(
+        ntpath.normpath(second)
     )
 
 
@@ -247,15 +371,10 @@ def _powershell_command(powershell_path: str, script: str) -> list[str]:
     ]
 
 
-def _install_launcher_script(request: WindowsLauncherRequest) -> str:
+def _inspect_launcher_script() -> str:
     filename = _ps_quote(WINDOWS_LAUNCHER_FILENAME)
-    description = _ps_quote(WINDOWS_LAUNCHER_DESCRIPTION)
-    marker = _ps_quote(WINDOWS_LAUNCHER_ID)
-    target = _ps_quote(request.wsl_executable)
-    arguments = _ps_quote(request.windows_arguments)
     return "\n".join(
         [
-            *_launcher_file_transaction_function(),
             "$ErrorActionPreference = 'Stop'",
             "$desktop = [Environment]::GetFolderPath('Desktop')",
             (
@@ -263,17 +382,77 @@ def _install_launcher_script(request: WindowsLauncherRequest) -> str:
                 "throw 'Windows Desktop path is unavailable.' }"
             ),
             f"$path = Join-Path $desktop {filename}",
-            "$shell = New-Object -ComObject WScript.Shell",
-            "if (Test-Path -LiteralPath $path) {",
-            "  $existing = $shell.CreateShortcut($path)",
-            (
-                f"  if ($existing.Description -ne {description} -or "
-                f"$existing.Arguments -notlike ('*' + {marker} + '*') -or "
-                "[IO.Path]::GetFileName($existing.TargetPath) -ine 'wsl.exe') {"
-            ),
-            "    throw 'Refusing to overwrite a launcher not owned by Research Digest.'",
-            "  }",
+            "if (-not (Test-Path -LiteralPath $path)) {",
+            "  @{ path = $path; exists = $false } | ConvertTo-Json -Compress",
+            "  exit 0",
             "}",
+            "$shell = New-Object -ComObject WScript.Shell",
+            "$shortcut = $shell.CreateShortcut($path)",
+            (
+                "@{ path = $path; exists = $true; description = $shortcut.Description; "
+                "target = $shortcut.TargetPath; arguments = $shortcut.Arguments } | "
+                "ConvertTo-Json -Compress"
+            ),
+        ]
+    )
+
+
+def _install_launcher_script(
+    request: WindowsLauncherRequest,
+    *,
+    previous: WindowsShortcutState,
+) -> str:
+    filename = _ps_quote(WINDOWS_LAUNCHER_FILENAME)
+    description = _ps_quote(WINDOWS_LAUNCHER_DESCRIPTION)
+    target = _ps_quote(request.wsl_executable)
+    arguments = _ps_quote(request.windows_arguments)
+    previous_description = _ps_quote(previous.description or "")
+    previous_target = _ps_quote(previous.target or "")
+    previous_arguments = _ps_quote(previous.arguments or "")
+    prior_check = (
+        [
+            "if (Test-Path -LiteralPath $path) {",
+            "  throw 'Windows launcher changed during installation; retry safely.'",
+            "}",
+        ]
+        if not previous.exists
+        else [
+            "if (-not (Test-Path -LiteralPath $path)) {",
+            "  throw 'Windows launcher changed during installation; retry safely.'",
+            "}",
+            "$prior = $shell.CreateShortcut($path)",
+            (
+                f"if ($prior.Description -cne {previous_description} -or "
+                f"$prior.TargetPath -cne {previous_target} -or "
+                f"$prior.Arguments -cne {previous_arguments}) {{"
+            ),
+            "  throw 'Windows launcher changed during installation; retry safely.'",
+            "}",
+        ]
+    )
+    return "\n".join(
+        [
+            *_launcher_file_transaction_function(),
+            *_launcher_roundtrip_function(),
+            "$ErrorActionPreference = 'Stop'",
+            f"$maximumArguments = {WINDOWS_LAUNCHER_ARGUMENT_MAX}",
+            f"$expectedTarget = {target}",
+            f"$expectedArguments = {arguments}",
+            f"$expectedDescription = {description}",
+            "if ($expectedArguments.Length -gt $maximumArguments) {",
+            (
+                "  throw ('Windows launcher arguments exceed the safe limit of ' + "
+                "$maximumArguments + ' characters.')"
+            ),
+            "}",
+            "$desktop = [Environment]::GetFolderPath('Desktop')",
+            (
+                "if ([string]::IsNullOrWhiteSpace($desktop)) { "
+                "throw 'Windows Desktop path is unavailable.' }"
+            ),
+            f"$path = Join-Path $desktop {filename}",
+            "$shell = New-Object -ComObject WScript.Shell",
+            *prior_check,
             (
                 "$temporary = Join-Path $desktop ('.Research Digest.' + "
                 "[guid]::NewGuid().ToString('N') + '.tmp.lnk')"
@@ -284,14 +463,19 @@ def _install_launcher_script(request: WindowsLauncherRequest) -> str:
             ),
             "try {",
             "  $shortcut = $shell.CreateShortcut($temporary)",
-            f"  $shortcut.TargetPath = {target}",
-            f"  $shortcut.Arguments = {arguments}",
-            f"  $shortcut.Description = {description}",
+            "  $shortcut.TargetPath = $expectedTarget",
+            "  $shortcut.Arguments = $expectedArguments",
+            "  $shortcut.Description = $expectedDescription",
             "  $shortcut.WindowStyle = 7",
             "  $shortcut.Save()",
             "  if (-not (Test-Path -LiteralPath $temporary)) {",
             "    throw 'The new launcher was not written.'",
             "  }",
+            (
+                "  Assert-ResearchDigestLauncherRoundTrip -Shell $shell "
+                "-Path $temporary -Target $expectedTarget "
+                "-Arguments $expectedArguments -Description $expectedDescription"
+            ),
             "}",
             "catch {",
             "  if (Test-Path -LiteralPath $temporary) {",
@@ -302,25 +486,69 @@ def _install_launcher_script(request: WindowsLauncherRequest) -> str:
             "  }",
             "  throw",
             "}",
+            "$verify = {",
+            "  param([string]$installedPath)",
+            (
+                "  Assert-ResearchDigestLauncherRoundTrip -Shell $shell "
+                "-Path $installedPath -Target $expectedTarget "
+                "-Arguments $expectedArguments -Description $expectedDescription"
+            ),
+            "}",
             (
                 "Install-ResearchDigestLauncherFile -Candidate $temporary "
-                "-Destination $path -Backup $backup"
+                "-Destination $path -Backup $backup -Verify $verify"
             ),
-            "@{ path = $path; installed = $true } | ConvertTo-Json -Compress",
+            "$installed = $shell.CreateShortcut($path)",
+            (
+                "@{ path = $path; installed = $true; target = $installed.TargetPath; "
+                "arguments = $installed.Arguments; description = $installed.Description } | "
+                "ConvertTo-Json -Compress"
+            ),
         ]
     )
+
+
+def _launcher_roundtrip_function() -> list[str]:
+    return [
+        "function Assert-ResearchDigestLauncherRoundTrip {",
+        (
+            "  param($Shell, [string]$Path, [string]$Target, "
+            "[string]$Arguments, [string]$Description)"
+        ),
+        "  if (-not (Test-Path -LiteralPath $Path)) {",
+        "    throw 'Windows launcher round-trip verification found no shortcut.'",
+        "  }",
+        "  $stored = $Shell.CreateShortcut($Path)",
+        (
+            "  if ($stored.TargetPath -cne $Target -or "
+            "$stored.Arguments -cne $Arguments -or "
+            "$stored.Description -cne $Description) {"
+        ),
+        "    throw 'Windows launcher round-trip verification failed.'",
+        "  }",
+        "}",
+    ]
 
 
 def _launcher_file_transaction_function() -> list[str]:
     return [
         "# BEGIN RESEARCH DIGEST LAUNCHER FILE TRANSACTION",
         "function Install-ResearchDigestLauncherFile {",
-        "  param([string]$Candidate, [string]$Destination, [string]$Backup)",
+        (
+            "  param([string]$Candidate, [string]$Destination, [string]$Backup, "
+            "[scriptblock]$Verify)"
+        ),
+        "  $hadPrior = Test-Path -LiteralPath $Destination",
+        "  $movedPrior = $false",
+        "  $movedCandidate = $false",
         "  try {",
-        "    if (Test-Path -LiteralPath $Destination) {",
+        "    if ($hadPrior) {",
         "      Move-Item -LiteralPath $Destination -Destination $Backup",
+        "      $movedPrior = $true",
         "    }",
         "    Move-Item -LiteralPath $Candidate -Destination $Destination",
+        "    $movedCandidate = $true",
+        "    & $Verify $Destination",
         "  } catch {",
         "    $replacementError = $_.Exception.Message",
         "    if (Test-Path -LiteralPath $Candidate) {",
@@ -329,23 +557,26 @@ def _launcher_file_transaction_function() -> list[str]:
             "-ErrorAction SilentlyContinue"
         ),
         "    }",
-        (
-            "    if ((Test-Path -LiteralPath $Backup) -and "
-            "-not (Test-Path -LiteralPath $Destination)) {"
-        ),
-        "      try {",
-        "        Move-Item -LiteralPath $Backup -Destination $Destination",
-        "      } catch {",
-        (
-            "        throw ('Launcher update failed and exact rollback also failed: ' + "
-            "$replacementError)"
-        ),
+        "    try {",
+        "      if ($movedCandidate -and (Test-Path -LiteralPath $Destination)) {",
+        "        Remove-Item -LiteralPath $Destination -Force",
         "      }",
-        "    }",
+        "      if ($movedPrior -and (Test-Path -LiteralPath $Backup)) {",
+        "        Move-Item -LiteralPath $Backup -Destination $Destination",
+        "      }",
+        "    } catch {",
         (
-            "    throw ('Launcher update failed; prior launcher was preserved: ' + "
+            "      throw ('Launcher update failed and exact rollback also failed: ' + "
             "$replacementError)"
         ),
+        "    }",
+        "    if ($hadPrior) {",
+        (
+            "      throw ('Launcher update failed; prior launcher was preserved: ' + "
+            "$replacementError)"
+        ),
+        "    }",
+        "    throw ('Launcher update failed; no launcher was installed: ' + $replacementError)",
         "  }",
         "  if (Test-Path -LiteralPath $Backup) {",
         (
@@ -395,6 +626,30 @@ def _required_payload_string(payload: Mapping[str, object], key: str) -> str:
     if not isinstance(value, str) or not value:
         raise WindowsLauncherError(f"Windows launcher response is missing {key}")
     return value
+
+
+def _shortcut_state_from_payload(payload: Mapping[str, object]) -> WindowsShortcutState:
+    path = _required_payload_string(payload, "path")
+    exists = payload.get("exists")
+    if not isinstance(exists, bool):
+        raise WindowsLauncherError("Windows launcher inspection is missing exists")
+    if not exists:
+        return WindowsShortcutState(path=path, exists=False)
+    values: dict[str, str] = {}
+    for key in ("description", "target", "arguments"):
+        value = payload.get(key)
+        if not isinstance(value, str):
+            raise WindowsLauncherError(
+                f"Windows launcher inspection is missing {key}"
+            )
+        values[key] = value
+    return WindowsShortcutState(
+        path=path,
+        exists=True,
+        description=values["description"],
+        target=values["target"],
+        arguments=values["arguments"],
+    )
 
 
 def _ps_quote(value: str) -> str:
