@@ -54,19 +54,26 @@ def _analysis(score: float) -> AnalysisResult:
     )
 
 
-def _today_items_app(result: DigestResult, db: Database) -> None:
+# AppTest copies only each helper definition, so external annotations must stay quoted.
+def _today_items_app(result: "DigestResult", db: "Database") -> None:  # noqa: UP037
     from research_digest.ui.pages.today import _render_items
 
     _render_items(result, db)
 
 
-def _quantitative_prompt_app(result: DigestResult, db: Database) -> None:
+def _quantitative_prompt_app(
+    result: "DigestResult",  # noqa: UP037
+    db: "Database",  # noqa: UP037
+) -> None:
     from research_digest.ui.pages.today import _render_quantitative_calibration_prompt
 
     _render_quantitative_calibration_prompt(db, result)
 
 
-def _history_snapshot_app(snapshot: dict[str, object], db: Database) -> None:
+def _history_snapshot_app(
+    snapshot: dict[str, object],
+    db: "Database",  # noqa: UP037
+) -> None:
     from research_digest.ui.pages.history import _render_snapshot
 
     _render_snapshot(snapshot, db)

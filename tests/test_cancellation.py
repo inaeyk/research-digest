@@ -746,6 +746,7 @@ class CancellationTests(unittest.TestCase):
             [sys.executable, "-c", "import time; time.sleep(30)"],
             start_new_session=True,
         )
+        reaper: threading.Thread | None = None
         owner = "dead-worker-owner"
         replacement = "replacement-owner"
         try:
@@ -762,6 +763,12 @@ class CancellationTests(unittest.TestCase):
                 process_group_id=os.getpgid(provider.pid),
                 process_start_ticks=process_start_identity(provider.pid),
             )
+            # A real provider orphan is adopted and reaped by the operating
+            # system after its worker dies. This provider is the test process's
+            # child, so reap it concurrently; otherwise Darwin can correctly
+            # report the exited-but-unreaped interval as UNKNOWN.
+            reaper = threading.Thread(target=provider.wait, daemon=True)
+            reaper.start()
             with mock.patch(
                 "research_digest.cancellation.process_run_owner_state",
                 return_value=RunOwnerState.DEAD,
@@ -770,7 +777,8 @@ class CancellationTests(unittest.TestCase):
                     self.db,
                     stale_after_seconds=60.0,
                 )
-            provider.wait(timeout=3.0)
+            reaper.join(timeout=3.0)
+            self.assertFalse(reaper.is_alive())
             self.assertEqual(stopped, 1)
             self.assertEqual(self.db.list_active_provider_processes(run_id=run_id), [])
 
@@ -787,6 +795,8 @@ class CancellationTests(unittest.TestCase):
             if provider.poll() is None:
                 provider.kill()
                 provider.wait(timeout=3.0)
+            if reaper is not None:
+                reaper.join(timeout=3.0)
 
     def test_persistence_failure_cannot_claim_source_coverage(self) -> None:
         with mock.patch.object(

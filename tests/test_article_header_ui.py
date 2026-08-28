@@ -30,7 +30,8 @@ def _article(authors: list[str]) -> Article:
     )
 
 
-def _article_header_app(article: Article) -> None:
+# AppTest copies only this definition, so external annotations must stay quoted.
+def _article_header_app(article: "Article") -> None:  # noqa: UP037
     from research_digest.ui.article_header import render_article_header
 
     render_article_header(article, context="article-header-test")

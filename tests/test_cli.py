@@ -526,7 +526,7 @@ class CLITests(unittest.TestCase):
         self.assertEqual(stderr.getvalue(), "")
         payload = json.loads(stdout.getvalue())
         self.assertEqual(payload["status"], "completed")
-        self.assertEqual(payload["data_path"], str(self.db_path))
+        self.assertEqual(payload["data_path"], str(self.db_path.resolve()))
         self.assertTrue(Path(str(payload["backup_path"])).exists())
 
 if __name__ == "__main__":

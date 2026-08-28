@@ -49,7 +49,10 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.data_dir.name, "data")
         self.assertEqual(config.config_dir.name, "config")
         self.assertEqual(config.config_version, CONFIG_VERSION)
-        self.assertEqual(config.config_path, Path(tmp) / "config" / DEFAULT_CONFIG_FILENAME)
+        self.assertEqual(
+            config.config_path,
+            (Path(tmp) / "config" / DEFAULT_CONFIG_FILENAME).resolve(),
+        )
         self.assertEqual(config.default_date_selection.kind, DateSelectionKind.LATEST_AVAILABLE)
         self.assertTrue(config.automatic_catch_up_enabled)
         self.assertIsInstance(config.automatic_coverage_start_date, date)

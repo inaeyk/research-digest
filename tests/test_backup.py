@@ -75,8 +75,8 @@ class BackupTests(unittest.TestCase):
             timestamp=datetime(2026, 8, 15, 12, 0, tzinfo=UTC),
         )
 
-        self.assertEqual(result.db_path, self.db_path)
-        self.assertEqual(result.backup_path.parent, output_dir)
+        self.assertEqual(result.db_path, self.db_path.resolve())
+        self.assertEqual(result.backup_path.parent, output_dir.resolve())
         self.assertTrue(result.backup_path.exists())
         with sqlite3.connect(result.backup_path) as conn:
             integrity = conn.execute("PRAGMA integrity_check").fetchone()
