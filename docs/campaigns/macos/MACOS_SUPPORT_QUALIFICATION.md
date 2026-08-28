@@ -5,6 +5,10 @@ State date: 2026-08-27.
 Baseline: `813d380cb73e8de7806dddbb21a83fe5707066ab` ("Freeze qualified Windows
 launcher").
 
+The later published-tag clean-install acceptance, with the exact macOS version,
+architecture, release identity, and final install evidence, is recorded in
+[`V0.4.0_CLEAN_INSTALL_SMOKE.md`](V0.4.0_CLEAN_INSTALL_SMOKE.md).
+
 ## Scope and architecture
 
 - The scientific application, SQLite data model, Streamlit pages, detached

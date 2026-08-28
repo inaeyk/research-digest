@@ -64,95 +64,124 @@ ports, and launchd invocation passed on real Mac hardware.
 
 ## Installation and First Run
 
-Research Digest requires Python 3.11 or newer. Check the interpreter before
-creating a virtual environment:
+### macOS prerequisites
+
+- macOS
+- Git
+- Python 3.11 or newer
+- the Codex CLI installed and authenticated for the default analyzer
+
+Follow the [official Codex CLI instructions](https://developers.openai.com/codex/cli/)
+to install and sign in to Codex. Before installing or using Research Digest,
+confirm that the CLI is available and authenticated:
 
 ```bash
-python3 -c 'import sys; print(sys.version.split()[0]); raise SystemExit(0 if sys.version_info >= (3, 11) else "Research Digest requires Python 3.11+")'
+codex login status
 ```
 
-From a checkout of this repository:
+### Install v0.4.0 on macOS
+
+Clone the published v0.4.0 tag and run the guarded bootstrap:
+
+```bash
+cd "$HOME"
+git clone \
+  --branch v0.4.0 \
+  --depth 1 \
+  https://github.com/inaeyk/research-digest.git \
+  research-digest
+cd "$HOME/research-digest"
+./scripts/bootstrap_macos.sh
+```
+
+The bootstrap validates Python, creates and owns `.venv`, installs Research
+Digest, and refuses unsupported Python before creating an environment. Do not
+create or activate a virtual environment manually. Run the first diagnostics
+and install the Finder launcher through the bootstrap-created command:
+
+```bash
+./.venv/bin/research-digest doctor
+./.venv/bin/research-digest install-launcher
+```
+
+The launcher is created at `~/Applications/Research Digest.app` and targets the
+installed command in `~/research-digest/.venv/bin/research-digest` for the
+checkout above.
+
+### Everyday use on macOS
+
+Open `~/Applications/Research Digest.app` from Finder, and optionally place it
+in the Dock. It opens the default browser and starts or reuses the local UI;
+ordinary use does not require Terminal. Opening the app alone does not create a
+digest.
+
+The one-time setup is therefore: install and authenticate Codex, install
+Research Digest, and run `research-digest install-launcher` through the
+bootstrap-created command. Everyday use is opening **Research Digest.app**.
+
+### Python troubleshooting on macOS
+
+The normal `./scripts/bootstrap_macos.sh` path searches `python3` and compatible
+versioned Python 3.11–3.14 commands automatically. If discovery does not select
+the intended interpreter, use an explicit installed executable as a fallback.
+For example, the clean-install smoke used:
+
+```bash
+RESEARCH_DIGEST_PYTHON=/opt/homebrew/bin/python3.12 \
+  ./scripts/bootstrap_macos.sh
+```
+
+The actual path may differ; use the concrete path of a Python 3.11-or-newer
+installation on the current Mac. If no compatible interpreter is installed,
+install one from python.org or Homebrew, then rerun the normal bootstrap.
+
+### First-run doctor warnings
+
+Immediately after a clean bootstrap, before normal application initialization,
+`research-digest doctor` may warn that the config file, data directory, SQLite
+database, schema, schedule, and last run do not exist yet, and that network
+checks were skipped. Those warnings are normal on first run. The installation
+criterion is:
+
+```text
+Failures: 0
+```
+
+After `research-digest status --json` initializes fresh application state, the
+expected versions are schema `18` and config `5`; `last_run` and `run_lock` are
+null, and the launchd schedule is not installed until it is enabled.
+
+### Other source checkouts and development
+
+For a non-macOS source checkout or a development environment, create and manage
+the Python environment appropriate to that platform:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e .
-```
-
-On macOS, the guarded bootstrap performs that version check before creating
-`.venv` and can discover a versioned `python3.11`–`python3.14` executable when
-the active `python3` is older:
-
-```bash
-./scripts/bootstrap_macos.sh
-source .venv/bin/activate
-```
-
-If needed, select an installed interpreter explicitly:
-
-```bash
-RESEARCH_DIGEST_PYTHON=/path/to/python3.12 ./scripts/bootstrap_macos.sh
-```
-
-If no compatible interpreter is installed, use a current installer from
-python.org or Homebrew, then rerun the bootstrap. It will not create `.venv`
-with Python 3.10 or older.
-
-For development tools as well:
-
-```bash
 python -m pip install -e ".[dev]"
 ```
 
-Check that the command is installed:
+Check the installed command with:
 
 ```bash
 research-digest --version
 research-digest status
 ```
 
-### Everyday Windows and macOS Launch
+### Everyday Windows launch
 
-Install the platform launcher once:
+On Windows 11 with WSL2, install the platform launcher once:
 
 ```bash
 research-digest install-launcher
 ```
 
-On Windows 11 with WSL2 this creates the owned **Research Digest** Desktop
-shortcut. On macOS it creates the owned user-local app at:
+This creates the owned **Research Digest** Desktop shortcut. Everyday use is a
+double-click on that shortcut; no WSL Terminal window needs to remain open.
 
-```text
-~/Applications/Research Digest.app
-```
-
-After that, open **Research Digest** normally from the Windows Desktop or macOS
-Finder/Dock. Research Digest starts or reuses one local UI server and opens it
-in the platform default browser. No WSL or macOS Terminal window needs to
-remain open.
-
-Power-user UI commands are:
-
-```bash
-research-digest launch
-research-digest ui-status --json
-research-digest ui-stop
-research-digest uninstall-launcher
-```
-
-`launch` is idempotent: repeated or rapid launches reuse the same exact server.
-If port 8501 belongs to another application, Research Digest leaves it alone and
-uses a bounded fallback port. UI logs and process registration live below the
-Research Digest user-data directory, not in the repository.
-
-The lifecycles are deliberately separate:
-
-- Closing the browser does not stop or cancel a digest.
-- `ui-stop` stops only the Streamlit UI server; an active digest continues.
-- **Cancel digest** stops the active digest but does not disable its schedule.
-- Stopping or restarting the UI does not change source coverage or start catch-up.
-
-### Codex Authentication
+### Codex authentication details
 
 The default analyzer can use the Codex CLI and its saved ChatGPT
 authentication:
@@ -170,20 +199,6 @@ The Windows shortcut and macOS app intentionally never store API keys or
 authentication tokens. If optional OpenAI API mode is used, `OPENAI_API_KEY`
 must already be available to the non-interactive application environment;
 Codex CLI authentication continues to use its normal saved login state.
-
-On macOS, run `install-launcher` from a Terminal where `research-digest` and,
-when Codex-backed analysis or Library intelligence is used, `codex` resolve
-successfully. The installer captures their exact executable
-directories—and the directory of an interpreter declared through a validated
-`/usr/bin/env` shebang, such as `node`—in the app's non-secret PATH, because
-Finder apps do not load interactive shell startup files. If either tool or its
-runtime moves (for example after a virtual-environment, Homebrew, npm, or nvm
-change), rerun
-`research-digest install-launcher`. Both Apple Silicon and Intel installs are
-supported without architecture-specific paths where Python and the declared
-dependencies support the current macOS release. The package requires Python
-3.11 or newer and declares no additional project-specific historical macOS
-floor beyond its Python/dependency support.
 
 For foreground/manual debugging, the existing server command remains available:
 
@@ -204,6 +219,21 @@ research-digest doctor
 ```
 
 Never store API keys in the repository, SQLite database, or checked-in config.
+
+## Lifecycle Semantics
+
+The browser, UI server, digest worker, and schedule have separate lifetimes:
+
+- Closing the browser does not stop or cancel a digest.
+- `research-digest ui-stop` stops only the UI server; an active digest continues.
+- Reopening **Research Digest.app** reattaches to the same active run.
+- **Cancel digest** stops the active digest but does not disable its schedule.
+- Stopping or restarting the UI does not change source coverage or start catch-up.
+
+Power-user UI commands are listed in the CLI reference below. `launch` is
+idempotent: repeated or rapid launches reuse the same exact server. If port
+8501 belongs to another application, Research Digest leaves it alone and uses
+a bounded fallback port.
 
 ## UI Pages
 
@@ -521,13 +551,19 @@ rules. Failed, partial, or interrupted dates remain eligible for retry.
 The scheduler backend is selected by platform:
 
 - Windows/WSL uses Windows Task Scheduler.
-- macOS uses an owned per-user LaunchAgent under `~/Library/LaunchAgents`.
+- macOS uses the owned per-user LaunchAgent
+  `~/Library/LaunchAgents/org.research-digest.daily.plist`.
 
 Schedule times use the operating system's local time and daylight-saving rules.
 Neither backend stores API keys or Codex authentication material.
 
 Settings can inspect, install, update, and disable the schedule. Run now is an
-explicit action; simply opening Settings does not process pending dates.
+explicit action; simply opening Settings does not process pending dates. On
+macOS, enabling **Automatic daily digest** installs and manages launchd
+automatically; normal users do not need to invoke `launchctl`.
+
+A scheduled invocation that finds no uncovered source dates may exit normally
+without creating a new digest run. In that case, History does not gain a no-op run.
 
 ## History and Date Coverage
 
@@ -618,6 +654,7 @@ research-digest uninstall-launcher [--json]
 research-digest serve [--port 8501] [--host localhost]
 research-digest run [--json]
 research-digest status [--json]
+research-digest cancel --run-id ID [--json]
 research-digest doctor [--json] [--network]
 research-digest backup [--output PATH] [--export-json] [--json]
 research-digest schedule status [--json]
@@ -655,6 +692,15 @@ If Codex analysis fails, check:
 codex login status
 codex login
 ```
+
+On macOS, the launcher and launchd schedule capture the exact non-secret PATH
+needed for the installed Research Digest and Codex commands, because Finder and
+launchd do not load interactive shell startup files. If Research Digest, Codex,
+Homebrew, npm, or a supporting interpreter moves, rerun
+`./.venv/bin/research-digest install-launcher` and update the automatic schedule
+from Settings. The owned launchd log is `scheduler.log` in the Research Digest
+data directory. Normal users should manage the schedule through Settings, not
+raw `launchctl` commands.
 
 If automation looks wrong, inspect Settings -> Automation. A schedule can be
 enabled, disabled, or unavailable/unknown if the scheduler cannot be inspected.

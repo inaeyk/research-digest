@@ -51,6 +51,42 @@ class ReleaseDocsTests(unittest.TestCase):
         self.assertIn("full-paper/PDF deep reading is deferred", readme)
         self.assertIn("not long-term semantic memory", readme)
 
+    def test_macos_clean_install_docs_match_published_smoke(self) -> None:
+        readme = Path("README.md").read_text(encoding="utf-8")
+        acceptance = Path(
+            "docs/campaigns/macos/V0.4.0_CLEAN_INSTALL_SMOKE.md"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("--branch v0.4.0", readme)
+        self.assertIn("./scripts/bootstrap_macos.sh", readme)
+        self.assertNotIn("RESEARCH_DIGEST_PYTHON=/path/to/", readme)
+        self.assertIn(
+            "RESEARCH_DIGEST_PYTHON=/opt/homebrew/bin/python3.12", readme
+        )
+        self.assertIn("Failures: 0", readme)
+        self.assertIn("~/Applications/Research Digest.app", readme)
+        self.assertIn("codex login status", readme)
+        self.assertIn("Closing the browser does not stop or cancel", readme)
+        self.assertIn("ui-stop` stops only the UI server", readme)
+        self.assertIn("does not disable its schedule", readme)
+        self.assertIn("History does not gain a no-op run", readme)
+
+        for evidence in (
+            "Acceptance date: 2026-08-28",
+            "macOS 15.5, build `24F74`, arm64",
+            "Published tag: `v0.4.0`",
+            "b137a977d4adbc7701b520a75ebb7a3165be9ee0",
+            "Finder -> Research Digest.app",
+            "real Codex CLI",
+            "`CANCELLED`",
+            "org.research-digest.daily.plist",
+            "macOS login/logout or a full restart",
+        ):
+            self.assertIn(evidence, acceptance)
+
+        self.assertNotIn("/Users/", acceptance)
+        self.assertNotIn("research-digest-install-smoke", acceptance)
+
 
 if __name__ == "__main__":
     unittest.main()
