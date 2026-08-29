@@ -279,6 +279,52 @@ class EndUserInstallerTests(unittest.TestCase):
         self.assertIn("round-trip verification failed", rendered)
         self.assertNotIn("installation completed", rendered.lower())
 
+    def test_launcher_failure_leaves_new_runtime_inactive_and_data_untouched(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            home.mkdir()
+            assets = release_assets(Path(tmp))
+            data = home / ".local" / "share" / "research-digest" / "library.bin"
+            data.parent.mkdir(parents=True)
+            data.write_bytes(b"existing research data")
+            environment = {
+                "HOME": str(home),
+                "WSL_DISTRO_NAME": "Research Debian",
+                "XDG_DATA_HOME": str(home / ".local" / "share"),
+                "XDG_CONFIG_HOME": str(home / ".config"),
+            }
+
+            with (
+                mock.patch.dict(os.environ, environment, clear=True),
+                mock.patch.object(
+                    installer,
+                    "_create_versioned_runtime",
+                    side_effect=fake_create,
+                ),
+                mock.patch.object(
+                    installer,
+                    "verify_runtime",
+                    return_value={
+                        "version": "research-digest 0.4.1",
+                        "doctor_failures": 0,
+                    },
+                ),
+                mock.patch.object(
+                    installer,
+                    "_activate_runtime",
+                    side_effect=installer.InstallError(
+                        "Windows launcher round-trip verification failed."
+                    ),
+                ),
+                self.assertRaisesRegex(installer.InstallError, "round-trip verification"),
+            ):
+                installer.install(asset_dir=assets, distro="Research Debian")
+
+            runtime_root = data.parent / "runtime"
+            self.assertTrue((runtime_root / "0.4.1").is_dir())
+            self.assertFalse((runtime_root / installer.CURRENT_STATE).exists())
+            self.assertEqual(data.read_bytes(), b"existing research data")
+
     def test_manifest_rejects_paths_and_duplicates(self) -> None:
         digest = "a" * 64
         with self.assertRaisesRegex(installer.InstallError, "Malformed"):

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -12,6 +13,7 @@ from typing import cast
 from unittest import mock
 
 from research_digest.config import AppConfig
+from research_digest.errors import sanitize_error_text
 from research_digest.windows_launcher import (
     WINDOWS_LAUNCHER_ARGUMENT_MAX,
     WINDOWS_LAUNCHER_DEFAULT_PATH,
@@ -25,8 +27,10 @@ from research_digest.windows_launcher import (
     WindowsShortcutState,
     _launcher_file_transaction_function,
     _launcher_roundtrip_function,
+    _round_trip_diagnostic,
     build_windows_launcher_request,
     classify_windows_shortcut,
+    compare_windows_shortcut_round_trip,
     resolve_research_digest_command,
     run_windows_powershell,
 )
@@ -94,6 +98,30 @@ class WindowsLauncherTests(unittest.TestCase):
                 "research-digest"
             ),
             codex_executable=str(self.codex),
+        )
+
+    def actual_machine_request(self) -> WindowsLauncherRequest:
+        command = (
+            "/home/inaeyk/.local/share/research-digest/runtime/0.4.1/venv/bin/"
+            "research-digest"
+        )
+        return WindowsLauncherRequest(
+            distro="Ubuntu",
+            wsl_executable="C:\\windows\\system32\\wsl.exe",
+            command_executable=command,
+            environment={
+                "PATH": (
+                    "/home/inaeyk/.local/share/research-digest/runtime/0.4.1/"
+                    "venv/bin:/home/inaeyk/.nvm/versions/node/v22.22.2/bin:"
+                    "/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
+                ),
+                "RESEARCH_DIGEST_CONFIG_DIR": "/home/inaeyk/.config/research-digest",
+                "RESEARCH_DIGEST_DATA_DIR": "/home/inaeyk/.local/share/research-digest",
+                "RESEARCH_DIGEST_DB": (
+                    "/home/inaeyk/.local/share/research-digest/"
+                    "research_digest.sqlite3"
+                ),
+            },
         )
 
     def shortcut_state(
@@ -194,6 +222,26 @@ class WindowsLauncherTests(unittest.TestCase):
         self.assertEqual(request.windows_arguments, baseline.windows_arguments)
         self.assertNotIn("z" * 100, request.windows_arguments)
 
+    def test_actual_machine_request_is_compact_and_exactly_reproduced(self) -> None:
+        request = self.actual_machine_request()
+
+        self.assertEqual(request.distro, "Ubuntu")
+        self.assertEqual(request.wsl_executable, "C:\\windows\\system32\\wsl.exe")
+        self.assertEqual(len(request.windows_arguments), 537)
+        self.assertEqual(
+            hashlib.sha256(request.windows_arguments.encode()).hexdigest(),
+            "72e61cd413c981e17cf45ec20b7a7dde059e9280744963fbdb877ee500a23c4c",
+        )
+        self.assertTrue(
+            request.windows_arguments.endswith(
+                "launch --launcher-id research-digest-wsl-v1"
+            )
+        )
+        self.assertIn(
+            "/home/inaeyk/.nvm/versions/node/v22.22.2/bin",
+            request.environment["PATH"],
+        )
+
     def test_request_uses_current_distro_without_hard_coding_ubuntu(self) -> None:
         with mock.patch.dict(os.environ, {"WSL_DISTRO_NAME": "Debian Research"}, clear=True):
             request = build_windows_launcher_request(
@@ -273,6 +321,113 @@ class WindowsLauncherTests(unittest.TestCase):
 
         self.assertEqual(len(runner.commands), 1)
 
+    def test_round_trip_accepts_only_windows_target_case_normalization(self) -> None:
+        request = self.actual_machine_request()
+        persisted = self.shortcut_state(
+            request,
+            target="C:\\Windows\\System32\\wsl.exe",
+        )
+
+        verification = compare_windows_shortcut_round_trip(request, persisted)
+
+        self.assertTrue(verification.successful)
+        self.assertTrue(verification.target_path_match)
+        self.assertTrue(verification.arguments_match)
+        self.assertEqual(verification.intended_arguments_length, 537)
+        self.assertEqual(verification.persisted_arguments_length, 537)
+
+        changed_target = compare_windows_shortcut_round_trip(
+            request,
+            self.shortcut_state(request, target="C:\\Tools\\wsl.exe"),
+        )
+        changed_description = compare_windows_shortcut_round_trip(
+            request,
+            self.shortcut_state(request, description="Personal WSL launcher"),
+        )
+        self.assertFalse(changed_target.successful)
+        self.assertFalse(changed_target.target_path_match)
+        self.assertFalse(changed_description.successful)
+        self.assertFalse(changed_description.description_match)
+
+    def test_round_trip_rejects_every_semantic_command_change(self) -> None:
+        request = self.actual_machine_request()
+        arguments = request.windows_arguments
+        tampered = {
+            "historical_truncation": self.legacy_truncated_arguments(request),
+            "missing_launch_tail": arguments.removesuffix(
+                " launch --launcher-id research-digest-wsl-v1"
+            ),
+            "changed_private_runtime": arguments.replace(
+                "/runtime/0.4.1/", "/runtime/0.4.0/", 1
+            ),
+            "changed_distro": arguments.replace("-d Ubuntu", "-d Debian", 1),
+            "changed_launcher_id": arguments.replace(
+                "research-digest-wsl-v1", "personal-launcher", 1
+            ),
+            "missing_codex_path": arguments.replace(
+                ":/home/inaeyk/.nvm/versions/node/v22.22.2/bin", "", 1
+            ),
+            "changed_required_environment": arguments.replace(
+                "RESEARCH_DIGEST_CONFIG_DIR=/home/inaeyk/.config/research-digest",
+                "RESEARCH_DIGEST_CONFIG_DIR=/tmp/unowned-config",
+                1,
+            ),
+            "unexpected_extra_command": arguments + " --unexpected-content",
+            "persisted_over_limit": arguments + " " + "x" * 901,
+        }
+
+        for name, persisted_arguments in tampered.items():
+            with self.subTest(name=name):
+                verification = compare_windows_shortcut_round_trip(
+                    request,
+                    self.shortcut_state(
+                        request,
+                        arguments=persisted_arguments,
+                        target="C:\\Windows\\System32\\wsl.exe",
+                    ),
+                )
+                self.assertFalse(verification.successful)
+                self.assertFalse(verification.arguments_match)
+                if name in {"historical_truncation", "persisted_over_limit"}:
+                    self.assertFalse(verification.persisted_arguments_within_limit)
+
+    def test_round_trip_diagnostic_is_structural_and_contains_no_argument_text(
+        self,
+    ) -> None:
+        request = self.actual_machine_request()
+        persisted_arguments = request.windows_arguments + " OPENAI_API_KEY=topsecret"
+        verification = compare_windows_shortcut_round_trip(
+            request,
+            self.shortcut_state(request, arguments=persisted_arguments),
+        )
+
+        diagnostic = _round_trip_diagnostic(
+            intended_arguments=request.windows_arguments,
+            persisted_arguments=persisted_arguments,
+            verification=verification,
+        )
+
+        for field in (
+            "target_path_match=true",
+            "arguments_match=false",
+            "description_match=true",
+            "intended_arguments_length=537",
+            "persisted_arguments_length=562",
+            "first_differing_index=537",
+            "intended_sha256=",
+            "persisted_sha256=",
+            "intended_shape=",
+            "persisted_shape=",
+        ):
+            self.assertIn(field, diagnostic)
+        self.assertNotIn("OPENAI_API_KEY", diagnostic)
+        self.assertNotIn("topsecret", diagnostic)
+        surfaced = sanitize_error_text(
+            "Windows launcher round-trip verification failed: " + diagnostic
+        )
+        self.assertNotIn("[truncated]", surfaced)
+        self.assertIn("persisted_shape=", surfaced)
+
     def test_legacy_launcher_migrates_to_compact_round_trip_verified_launcher(self) -> None:
         request = self.request()
         legacy = self.shortcut_state(
@@ -293,8 +448,23 @@ class WindowsLauncherTests(unittest.TestCase):
         self.assertEqual(len(runner.commands), 2)
         script = runner.commands[1][-1]
         self.assertIn("Assert-ResearchDigestLauncherRoundTrip", script)
-        self.assertIn("$stored.Arguments -cne $Arguments", script)
+        self.assertIn("$stored.Arguments -ceq $Arguments", script)
         self.assertIn("$prior.Arguments -cne", script)
+
+    def test_backend_accepts_native_wscript_target_path_casing(self) -> None:
+        request = self.actual_machine_request()
+        absent = WindowsShortcutState(path=self.windows_path, exists=False)
+        payload = json.loads(self.installed_json(request))
+        payload["target"] = "C:\\Windows\\System32\\wsl.exe"
+        runner = RecordingRunner([self.inspect_json(absent), json.dumps(payload)])
+
+        result = WindowsLauncherBackend(
+            powershell_path="powershell.exe",
+            runner=runner,
+        ).install(request)
+
+        self.assertTrue(result.installed)
+        self.assertEqual(result.target, "C:\\Windows\\System32\\wsl.exe")
 
     def test_install_is_idempotent_and_round_trip_payload_is_exact(self) -> None:
         request = self.request()
@@ -373,12 +543,17 @@ class WindowsLauncherTests(unittest.TestCase):
     )
     def test_native_wscript_truncation_and_compact_round_trip(self) -> None:
         function = "\n".join(_launcher_roundtrip_function())
-        compact = self.request().windows_arguments
+        request = self.actual_machine_request()
+        compact = request.windows_arguments
         escaped_compact = compact.replace("'", "''")
         test_script = "\n".join(
             [
                 "$ErrorActionPreference = 'Stop'",
                 function,
+                "$unicodeShape = Get-ResearchDigestSafeArgumentShape "
+                "-Value 'Sëcret秘密42' -Difference 0",
+                "if ($unicodeShape -cne '@0:xxxxxxx') { "
+                "throw ('unicode diagnostic masking failed: ' + $unicodeShape) }",
                 "$root = Join-Path ([IO.Path]::GetTempPath()) "
                 "('rd-shortcut-test-' + [guid]::NewGuid().ToString('N'))",
                 "New-Item -ItemType Directory -Path $root | Out-Null",
@@ -396,14 +571,34 @@ class WindowsLauncherTests(unittest.TestCase):
                 "throw 'tail survived' }",
                 "  $compactPath = Join-Path $root 'compact.lnk'",
                 "  $new = $shell.CreateShortcut($compactPath)",
-                "  $new.TargetPath = 'C:\\Windows\\System32\\wsl.exe'",
+                "  $new.TargetPath = 'C:\\windows\\system32\\wsl.exe'",
                 f"  $new.Arguments = '{escaped_compact}'",
                 "  $new.Description = 'Research Digest Windows launcher v1'",
                 "  $new.Save()",
+                "  $storedCompact = $shell.CreateShortcut($compactPath)",
+                "  if ($storedCompact.TargetPath -cne "
+                "'C:\\Windows\\System32\\wsl.exe') { throw 'target not canonicalized' }",
+                f"  if ($storedCompact.Arguments -cne '{escaped_compact}') {{ "
+                "throw 'arguments changed' }",
                 "  Assert-ResearchDigestLauncherRoundTrip -Shell $shell "
-                "-Path $compactPath -Target 'C:\\Windows\\System32\\wsl.exe' "
+                "-Path $compactPath -Target 'C:\\windows\\system32\\wsl.exe' "
                 f"-Arguments '{escaped_compact}' "
-                "-Description 'Research Digest Windows launcher v1'",
+                "-Description 'Research Digest Windows launcher v1' "
+                "-MaximumArguments 900",
+                "  try {",
+                "    Assert-ResearchDigestLauncherRoundTrip -Shell $shell "
+                "-Path $compactPath -Target 'C:\\windows\\system32\\wsl.exe' "
+                f"-Arguments '{escaped_compact} --unexpected-content' "
+                "-Description 'Research Digest Windows launcher v1' "
+                "-MaximumArguments 900",
+                "    throw 'expected semantic mismatch failure'",
+                "  } catch {",
+                "    if ($_.Exception.Message -notlike '*target_path_match=true*') { throw }",
+                "    if ($_.Exception.Message -notlike '*arguments_match=false*') { throw }",
+                "    if ($_.Exception.Message -notlike '*first_differing_index=*') { throw }",
+                "    if ($_.Exception.Message -like '*Ubuntu*') { "
+                "throw 'diagnostic exposed argument text' }",
+                "  }",
                 "  Write-Output 'native shortcut boundary: passed'",
                 "} finally {",
                 "  Remove-Item -LiteralPath $root -Recurse -Force "
@@ -433,10 +628,16 @@ class WindowsLauncherTests(unittest.TestCase):
         and WINDOWS_POWERSHELL.exists(),
         "requires explicitly enabled native Windows PowerShell boundary",
     )
-    def test_native_transaction_restores_prior_file_after_verification_failure(
+    def test_native_transaction_restores_prior_shortcut_after_genuine_mismatch(
         self,
     ) -> None:
-        function = "\n".join(_launcher_file_transaction_function())
+        function = "\n".join(
+            [
+                *_launcher_file_transaction_function(),
+                *_launcher_roundtrip_function(),
+            ]
+        )
+        arguments = self.actual_machine_request().windows_arguments.replace("'", "''")
         test_script = "\n".join(
             [
                 "$ErrorActionPreference = 'Stop'",
@@ -448,9 +649,29 @@ class WindowsLauncherTests(unittest.TestCase):
                 "  $destination = Join-Path $root 'Research Digest.lnk'",
                 "  $candidate = Join-Path $root 'candidate.lnk'",
                 "  $backup = Join-Path $root 'backup.lnk'",
-                "  [IO.File]::WriteAllText($destination, 'old launcher')",
-                "  [IO.File]::WriteAllText($candidate, 'new launcher')",
-                "  $verify = { param([string]$path) throw 'injected verification failure' }",
+                "  $shell = New-Object -ComObject WScript.Shell",
+                "  $old = $shell.CreateShortcut($destination)",
+                "  $old.TargetPath = 'C:\\Windows\\System32\\wsl.exe'",
+                "  $old.Arguments = ('-d Ubuntu --exec env \"PATH=' + ('x' * 1800))",
+                "  $old.Description = 'Research Digest Windows launcher v1'",
+                "  $old.Save()",
+                (
+                    "  $priorBytes = [Convert]::ToBase64String("
+                    "[IO.File]::ReadAllBytes($destination))"
+                ),
+                "  $new = $shell.CreateShortcut($candidate)",
+                "  $new.TargetPath = 'C:\\windows\\system32\\wsl.exe'",
+                f"  $new.Arguments = '{arguments} --unexpected-content'",
+                "  $new.Description = 'Research Digest Windows launcher v1'",
+                "  $new.Save()",
+                "  $verify = {",
+                "    param([string]$path)",
+                "    Assert-ResearchDigestLauncherRoundTrip -Shell $shell "
+                "-Path $path -Target 'C:\\windows\\system32\\wsl.exe' "
+                f"-Arguments '{arguments}' "
+                "-Description 'Research Digest Windows launcher v1' "
+                "-MaximumArguments 900",
+                "  }",
                 "  try {",
                 "    Install-ResearchDigestLauncherFile -Candidate $candidate "
                 "-Destination $destination -Backup $backup -Verify $verify",
@@ -459,8 +680,15 @@ class WindowsLauncherTests(unittest.TestCase):
                 "    if ($_.Exception.Message -notlike '*prior launcher was preserved*') { "
                 "throw }",
                 "  }",
-                "  if ([IO.File]::ReadAllText($destination) -ne 'old launcher') { "
-                "throw 'prior launcher was not restored' }",
+                (
+                    "  $restoredBytes = [Convert]::ToBase64String("
+                    "[IO.File]::ReadAllBytes($destination))"
+                ),
+                "  if ($restoredBytes -cne $priorBytes) { "
+                "throw 'prior launcher bytes were not restored' }",
+                "  $restored = $shell.CreateShortcut($destination)",
+                "  if ($restored.Arguments.Length -ne 1023) { "
+                "throw 'restored launcher was not the damaged historical shortcut' }",
                 "  Write-Output 'native launcher rollback: passed'",
                 "} finally {",
                 "  Remove-Item -LiteralPath $root -Recurse -Force "

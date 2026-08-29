@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import ntpath
 import os
@@ -82,6 +83,25 @@ class WindowsShortcutState:
 
 
 @dataclass(frozen=True)
+class WindowsShortcutRoundTrip:
+    target_path_match: bool
+    arguments_match: bool
+    description_match: bool
+    intended_arguments_length: int
+    persisted_arguments_length: int
+    persisted_arguments_within_limit: bool
+
+    @property
+    def successful(self) -> bool:
+        return bool(
+            self.target_path_match
+            and self.arguments_match
+            and self.description_match
+            and self.persisted_arguments_within_limit
+        )
+
+
+@dataclass(frozen=True)
 class WindowsLauncherResult:
     operation: str
     installed: bool
@@ -140,15 +160,28 @@ class WindowsLauncherBackend:
         target = _required_payload_string(payload, "target")
         stored_arguments = _required_payload_string(payload, "arguments")
         description = _required_payload_string(payload, "description")
+        verification = compare_windows_shortcut_round_trip(
+            request,
+            WindowsShortcutState(
+                path=path,
+                exists=True,
+                description=description,
+                target=target,
+                arguments=stored_arguments,
+            ),
+        )
         if (
             payload.get("installed") is not True
             or path != state.path
-            or target != request.wsl_executable
-            or stored_arguments != arguments
-            or description != WINDOWS_LAUNCHER_DESCRIPTION
+            or not verification.successful
         ):
             raise WindowsLauncherError(
-                "Windows launcher round-trip verification returned unexpected values."
+                "Windows launcher round-trip verification returned unexpected values: "
+                + _round_trip_diagnostic(
+                    intended_arguments=arguments,
+                    persisted_arguments=stored_arguments,
+                    verification=verification,
+                )
             )
         return WindowsLauncherResult(
             operation=(
@@ -328,10 +361,103 @@ def classify_windows_shortcut(
     return "unowned"
 
 
+def compare_windows_shortcut_round_trip(
+    request: WindowsLauncherRequest,
+    persisted: WindowsShortcutState,
+) -> WindowsShortcutRoundTrip:
+    persisted_arguments = persisted.arguments or ""
+    return WindowsShortcutRoundTrip(
+        target_path_match=bool(
+            persisted.target is not None
+            and _same_windows_path(persisted.target, request.wsl_executable)
+        ),
+        arguments_match=persisted.arguments == request.windows_arguments,
+        description_match=persisted.description == WINDOWS_LAUNCHER_DESCRIPTION,
+        intended_arguments_length=len(request.windows_arguments),
+        persisted_arguments_length=len(persisted_arguments),
+        persisted_arguments_within_limit=(
+            len(persisted_arguments) <= WINDOWS_LAUNCHER_ARGUMENT_MAX
+        ),
+    )
+
+
 def _same_windows_path(first: str, second: str) -> bool:
     return ntpath.normcase(ntpath.normpath(first)) == ntpath.normcase(
         ntpath.normpath(second)
     )
+
+
+def _round_trip_diagnostic(
+    *,
+    intended_arguments: str,
+    persisted_arguments: str,
+    verification: WindowsShortcutRoundTrip,
+) -> str:
+    first_difference = _first_string_difference(
+        intended_arguments,
+        persisted_arguments,
+    )
+    return "; ".join(
+        (
+            f"target_path_match={str(verification.target_path_match).lower()}",
+            f"arguments_match={str(verification.arguments_match).lower()}",
+            f"description_match={str(verification.description_match).lower()}",
+            (
+                "persisted_within_900="
+                f"{str(verification.persisted_arguments_within_limit).lower()}"
+            ),
+            (
+                "intended_arguments_length="
+                f"{verification.intended_arguments_length}"
+            ),
+            (
+                "persisted_arguments_length="
+                f"{verification.persisted_arguments_length}"
+            ),
+            f"first_differing_index={first_difference}",
+            (
+                "intended_sha256="
+                f"{hashlib.sha256(intended_arguments.encode()).hexdigest()}"
+            ),
+            (
+                "persisted_sha256="
+                f"{hashlib.sha256(persisted_arguments.encode()).hexdigest()}"
+            ),
+            (
+                "intended_shape="
+                f"{_safe_argument_shape(intended_arguments, first_difference)}"
+            ),
+            (
+                "persisted_shape="
+                f"{_safe_argument_shape(persisted_arguments, first_difference)}"
+            ),
+        )
+    )
+
+
+def _first_string_difference(first: str, second: str) -> int:
+    for index, (first_character, second_character) in enumerate(
+        zip(first, second, strict=False)
+    ):
+        if first_character != second_character:
+            return index
+    return -1 if len(first) == len(second) else min(len(first), len(second))
+
+
+def _safe_argument_shape(value: str, difference: int, *, radius: int = 6) -> str:
+    if difference < 0:
+        return "<equal>"
+    start = max(0, difference - radius)
+    end = min(len(value), difference + radius + 1)
+    excerpt = value[start:end]
+    masked = "".join("x" if character.isalnum() else character for character in excerpt)
+    visible = (
+        masked.replace("\r", "<r>")
+        .replace("\n", "<n>")
+        .replace("\t", "<t>")
+        .replace(" ", "<s>")
+    )
+    return f"@{start}:{visible}"
 
 
 def resolve_windows_powershell() -> str:
@@ -474,7 +600,8 @@ def _install_launcher_script(
             (
                 "  Assert-ResearchDigestLauncherRoundTrip -Shell $shell "
                 "-Path $temporary -Target $expectedTarget "
-                "-Arguments $expectedArguments -Description $expectedDescription"
+                "-Arguments $expectedArguments -Description $expectedDescription "
+                "-MaximumArguments $maximumArguments"
             ),
             "}",
             "catch {",
@@ -491,7 +618,8 @@ def _install_launcher_script(
             (
                 "  Assert-ResearchDigestLauncherRoundTrip -Shell $shell "
                 "-Path $installedPath -Target $expectedTarget "
-                "-Arguments $expectedArguments -Description $expectedDescription"
+                "-Arguments $expectedArguments -Description $expectedDescription "
+                "-MaximumArguments $maximumArguments"
             ),
             "}",
             (
@@ -510,21 +638,126 @@ def _install_launcher_script(
 
 def _launcher_roundtrip_function() -> list[str]:
     return [
+        "function Test-ResearchDigestWindowsPathEquivalent {",
+        "  param([string]$First, [string]$Second)",
+        "  try {",
+        "    $firstFull = [IO.Path]::GetFullPath($First)",
+        "    $secondFull = [IO.Path]::GetFullPath($Second)",
+        (
+            "    return [string]::Equals($firstFull, $secondFull, "
+            "[StringComparison]::OrdinalIgnoreCase)"
+        ),
+        "  } catch {",
+        "    return $false",
+        "  }",
+        "}",
+        "function Get-ResearchDigestStringSha256 {",
+        "  param([string]$Value)",
+        "  $algorithm = [Security.Cryptography.SHA256]::Create()",
+        "  try {",
+        "    $bytes = [Text.Encoding]::UTF8.GetBytes($Value)",
+        "    $digest = $algorithm.ComputeHash($bytes)",
+        (
+            "    return ([BitConverter]::ToString($digest)).Replace('-', "
+            "'').ToLowerInvariant()"
+        ),
+        "  } finally {",
+        "    $algorithm.Dispose()",
+        "  }",
+        "}",
+        "function Get-ResearchDigestFirstDifference {",
+        "  param([string]$First, [string]$Second)",
+        "  $limit = [Math]::Min($First.Length, $Second.Length)",
+        "  for ($index = 0; $index -lt $limit; $index += 1) {",
+        "    if ($First[$index] -cne $Second[$index]) { return $index }",
+        "  }",
+        "  if ($First.Length -eq $Second.Length) { return -1 }",
+        "  return $limit",
+        "}",
+        "function Get-ResearchDigestSafeArgumentShape {",
+        "  param([string]$Value, [int]$Difference)",
+        "  if ($Difference -lt 0) { return '<equal>' }",
+        "  $start = [Math]::Max(0, $Difference - 6)",
+        "  $end = [Math]::Min($Value.Length, $Difference + 7)",
+        "  $count = [Math]::Max(0, $end - $start)",
+        "  $excerpt = $Value.Substring($start, $count)",
+        r"  $shape = [regex]::Replace($excerpt, '[\p{L}\p{N}]', 'x')",
+        (
+            "  $shape = $shape.Replace(\"`r\", '<r>').Replace(\"`n\", "
+            "'<n>').Replace(\"`t\", '<t>').Replace(' ', '<s>')"
+        ),
+        "  return ('@' + $start + ':' + $shape)",
+        "}",
         "function Assert-ResearchDigestLauncherRoundTrip {",
         (
             "  param($Shell, [string]$Path, [string]$Target, "
-            "[string]$Arguments, [string]$Description)"
+            "[string]$Arguments, [string]$Description, [int]$MaximumArguments)"
         ),
         "  if (-not (Test-Path -LiteralPath $Path)) {",
         "    throw 'Windows launcher round-trip verification found no shortcut.'",
         "  }",
         "  $stored = $Shell.CreateShortcut($Path)",
         (
-            "  if ($stored.TargetPath -cne $Target -or "
-            "$stored.Arguments -cne $Arguments -or "
-            "$stored.Description -cne $Description) {"
+            "  $targetPathMatch = Test-ResearchDigestWindowsPathEquivalent "
+            "-First $stored.TargetPath -Second $Target"
         ),
-        "    throw 'Windows launcher round-trip verification failed.'",
+        "  $argumentsMatch = $stored.Arguments -ceq $Arguments",
+        "  $descriptionMatch = $stored.Description -ceq $Description",
+        (
+            "  $persistedArgumentsWithinLimit = "
+            "$stored.Arguments.Length -le $MaximumArguments"
+        ),
+        (
+            "  if (-not $targetPathMatch -or -not $argumentsMatch -or "
+            "-not $descriptionMatch -or -not $persistedArgumentsWithinLimit) {"
+        ),
+        (
+            "    $firstDifference = Get-ResearchDigestFirstDifference "
+            "-First $Arguments -Second $stored.Arguments"
+        ),
+        "    $diagnostic = @(",
+        (
+            "      'target_path_match=' + "
+            "$targetPathMatch.ToString().ToLowerInvariant()"
+        ),
+        (
+            "      'arguments_match=' + "
+            "$argumentsMatch.ToString().ToLowerInvariant()"
+        ),
+        (
+            "      'description_match=' + "
+            "$descriptionMatch.ToString().ToLowerInvariant()"
+        ),
+        (
+            "      'persisted_within_900=' + "
+            "$persistedArgumentsWithinLimit.ToString().ToLowerInvariant()"
+        ),
+        "      'intended_arguments_length=' + $Arguments.Length",
+        "      'persisted_arguments_length=' + $stored.Arguments.Length",
+        "      'first_differing_index=' + $firstDifference",
+        (
+            "      'intended_sha256=' + "
+            "(Get-ResearchDigestStringSha256 -Value $Arguments)"
+        ),
+        (
+            "      'persisted_sha256=' + "
+            "(Get-ResearchDigestStringSha256 -Value $stored.Arguments)"
+        ),
+        (
+            "      'intended_shape=' + "
+            "(Get-ResearchDigestSafeArgumentShape -Value $Arguments "
+            "-Difference $firstDifference)"
+        ),
+        (
+            "      'persisted_shape=' + "
+            "(Get-ResearchDigestSafeArgumentShape -Value $stored.Arguments "
+            "-Difference $firstDifference)"
+        ),
+        "    ) -join '; '",
+        (
+            "    throw ('Windows launcher round-trip verification failed: ' + "
+            "$diagnostic)"
+        ),
         "  }",
         "}",
     ]
