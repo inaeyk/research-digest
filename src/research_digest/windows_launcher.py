@@ -33,6 +33,10 @@ WINDOWS_LEGACY_TRUNCATED_ARGUMENT_LENGTH = 1023
 WINDOWS_LAUNCHER_DEFAULT_PATH = (
     "/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
 )
+WINDOWS_POWERSHELL_RELATIVE_PATH = Path(
+    "Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+)
+WSL_MOUNTS_PATH = Path("/proc/mounts")
 
 WindowsLauncherOwnership = Literal["absent", "current", "legacy_truncated", "unowned"]
 
@@ -462,11 +466,64 @@ def _safe_argument_shape(value: str, difference: int, *, radius: int = 6) -> str
 
 def resolve_windows_powershell() -> str:
     resolved = shutil.which("powershell.exe")
-    if resolved is None:
-        raise WindowsLauncherError(
-            "powershell.exe was not found; the Windows browser/launcher boundary is unavailable"
+    if resolved is not None:
+        return resolved
+    if is_wsl():
+        for windows_root in _mounted_windows_drive_roots():
+            candidate = windows_root / WINDOWS_POWERSHELL_RELATIVE_PATH
+            try:
+                if candidate.is_file() and os.access(candidate, os.X_OK):
+                    return str(candidate)
+            except OSError:
+                continue
+    raise WindowsLauncherError(
+        "Windows PowerShell was not found on PATH or in a mounted Windows system "
+        "directory; verify that WSL interop is enabled and the Windows system drive "
+        "is mounted."
+    )
+
+
+def _mounted_windows_drive_roots() -> tuple[Path, ...]:
+    try:
+        mount_lines = WSL_MOUNTS_PATH.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return ()
+    roots: list[Path] = []
+    for line in mount_lines:
+        fields = line.split()
+        if len(fields) < 4:
+            continue
+        source = _decode_proc_mount_field(fields[0])
+        mount_point = _decode_proc_mount_field(fields[1])
+        filesystem = fields[2]
+        options = _decode_proc_mount_field(fields[3])
+        is_drive_root = (
+            len(source) == 3
+            and source[0].isalpha()
+            and source[1] == ":"
+            and source[2] in {"\\", "/"}
         )
-    return resolved
+        mount_options = options.split(",")
+        is_drvfs = filesystem == "drvfs" or any(
+            option == "aname=drvfs" or option.startswith("aname=drvfs;")
+            for option in mount_options
+        )
+        root = Path(mount_point)
+        if is_drive_root and is_drvfs and root.is_absolute() and root not in roots:
+            roots.append(root)
+    return tuple(roots)
+
+
+def _decode_proc_mount_field(value: str) -> str:
+    decoded = value
+    for escaped, character in (
+        (r"\040", " "),
+        (r"\011", "\t"),
+        (r"\012", "\n"),
+        (r"\134", "\\"),
+    ):
+        decoded = decoded.replace(escaped, character)
+    return decoded
 
 
 def run_windows_powershell(
@@ -476,7 +533,13 @@ def run_windows_powershell(
     runner: WindowsCommandRunner | None = None,
 ) -> subprocess.CompletedProcess[str]:
     command = _powershell_command(powershell_path or resolve_windows_powershell(), script)
-    completed = (runner or _run_command)(command)
+    try:
+        completed = (runner or _run_command)(command)
+    except OSError as exc:
+        raise WindowsLauncherError(
+            "Windows PowerShell could not be started through WSL; verify that WSL "
+            f"interop is enabled and working: {sanitize_error(exc)}"
+        ) from exc
     if completed.returncode != 0:
         details = completed.stderr.strip() or completed.stdout.strip() or "unknown error"
         raise WindowsLauncherError(

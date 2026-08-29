@@ -116,12 +116,20 @@ class LinuxPlatformRuntime:
             raise PlatformRuntimeError(
                 "Desktop launch is supported on macOS and on Windows through WSL."
             )
-        from research_digest.windows_launcher import run_windows_powershell
-
-        run_windows_powershell(
-            "$ErrorActionPreference = 'Stop'\n"
-            f"Start-Process -FilePath {_powershell_quote(url)}"
+        from research_digest.windows_launcher import (
+            WindowsLauncherError,
+            run_windows_powershell,
         )
+
+        try:
+            run_windows_powershell(
+                "$ErrorActionPreference = 'Stop'\n"
+                f"Start-Process -FilePath {_powershell_quote(url)}"
+            )
+        except WindowsLauncherError as exc:
+            raise PlatformRuntimeError(
+                f"Windows could not open the browser through WSL: {exc}"
+            ) from exc
 
 
 class _ProcBSDInfo(ctypes.Structure):

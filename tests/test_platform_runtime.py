@@ -22,6 +22,7 @@ from research_digest.platform_runtime import (
     PlatformRuntimeError,
     select_platform_runtime,
 )
+from research_digest.platform_runtime import is_wsl as platform_is_wsl
 from research_digest.run_locks import (
     ProcessOwnershipUnavailable,
     ProcessRunOwner,
@@ -35,6 +36,12 @@ from research_digest.ui_server import (
     UI_REGISTRATION_VERSION,
     UIServerManager,
     UIServerRegistration,
+)
+from research_digest.windows_launcher import (
+    WINDOWS_LAUNCHER_DEFAULT_PATH,
+    WINDOWS_POWERSHELL_RELATIVE_PATH,
+    resolve_windows_powershell,
+    run_windows_powershell,
 )
 
 
@@ -458,6 +465,155 @@ class DarwinPlatformRuntimeTests(unittest.TestCase):
             "$ErrorActionPreference = 'Stop'\n"
             "Start-Process -FilePath 'http://localhost:8507/path?value=one''two'"
         )
+
+    def test_wsl_browser_bridge_resolves_windows_powershell_without_host_path(
+        self,
+    ) -> None:
+        runtime = LinuxPlatformRuntime()
+        commands: list[tuple[str, ...]] = []
+
+        def run(command: Sequence[str]) -> subprocess.CompletedProcess[str]:
+            values = tuple(command)
+            commands.append(values)
+            return subprocess.CompletedProcess(values, 0, "", "")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            normal_bin = root / "normal WSL path"
+            normal_bin.mkdir()
+            normal_powershell = normal_bin / "powershell.exe"
+            normal_powershell.write_text("normal path bridge", encoding="utf-8")
+            normal_powershell.chmod(0o755)
+
+            windows_root = root / "mounted Windows drive"
+            mounted_powershell = windows_root / WINDOWS_POWERSHELL_RELATIVE_PATH
+            mounted_powershell.parent.mkdir(parents=True)
+            mounted_powershell.write_text("mounted bridge", encoding="utf-8")
+            mounted_powershell.chmod(0o755)
+            encoded_mount = str(windows_root).replace(" ", r"\040")
+            mounts = root / "mounts"
+            mounts.write_text(
+                f"Z:\\134 {encoded_mount} 9p rw,aname=drvfs;path=Z:\\134 0 0\n",
+                encoding="utf-8",
+            )
+
+            with (
+                mock.patch.dict(os.environ, {"PATH": str(normal_bin)}, clear=True),
+                mock.patch(
+                    "research_digest.windows_launcher.WSL_MOUNTS_PATH",
+                    mounts,
+                ),
+                mock.patch(
+                    "research_digest.windows_launcher.is_wsl",
+                    return_value=True,
+                ),
+            ):
+                self.assertEqual(resolve_windows_powershell(), str(normal_powershell))
+
+            compact_path = "/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
+            with (
+                mock.patch.dict(os.environ, {"PATH": compact_path}, clear=True),
+                mock.patch("research_digest.platform_runtime.is_wsl", return_value=True),
+                mock.patch(
+                    "research_digest.windows_launcher.is_wsl",
+                    return_value=True,
+                ),
+                mock.patch(
+                    "research_digest.windows_launcher.WSL_MOUNTS_PATH",
+                    mounts,
+                ),
+                mock.patch(
+                    "research_digest.windows_launcher._run_command",
+                    side_effect=run,
+                ),
+            ):
+                runtime.open_url("http://localhost:8509")
+
+        self.assertEqual(len(commands), 1)
+        self.assertEqual(commands[0][0], str(mounted_powershell))
+        self.assertIn("Start-Process -FilePath 'http://localhost:8509'", commands[0][-1])
+
+    def test_wsl_browser_bridge_missing_from_path_and_mounts_is_actionable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            mounts = Path(tmp) / "mounts"
+            mounts.write_text("none / ext4 rw 0 0\n", encoding="utf-8")
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {"PATH": "/usr/local/bin:/usr/bin:/bin"},
+                    clear=True,
+                ),
+                mock.patch("research_digest.platform_runtime.is_wsl", return_value=True),
+                mock.patch(
+                    "research_digest.windows_launcher.is_wsl",
+                    return_value=True,
+                ),
+                mock.patch(
+                    "research_digest.windows_launcher.WSL_MOUNTS_PATH",
+                    mounts,
+                ),
+                self.assertRaisesRegex(
+                    PlatformRuntimeError,
+                    "WSL interop is enabled.*Windows system drive is mounted",
+                ),
+            ):
+                LinuxPlatformRuntime().open_url("http://localhost:8509")
+
+    def test_wsl_browser_bridge_spawn_failure_is_actionable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            windows_root = root / "mounted Windows drive"
+            mounted_powershell = windows_root / WINDOWS_POWERSHELL_RELATIVE_PATH
+            mounted_powershell.parent.mkdir(parents=True)
+            mounted_powershell.write_text("not an executable format", encoding="utf-8")
+            mounted_powershell.chmod(0o755)
+            encoded_mount = str(windows_root).replace(" ", r"\040")
+            mounts = root / "mounts"
+            mounts.write_text(
+                f"Z:\\134 {encoded_mount} 9p rw,aname=drvfs;path=Z:\\134 0 0\n",
+                encoding="utf-8",
+            )
+
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {"PATH": "/usr/local/bin:/usr/bin:/bin"},
+                    clear=True,
+                ),
+                mock.patch("research_digest.platform_runtime.is_wsl", return_value=True),
+                mock.patch(
+                    "research_digest.windows_launcher.is_wsl",
+                    return_value=True,
+                ),
+                mock.patch(
+                    "research_digest.windows_launcher.WSL_MOUNTS_PATH",
+                    mounts,
+                ),
+                self.assertRaisesRegex(
+                    PlatformRuntimeError,
+                    "could not be started through WSL.*WSL interop is enabled",
+                ),
+            ):
+                LinuxPlatformRuntime().open_url("http://localhost:8509")
+
+    @unittest.skipUnless(
+        os.environ.get("RESEARCH_DIGEST_RUN_WINDOWS_NATIVE_TESTS") == "1"
+        and platform_is_wsl(),
+        "requires explicitly enabled native Windows PowerShell boundary",
+    )
+    def test_native_windows_powershell_bridge_runs_from_compact_path(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {"PATH": WINDOWS_LAUNCHER_DEFAULT_PATH},
+            clear=False,
+        ):
+            resolved = resolve_windows_powershell()
+            completed = run_windows_powershell(
+                "Write-Output research-digest-compact-path-bridge"
+            )
+
+        self.assertTrue(Path(resolved).is_absolute())
+        self.assertEqual(completed.stdout.strip(), "research-digest-compact-path-bridge")
 
     def test_non_wsl_linux_desktop_launch_fails_clearly(self) -> None:
         with (
