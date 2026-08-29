@@ -121,7 +121,11 @@ class MacDistributionInstallerTests(unittest.TestCase):
     def test_unsupported_python_fails_before_download(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            completed = self.run_installer(root, valid_fallback=False)
+            completed = self.run_installer(
+                root,
+                valid_fallback=False,
+                override=root / "fake commands" / "python3",
+            )
 
             self.assertEqual(completed.returncode, 2)
             self.assertIn("requires Python 3.11 or newer", completed.stderr)

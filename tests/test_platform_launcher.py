@@ -88,6 +88,12 @@ class PlatformLauncherTests(unittest.TestCase):
         )
         self.command = root / "venv" / "bin" / "research-digest"
         self.codex = root / "node" / "bin" / "codex"
+        self.command.parent.mkdir(parents=True)
+        self.command.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        self.command.chmod(0o755)
+        self.codex.parent.mkdir(parents=True)
+        self.codex.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        self.codex.chmod(0o755)
 
     def tearDown(self) -> None:
         self.tmpdir.cleanup()
@@ -125,6 +131,10 @@ class PlatformLauncherTests(unittest.TestCase):
                 "research_digest.windows_launcher.resolve_research_digest_command",
                 return_value=str(self.command),
             ),
+            mock.patch(
+                "research_digest.windows_launcher.shutil.which",
+                return_value=str(self.codex),
+            ),
         ):
             result = install_launcher(
                 config=self.config,
@@ -136,6 +146,7 @@ class PlatformLauncherTests(unittest.TestCase):
         self.assertIsInstance(result, WindowsLauncherResult)
         self.assertEqual(backend.requests[0].distro, "Research Debian")
         self.assertIn("wsl.exe", backend.requests[0].wsl_executable.lower())
+        self.assertIn(str(self.codex.parent), backend.requests[0].windows_arguments)
 
     def test_unsupported_platform_fails_without_touching_backends(self) -> None:
         mac = FakeMacBackend()

@@ -1,0 +1,187 @@
+name: Fixed-tag release verification
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Immutable annotated release tag
+        required: true
+        default: v0.4.1
+        type: string
+      release_commit:
+        description: Immutable dereferenced release commit
+        required: true
+        default: a1ea31be368916b375e811feec571e936ba76798
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  EXPECTED_RELEASE_TAG: v0.4.1
+  EXPECTED_RELEASE_COMMIT: a1ea31be368916b375e811feec571e936ba76798
+  EXPECTED_WHEEL_SHA256: 69c8b7ab66e6d9c91de65bb98d824d074c615614067aa13e37fabd62353b7e31
+  EXPECTED_INSTALLER_SHA256: 5802cdcdf04b2feb9fc8760545b977eab45b0913063e91893accc79b9d98b56b
+  EXPECTED_MACOS_SHA256: 2189bee973790a8d777b296d20715e1227a4735782e0083469fc792cb2b4afae
+  EXPECTED_WINDOWS_SHA256: c2f0609b1b02e24245a4eeaf755891b8e7e3a328a1205c6bd63c9b45676a0ef3
+  EXPECTED_MANIFEST_SHA256: 28537c741b5801f06efe910a32e258d01936fa2e3a2eb034599a7e95cd086bbf
+
+jobs:
+  release-provenance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify immutable tag and harness separation
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_COMMIT: ${{ inputs.release_commit }}
+        run: |
+          test "$RELEASE_TAG" = "$EXPECTED_RELEASE_TAG"
+          test "$RELEASE_COMMIT" = "$EXPECTED_RELEASE_COMMIT"
+          test "$(git rev-parse "${RELEASE_TAG}^{}")" = "$RELEASE_COMMIT"
+          git merge-base --is-ancestor "$RELEASE_COMMIT" HEAD
+          git diff --exit-code "$RELEASE_COMMIT" -- \
+            src/research_digest \
+            installers \
+            pyproject.toml \
+            _research_digest_build.py \
+            scripts/build_release_assets.py
+          {
+            echo "### Release provenance"
+            echo "- immutable release tag: \`$RELEASE_TAG\`"
+            echo "- immutable runtime commit: \`$RELEASE_COMMIT\`"
+            echo "- corrected harness commit: \`$GITHUB_SHA\`"
+            echo "- runtime-input diff: empty"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Download unpublished qualified assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          test "$(gh release view "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json isDraft \
+            --jq .isDraft)" = "true"
+          mkdir release-assets
+          gh release download "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir release-assets
+      - name: Verify exact five-asset set
+        run: |
+          python tests/support/verify_release_assets.py \
+            --asset-dir release-assets \
+            --expected "research_digest-0.4.1-py3-none-any.whl=$EXPECTED_WHEEL_SHA256" \
+            --expected "install-research-digest.py=$EXPECTED_INSTALLER_SHA256" \
+            --expected "install-research-digest-macos.sh=$EXPECTED_MACOS_SHA256" \
+            --expected "install-research-digest-windows.ps1=$EXPECTED_WINDOWS_SHA256" \
+            --expected "SHA256SUMS=$EXPECTED_MANIFEST_SHA256"
+
+  macos-exact-release-wheel:
+    needs: release-provenance
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Download and verify exact qualified assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          test "$(gh release view "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json isDraft \
+            --jq .isDraft)" = "true"
+          mkdir release-assets
+          gh release download "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir release-assets
+          python tests/support/verify_release_assets.py \
+            --asset-dir release-assets \
+            --expected "research_digest-0.4.1-py3-none-any.whl=$EXPECTED_WHEEL_SHA256" \
+            --expected "install-research-digest.py=$EXPECTED_INSTALLER_SHA256" \
+            --expected "install-research-digest-macos.sh=$EXPECTED_MACOS_SHA256" \
+            --expected "install-research-digest-windows.ps1=$EXPECTED_WINDOWS_SHA256" \
+            --expected "SHA256SUMS=$EXPECTED_MANIFEST_SHA256"
+      - name: Install only the exact release wheel
+        run: |
+          python -m venv "$RUNNER_TEMP/exact-v0.4.1"
+          "$RUNNER_TEMP/exact-v0.4.1/bin/python" -m pip install \
+            --disable-pip-version-check \
+            release-assets/research_digest-0.4.1-py3-none-any.whl \
+            pytest
+      - name: Prove imports come from the installed wheel
+        env:
+          WORKSPACE: ${{ github.workspace }}
+        run: |
+          "$RUNNER_TEMP/exact-v0.4.1/bin/python" -I - <<'PY'
+          import os
+          from pathlib import Path
+
+          import research_digest
+
+          location = Path(research_digest.__file__).resolve()
+          workspace = Path(os.environ["WORKSPACE"]).resolve()
+          if location.is_relative_to(workspace):
+              raise SystemExit(f"runtime imported from qualification checkout: {location}")
+          if research_digest.__version__ != "0.4.1":
+              raise SystemExit(f"unexpected runtime version: {research_digest.__version__}")
+          print(f"exact installed runtime: {location}")
+          PY
+      - name: Re-run every original failure area against exact wheel
+        env:
+          PYTHONNOUSERSITE: "1"
+        run: |
+          "$RUNNER_TEMP/exact-v0.4.1/bin/python" -I -m pytest -q \
+            tests/test_distribution_activation.py \
+            tests/test_distribution_installers.py \
+            tests/test_end_user_installer.py \
+            tests/test_launcher_cli.py \
+            tests/test_platform_launcher.py
+
+  macos-corrected-harness:
+    needs: release-provenance
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Confirm runtime inputs still equal the release commit
+        env:
+          RELEASE_COMMIT: ${{ inputs.release_commit }}
+        run: |
+          git diff --exit-code "$RELEASE_COMMIT" -- \
+            src/research_digest \
+            installers \
+            pyproject.toml \
+            _research_digest_build.py \
+            scripts/build_release_assets.py
+      - name: Install corrected qualification harness
+        run: python -m pip install -e ".[dev]"
+      - name: Full deterministic and static gate on macOS
+        run: |
+          python -m pytest -q
+          ruff check .
+          mypy --strict src tests
+          python -m compileall src tests
+          git diff --check
+      - name: Record harness provenance
+        env:
+          RELEASE_COMMIT: ${{ inputs.release_commit }}
+        run: |
+          {
+            echo "### Corrected qualification harness"
+            echo "- runtime commit under qualification: \`$RELEASE_COMMIT\`"
+            echo "- test/workflow harness commit: \`$GITHUB_SHA\`"
+            echo "- full macOS gate: passed"
+          } >> "$GITHUB_STEP_SUMMARY"

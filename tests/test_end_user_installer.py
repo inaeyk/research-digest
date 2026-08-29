@@ -8,6 +8,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import cast
 from unittest import mock
@@ -21,6 +23,17 @@ installer = importlib.util.module_from_spec(INSTALLER_SPEC)
 sys.modules[INSTALLER_SPEC.name] = installer
 INSTALLER_SPEC.loader.exec_module(installer)
 TEST_WHEEL_SHA256 = "a" * 64
+
+
+@contextmanager
+def wsl_environment(environment: dict[str, str]) -> Iterator[None]:
+    """Run one installer boundary with deterministic WSL platform selection."""
+
+    with (
+        mock.patch.dict(os.environ, environment, clear=True),
+        mock.patch.object(installer.sys, "platform", "linux"),
+    ):
+        yield
 
 
 def write_owned(path: Path, **extra: object) -> None:
@@ -97,7 +110,7 @@ class EndUserInstallerTests(unittest.TestCase):
             "XDG_CONFIG_HOME": str(home / ".config"),
         }
         with (
-            mock.patch.dict(os.environ, environment, clear=True),
+            wsl_environment(environment),
             mock.patch.object(installer, "_create_versioned_runtime", side_effect=fake_create),
             mock.patch.object(
                 installer,
@@ -117,7 +130,7 @@ class EndUserInstallerTests(unittest.TestCase):
 
     def test_fresh_install_is_private_preserves_data_and_source_checkout(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            home = Path(tmp) / "User Home With Spaces"
+            home = Path(tmp).resolve() / "User Home With Spaces"
             home.mkdir()
             assets = release_assets(Path(tmp))
             data = home / ".local" / "share" / "research-digest" / "library.bin"
@@ -148,7 +161,7 @@ class EndUserInstallerTests(unittest.TestCase):
 
     def test_idempotent_same_version_reuses_qualified_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            home = Path(tmp) / "home"
+            home = Path(tmp).resolve() / "home"
             home.mkdir()
             assets = release_assets(Path(tmp))
             first = self.install_with_fakes(home, assets)
@@ -164,11 +177,11 @@ class EndUserInstallerTests(unittest.TestCase):
 
     def test_same_version_with_different_wheel_hash_is_not_reused(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            home = Path(tmp) / "home"
+            home = Path(tmp).resolve() / "home"
             home.mkdir()
             first_assets = release_assets(Path(tmp), b"first qualified wheel")
             self.install_with_fakes(home, first_assets)
-            second_root = Path(tmp) / "second"
+            second_root = Path(tmp).resolve() / "second"
             second_root.mkdir()
             second_assets = release_assets(second_root, b"different wheel bytes")
             environment = {
@@ -179,7 +192,7 @@ class EndUserInstallerTests(unittest.TestCase):
             }
 
             with (
-                mock.patch.dict(os.environ, environment, clear=True),
+                wsl_environment(environment),
                 mock.patch.object(
                     installer,
                     "_activate_runtime",
@@ -191,7 +204,7 @@ class EndUserInstallerTests(unittest.TestCase):
 
     def test_corrupt_checksum_is_rejected_before_runtime_creation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            home = Path(tmp) / "home"
+            home = Path(tmp).resolve() / "home"
             home.mkdir()
             assets = release_assets(Path(tmp), b"corrupt")
             (assets / installer.MANIFEST_NAME).write_text(
@@ -204,7 +217,7 @@ class EndUserInstallerTests(unittest.TestCase):
                 "XDG_DATA_HOME": str(home / ".local" / "share"),
             }
             with (
-                mock.patch.dict(os.environ, environment, clear=True),
+                wsl_environment(environment),
                 mock.patch.object(
                     installer,
                     "_create_versioned_runtime",
@@ -219,7 +232,7 @@ class EndUserInstallerTests(unittest.TestCase):
 
     def test_failed_install_leaves_prior_current_runtime_unchanged(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            home = Path(tmp) / "home"
+            home = Path(tmp).resolve() / "home"
             home.mkdir()
             assets = release_assets(Path(tmp))
             environment = {
@@ -245,7 +258,7 @@ class EndUserInstallerTests(unittest.TestCase):
             before = (root / installer.CURRENT_STATE).read_bytes()
 
             with (
-                mock.patch.dict(os.environ, environment, clear=True),
+                wsl_environment(environment),
                 mock.patch.object(
                     installer,
                     "_create_versioned_runtime",
@@ -281,7 +294,7 @@ class EndUserInstallerTests(unittest.TestCase):
 
     def test_launcher_failure_leaves_new_runtime_inactive_and_data_untouched(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            home = Path(tmp) / "home"
+            home = Path(tmp).resolve() / "home"
             home.mkdir()
             assets = release_assets(Path(tmp))
             data = home / ".local" / "share" / "research-digest" / "library.bin"
@@ -295,7 +308,7 @@ class EndUserInstallerTests(unittest.TestCase):
             }
 
             with (
-                mock.patch.dict(os.environ, environment, clear=True),
+                wsl_environment(environment),
                 mock.patch.object(
                     installer,
                     "_create_versioned_runtime",
@@ -334,7 +347,7 @@ class EndUserInstallerTests(unittest.TestCase):
 
     def test_real_wheel_venv_is_built_at_its_final_shebang_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp) / "private runtime with spaces"
+            root = Path(tmp).resolve() / "private runtime with spaces"
             root.mkdir()
             assets = Path(tmp) / "assets"
             subprocess.run(
@@ -411,7 +424,7 @@ class EndUserInstallerTests(unittest.TestCase):
 
     def test_normal_uninstall_removes_only_owned_runtime_and_preserves_data(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            home = Path(tmp) / "home"
+            home = Path(tmp).resolve() / "home"
             home.mkdir()
             environment = {
                 "HOME": str(home),
@@ -447,7 +460,7 @@ class EndUserInstallerTests(unittest.TestCase):
                 raise AssertionError(arguments)
 
             with (
-                mock.patch.dict(os.environ, environment, clear=True),
+                wsl_environment(environment),
                 mock.patch.object(installer, "_run_json", side_effect=cli_json),
                 mock.patch.object(installer, "_run_checked") as run_checked,
             ):
@@ -467,7 +480,7 @@ class EndUserInstallerTests(unittest.TestCase):
 
     def test_custom_database_active_run_blocks_uninstall(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            home = Path(tmp) / "home"
+            home = Path(tmp).resolve() / "home"
             home.mkdir()
             root = home / ".local" / "share" / "research-digest" / "runtime"
             command = root / "0.4.1" / "venv" / "bin" / "research-digest"
@@ -493,7 +506,7 @@ class EndUserInstallerTests(unittest.TestCase):
                 "RESEARCH_DIGEST_DB": str(custom_db),
             }
             with (
-                mock.patch.dict(os.environ, environment, clear=True),
+                wsl_environment(environment),
                 mock.patch.object(
                     installer,
                     "_run_json",
@@ -514,7 +527,7 @@ class EndUserInstallerTests(unittest.TestCase):
 
     def test_uninstall_rejects_symlinked_current_command(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            home = Path(tmp) / "home"
+            home = Path(tmp).resolve() / "home"
             home.mkdir()
             root = home / ".local" / "share" / "research-digest" / "runtime"
             version_root = root / "0.4.1"
@@ -540,7 +553,7 @@ class EndUserInstallerTests(unittest.TestCase):
             }
 
             with (
-                mock.patch.dict(os.environ, environment, clear=True),
+                wsl_environment(environment),
                 self.assertRaisesRegex(installer.InstallError, "outside the owned runtime"),
             ):
                 installer.uninstall(
@@ -554,7 +567,7 @@ class EndUserInstallerTests(unittest.TestCase):
 
     def test_uninstall_rejects_symlinked_runtime_bin_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            home = Path(tmp) / "home"
+            home = Path(tmp).resolve() / "home"
             home.mkdir()
             root, command = self.prepare_owned_install(home)
             bin_directory = command.parent
@@ -573,7 +586,7 @@ class EndUserInstallerTests(unittest.TestCase):
             }
 
             with (
-                mock.patch.dict(os.environ, environment, clear=True),
+                wsl_environment(environment),
                 mock.patch.object(installer, "_run_json") as run_json,
                 self.assertRaisesRegex(installer.InstallError, "outside the owned runtime"),
             ):
@@ -588,7 +601,7 @@ class EndUserInstallerTests(unittest.TestCase):
 
     def test_uninstall_rejects_nonprivate_root_before_cli_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            home = Path(tmp) / "home"
+            home = Path(tmp).resolve() / "home"
             home.mkdir()
             root, _ = self.prepare_owned_install(home)
             root.chmod(0o770)
@@ -598,7 +611,7 @@ class EndUserInstallerTests(unittest.TestCase):
                 "XDG_DATA_HOME": str(home / ".local" / "share"),
             }
             with (
-                mock.patch.dict(os.environ, environment, clear=True),
+                wsl_environment(environment),
                 mock.patch.object(installer, "_run_json") as run_json,
                 self.assertRaisesRegex(installer.InstallError, "mode 0700"),
             ):
@@ -613,7 +626,7 @@ class EndUserInstallerTests(unittest.TestCase):
 
     def test_uninstall_rejects_symlinked_state_file_before_cli_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            home = Path(tmp) / "home"
+            home = Path(tmp).resolve() / "home"
             home.mkdir()
             root, _ = self.prepare_owned_install(home)
             current = root / installer.CURRENT_STATE
@@ -628,7 +641,7 @@ class EndUserInstallerTests(unittest.TestCase):
                 "XDG_DATA_HOME": str(home / ".local" / "share"),
             }
             with (
-                mock.patch.dict(os.environ, environment, clear=True),
+                wsl_environment(environment),
                 mock.patch.object(installer, "_run_json") as run_json,
                 self.assertRaisesRegex(installer.InstallError, "symbolic link"),
             ):
@@ -643,7 +656,7 @@ class EndUserInstallerTests(unittest.TestCase):
 
     def test_uninstall_rejects_nonprivate_previous_state_before_cli_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            home = Path(tmp) / "home"
+            home = Path(tmp).resolve() / "home"
             home.mkdir()
             root, command = self.prepare_owned_install(home)
             previous = root / installer.PREVIOUS_STATE
@@ -660,7 +673,7 @@ class EndUserInstallerTests(unittest.TestCase):
             }
 
             with (
-                mock.patch.dict(os.environ, environment, clear=True),
+                wsl_environment(environment),
                 mock.patch.object(installer, "_run_json") as run_json,
                 self.assertRaisesRegex(installer.InstallError, "mode 0600"),
             ):
@@ -675,7 +688,7 @@ class EndUserInstallerTests(unittest.TestCase):
 
     def test_uninstall_rejects_mismatched_version_marker_before_cli_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            home = Path(tmp) / "home"
+            home = Path(tmp).resolve() / "home"
             home.mkdir()
             root, _ = self.prepare_owned_install(home)
             write_owned(
@@ -688,7 +701,7 @@ class EndUserInstallerTests(unittest.TestCase):
                 "XDG_DATA_HOME": str(home / ".local" / "share"),
             }
             with (
-                mock.patch.dict(os.environ, environment, clear=True),
+                wsl_environment(environment),
                 mock.patch.object(installer, "_run_json") as run_json,
                 self.assertRaisesRegex(installer.InstallError, "does not match"),
             ):
@@ -702,7 +715,7 @@ class EndUserInstallerTests(unittest.TestCase):
 
     def test_uninstall_rejects_unknown_runtime_entry_before_cli_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            home = Path(tmp) / "home"
+            home = Path(tmp).resolve() / "home"
             home.mkdir()
             root, _ = self.prepare_owned_install(home)
             unknown = root / "do-not-delete.txt"
@@ -713,7 +726,7 @@ class EndUserInstallerTests(unittest.TestCase):
                 "XDG_DATA_HOME": str(home / ".local" / "share"),
             }
             with (
-                mock.patch.dict(os.environ, environment, clear=True),
+                wsl_environment(environment),
                 mock.patch.object(installer, "_run_json") as run_json,
                 self.assertRaisesRegex(installer.InstallError, "Unowned runtime entry"),
             ):
@@ -728,7 +741,7 @@ class EndUserInstallerTests(unittest.TestCase):
 
     def test_uninstall_rejects_group_writable_command_before_cli_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            home = Path(tmp) / "home"
+            home = Path(tmp).resolve() / "home"
             home.mkdir()
             root, command = self.prepare_owned_install(home)
             command.chmod(0o775)
@@ -738,7 +751,7 @@ class EndUserInstallerTests(unittest.TestCase):
                 "XDG_DATA_HOME": str(home / ".local" / "share"),
             }
             with (
-                mock.patch.dict(os.environ, environment, clear=True),
+                wsl_environment(environment),
                 mock.patch.object(installer, "_run_json") as run_json,
                 self.assertRaisesRegex(installer.InstallError, "group/other writable"),
             ):
@@ -753,7 +766,7 @@ class EndUserInstallerTests(unittest.TestCase):
 
     def test_destructive_purge_is_separate_confirmed_and_works_without_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            home = Path(tmp) / "home"
+            home = Path(tmp).resolve() / "home"
             data = home / ".local" / "share" / "research-digest"
             config = home / ".config" / "research-digest"
             data.mkdir(parents=True)
@@ -767,7 +780,7 @@ class EndUserInstallerTests(unittest.TestCase):
                 "XDG_CONFIG_HOME": str(home / ".config"),
             }
             with (
-                mock.patch.dict(os.environ, environment, clear=True),
+                wsl_environment(environment),
                 self.assertRaisesRegex(installer.InstallError, "requires --confirm"),
             ):
                 installer.uninstall(
@@ -778,7 +791,7 @@ class EndUserInstallerTests(unittest.TestCase):
             self.assertTrue(data.exists())
             self.assertTrue(config.exists())
 
-            with mock.patch.dict(os.environ, environment, clear=True):
+            with wsl_environment(environment):
                 result = installer.uninstall(
                     remove_schedule=False,
                     purge_data=True,
@@ -791,7 +804,7 @@ class EndUserInstallerTests(unittest.TestCase):
 
     def test_destructive_purge_removes_external_custom_database_only_when_explicit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            home = Path(tmp) / "home"
+            home = Path(tmp).resolve() / "home"
             data = home / ".local" / "share" / "research-digest"
             config = home / ".config" / "research-digest"
             external = home / "custom databases" / "digest.db"
@@ -812,7 +825,7 @@ class EndUserInstallerTests(unittest.TestCase):
                 "RESEARCH_DIGEST_DB": str(external),
             }
 
-            with mock.patch.dict(os.environ, environment, clear=True):
+            with wsl_environment(environment):
                 result = installer.uninstall(
                     remove_schedule=False,
                     purge_data=True,

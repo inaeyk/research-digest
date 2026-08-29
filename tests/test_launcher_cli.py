@@ -251,6 +251,10 @@ class LauncherCLITests(unittest.TestCase):
 
     def test_install_launcher_discovers_distro_and_is_idempotent_at_shared_boundary(self) -> None:
         controller = FakeWindowsLauncherController()
+        codex = Path(self.tmpdir.name).resolve() / "node" / "bin" / "codex"
+        codex.parent.mkdir(parents=True)
+        codex.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        codex.chmod(0o755)
         with (
             mock.patch("research_digest.launcher.sys.platform", "linux"),
             mock.patch(
@@ -260,6 +264,10 @@ class LauncherCLITests(unittest.TestCase):
             mock.patch(
                 "research_digest.windows_launcher.resolve_research_digest_command",
                 return_value="/home/me/app/.venv/bin/research-digest",
+            ),
+            mock.patch(
+                "research_digest.windows_launcher.shutil.which",
+                return_value=str(codex),
             ),
             mock.patch.dict(os.environ, {"WSL_DISTRO_NAME": "Research Debian"}),
         ):
@@ -279,6 +287,7 @@ class LauncherCLITests(unittest.TestCase):
         self.assertEqual(len(controller.install_requests), 2)
         self.assertEqual(controller.install_requests[0], controller.install_requests[1])
         self.assertEqual(outputs[0]["distro"], "Research Debian")
+        self.assertIn(str(codex.parent), outputs[0]["arguments"])
         self.assertNotIn("OPENAI_API_KEY", outputs[0]["arguments"])
 
     def test_uninstall_launcher_uses_same_owned_backend(self) -> None:

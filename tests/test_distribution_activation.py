@@ -126,6 +126,34 @@ def uninstalled_schedule() -> ScheduleStatus:
 
 
 class DistributionActivationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.platform_dependencies = tempfile.TemporaryDirectory()
+        self.addCleanup(self.platform_dependencies.cleanup)
+        codex = Path(self.platform_dependencies.name) / "node" / "bin" / "codex"
+        codex.parent.mkdir(parents=True)
+        codex.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        codex.chmod(0o755)
+
+        def resolve_test_command(name: str) -> str | None:
+            return str(codex) if name == "codex" else None
+
+        for patcher in (
+            mock.patch(
+                "research_digest.scheduler.resolve_windows_wsl_executable",
+                return_value="C:\\Windows\\System32\\wsl.exe",
+            ),
+            mock.patch(
+                "research_digest.windows_launcher.resolve_windows_wsl_executable",
+                return_value="C:\\Windows\\System32\\wsl.exe",
+            ),
+            mock.patch(
+                "research_digest.windows_launcher.shutil.which",
+                side_effect=resolve_test_command,
+            ),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
     def prepare_runtime(self, root: Path) -> tuple[Path, Path]:
         runtime_root = root / "data" / "runtime"
         version_root = runtime_root / "0.4.1"
@@ -512,10 +540,7 @@ class DistributionActivationTests(unittest.TestCase):
             launcher = FakeLauncher()
             stdout = io.StringIO()
             stderr = io.StringIO()
-            with mock.patch(
-                "research_digest.windows_launcher.resolve_windows_wsl_executable",
-                return_value="C:\\Windows\\System32\\wsl.exe",
-            ):
+            with mock.patch("research_digest.distribution.sys.platform", "linux"):
                 exit_code = run_cli(
                     argv=[
                         "distribution",
@@ -563,10 +588,7 @@ class DistributionActivationTests(unittest.TestCase):
 
             with (
                 mock.patch.dict("os.environ", environment, clear=True),
-                mock.patch(
-                    "research_digest.windows_launcher.resolve_windows_wsl_executable",
-                    return_value="C:\\Windows\\System32\\wsl.exe",
-                ),
+                mock.patch("research_digest.distribution.sys.platform", "linux"),
             ):
                 exit_code = run_cli(
                     argv=[
