@@ -28,6 +28,9 @@ env:
 
 jobs:
   release-provenance:
+    # GitHub requires write-level release access to see unpublished drafts.
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -80,6 +83,9 @@ jobs:
 
   macos-exact-release-wheel:
     needs: release-provenance
+    # Limited to draft visibility; this job contains no release mutation command.
+    permissions:
+      contents: write
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4

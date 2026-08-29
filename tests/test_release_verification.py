@@ -79,12 +79,15 @@ class ReleaseVerificationWorkflowTests(unittest.TestCase):
         self.assertEqual(workflow.count("--json isDraft"), 2)
         self.assertEqual(workflow.count('--jq .isDraft)\" = \"true\"'), 2)
         self.assertIn("gh release download", workflow)
+        self.assertEqual(workflow.count("contents: write"), 2)
+        self.assertIn("macos-corrected-harness", workflow)
+        corrected_harness = workflow.split("  macos-corrected-harness:\n", maxsplit=1)[1]
+        self.assertNotIn("contents: write", corrected_harness)
         self.assertIn("runs-on: macos-latest", exact_wheel_job)
         self.assertIn("Install only the exact release wheel", exact_wheel_job)
         self.assertIn("research_digest.__file__", exact_wheel_job)
         self.assertIn("python\" -I -m pytest", exact_wheel_job)
         self.assertNotIn("pip install -e", exact_wheel_job)
-        self.assertIn("macos-corrected-harness", workflow)
 
 
 if __name__ == "__main__":
