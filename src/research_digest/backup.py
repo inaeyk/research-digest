@@ -187,6 +187,9 @@ def export_user_data(*, db_path: Path, schema_version: int | None = None) -> dic
             "library_article_notes": _library_article_notes(conn),
             "library_collections": _library_collections(conn),
             "library_collection_memberships": _library_collection_memberships(conn),
+            "ai_artifacts": _ai_artifacts(conn),
+            "ai_conversations": _ai_conversations(conn),
+            "ai_conversation_messages": _ai_conversation_messages(conn),
             "library_article_connections": _library_article_connections(conn),
             "library_context_suggestions": _library_context_suggestions(conn),
             "collection_intelligence_snapshots": _collection_intelligence_snapshots(conn),
@@ -622,6 +625,8 @@ def _library_articles(conn: sqlite3.Connection) -> list[dict[str, object]]:
             library_articles.saved,
             library_articles.saved_at,
             library_articles.updated_at,
+            library_articles.reading_state,
+            library_articles.interest_rating,
             articles.source,
             articles.source_article_id,
             articles.title
@@ -636,6 +641,12 @@ def _library_articles(conn: sqlite3.Connection) -> list[dict[str, object]]:
             "saved": bool(row["saved"]),
             "saved_at": str(row["saved_at"]),
             "updated_at": str(row["updated_at"]),
+            "reading_state": (
+                str(row["reading_state"]) if row["reading_state"] is not None else None
+            ),
+            "interest_rating": (
+                int(row["interest_rating"]) if row["interest_rating"] is not None else None
+            ),
             "article": {
                 "source": str(row["source"]) if row["source"] is not None else None,
                 "source_article_id": (
@@ -645,6 +656,92 @@ def _library_articles(conn: sqlite3.Connection) -> list[dict[str, object]]:
                 ),
                 "title": str(row["title"]) if row["title"] is not None else None,
             },
+        }
+        for row in rows
+    ]
+
+
+def _ai_artifacts(conn: sqlite3.Connection) -> list[dict[str, object]]:
+    if not _table_exists(conn, "ai_artifacts"):
+        return []
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM ai_artifacts
+        ORDER BY id
+        """
+    ).fetchall()
+    return [
+        {
+            "id": int(row["id"]),
+            "article_id": int(row["article_id"]),
+            "artifact_type": str(row["artifact_type"]),
+            "content": str(row["content"]),
+            "created_at": str(row["created_at"]),
+            "provider": str(row["provider"]),
+            "model_id": str(row["model_id"]),
+            "reasoning_effort": (
+                str(row["reasoning_effort"])
+                if row["reasoning_effort"] is not None
+                else None
+            ),
+            "generator_version": str(row["generator_version"]),
+            "input_fingerprint": str(row["input_fingerprint"]),
+            "retention_class": str(row["retention_class"]),
+            "expires_at": str(row["expires_at"]) if row["expires_at"] is not None else None,
+        }
+        for row in rows
+    ]
+
+
+def _ai_conversations(conn: sqlite3.Connection) -> list[dict[str, object]]:
+    if not _table_exists(conn, "ai_conversations"):
+        return []
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM ai_conversations
+        ORDER BY id
+        """
+    ).fetchall()
+    return [
+        {
+            "id": int(row["id"]),
+            "article_id": int(row["article_id"]),
+            "title": str(row["title"]),
+            "created_at": str(row["created_at"]),
+            "updated_at": str(row["updated_at"]),
+            "provider": str(row["provider"]),
+            "model_id": str(row["model_id"]),
+            "conversation_version": int(row["conversation_version"]),
+            "rolling_summary_artifact_id": (
+                int(row["rolling_summary_artifact_id"])
+                if row["rolling_summary_artifact_id"] is not None
+                else None
+            ),
+        }
+        for row in rows
+    ]
+
+
+def _ai_conversation_messages(conn: sqlite3.Connection) -> list[dict[str, object]]:
+    if not _table_exists(conn, "ai_conversation_messages"):
+        return []
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM ai_conversation_messages
+        ORDER BY conversation_id, sequence_number, id
+        """
+    ).fetchall()
+    return [
+        {
+            "id": int(row["id"]),
+            "conversation_id": int(row["conversation_id"]),
+            "sequence_number": int(row["sequence_number"]),
+            "role": str(row["role"]),
+            "content": str(row["content"]),
+            "created_at": str(row["created_at"]),
         }
         for row in rows
     ]

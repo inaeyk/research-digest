@@ -7,7 +7,13 @@ from dataclasses import dataclass
 from typing import Literal
 
 from research_digest.db import Database
-from research_digest.models import Article, InterestProfile, LibraryEntry, LibraryRelevanceContext
+from research_digest.models import (
+    Article,
+    InterestProfile,
+    LibraryEntry,
+    LibraryRelevanceContext,
+    ReadingState,
+)
 
 LibrarySort = Literal["saved_newest", "saved_oldest", "published_newest", "title"]
 
@@ -52,6 +58,28 @@ def unsave_article(db: Database, article_id: int) -> None:
     """Remove an article from the Library without deleting scientific history."""
 
     db.unsave_library_article(article_id)
+
+
+def set_reading_state(
+    db: Database,
+    *,
+    article_id: int,
+    reading_state: ReadingState | None,
+) -> LibraryEntry:
+    """Set explicit durable reading state without inferring it from saving."""
+
+    return db.set_library_reading_state(article_id, reading_state)
+
+
+def set_interest_rating(
+    db: Database,
+    *,
+    article_id: int,
+    interest_rating: int | None,
+) -> LibraryEntry:
+    """Set an explicit ordinal judgment independently of digest feedback."""
+
+    return db.set_library_interest_rating(article_id, interest_rating)
 
 
 def save_article_by_source_identity(

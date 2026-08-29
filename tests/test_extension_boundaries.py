@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
+from research_digest.ai_providers import LibrarySummaryProvider, ResearchConversationProvider
 from research_digest.analysis.base import LLMAnalyzer, article_analysis_key
 from research_digest.analysis.providers import (
     AnalyzerConnection,
@@ -183,6 +184,8 @@ class ExtensionBoundaryTests(unittest.TestCase):
         self.assertIsNotNone(DigestDelivery)
         self.assertIsNotNone(ResearchMemoryStore)
         self.assertIsNotNone(RetrievedArticleContent)
+        self.assertIsNotNone(LibrarySummaryProvider)
+        self.assertIsNotNone(ResearchConversationProvider)
 
 
 def _app_config(*, analyzer_provider: AnalyzerProvider) -> AppConfig:

@@ -13,6 +13,12 @@ from typing import TYPE_CHECKING, Any, cast
 
 from research_digest.errors import sanitize_error_text
 from research_digest.models import (
+    AIArtifact,
+    AIArtifactRetentionClass,
+    AIArtifactType,
+    AIConversation,
+    AIConversationMessage,
+    AIConversationRole,
     AITagSuppression,
     AnalysisResult,
     Article,
@@ -33,11 +39,14 @@ from research_digest.models import (
     LibraryNote,
     LibraryRelevanceContext,
     LibrarySearchDocument,
+    LibrarySummarySource,
     LibraryTag,
     LibraryTagAssignment,
     QuantitativeCalibrationState,
     QuantitativeRelevanceCalibration,
     ReadingPriority,
+    ReadingState,
+    ResolvedLibrarySummary,
     RunOrigin,
     SuggestedInterestProfile,
     TagOrigin,
@@ -47,6 +56,7 @@ from research_digest.models import (
     source_date_from_datetime,
     utc_now,
 )
+from research_digest.retention import temporary_artifact_expiration
 from research_digest.run_locks import RunOwnerState, process_run_owner_state
 
 if TYPE_CHECKING:
@@ -55,7 +65,7 @@ if TYPE_CHECKING:
 SOURCE_ARXIV = "arxiv"
 SCHEMA_VERSION_KEY = "schema_version"
 LAST_MIGRATION_BACKUP_KEY = "last_migration_backup_path"
-CURRENT_SCHEMA_VERSION = 18
+CURRENT_SCHEMA_VERSION = 19
 APP_RUN_STARTING = "STARTING"
 APP_RUN_RUNNING = "RUNNING"
 APP_RUN_COMPLETED = "COMPLETED"
@@ -347,6 +357,21 @@ class Database:
                 """,
                 (article_id, now, now),
             )
+            conn.execute(
+                """
+                UPDATE ai_artifacts
+                SET retention_class = ?, expires_at = NULL
+                WHERE article_id = ?
+                  AND retention_class = ?
+                  AND expires_at >= ?
+                """,
+                (
+                    AIArtifactRetentionClass.LIBRARY.value,
+                    article_id,
+                    AIArtifactRetentionClass.TEMPORARY.value,
+                    now,
+                ),
+            )
             entry = _get_library_entry(conn, article_id)
         if entry is None:
             raise ValueError(f"article {article_id} does not exist")
@@ -355,6 +380,9 @@ class Database:
     def unsave_library_article(self, article_id: int) -> None:
         if article_id <= 0:
             raise ValueError("article id must be positive")
+        unsaved_at = utc_now()
+        unsaved_at_text = datetime_to_db(unsaved_at)
+        expires_at = datetime_to_db(temporary_artifact_expiration(unsaved_at))
         with self._connection() as conn:
             conn.execute(
                 """
@@ -362,8 +390,70 @@ class Database:
                 SET saved = 0, updated_at = ?
                 WHERE article_id = ?
                 """,
-                (datetime_to_db(utc_now()), article_id),
+                (unsaved_at_text, article_id),
             )
+            conn.execute(
+                """
+                UPDATE ai_artifacts
+                SET retention_class = ?, expires_at = ?
+                WHERE article_id = ? AND retention_class = ?
+                """,
+                (
+                    AIArtifactRetentionClass.TEMPORARY.value,
+                    expires_at,
+                    article_id,
+                    AIArtifactRetentionClass.LIBRARY.value,
+                ),
+            )
+
+    def set_library_reading_state(
+        self,
+        article_id: int,
+        reading_state: ReadingState | None,
+    ) -> LibraryEntry:
+        if article_id <= 0:
+            raise ValueError("article id must be positive")
+        normalized = ReadingState(reading_state).value if reading_state is not None else None
+        with self._connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE library_articles
+                SET reading_state = ?, updated_at = ?
+                WHERE article_id = ? AND saved = 1
+                """,
+                (normalized, datetime_to_db(utc_now()), article_id),
+            )
+            entry = _get_library_entry(conn, article_id)
+        if cursor.rowcount != 1 or entry is None:
+            raise ValueError(f"article {article_id} is not saved in the Library")
+        return entry
+
+    def set_library_interest_rating(
+        self,
+        article_id: int,
+        interest_rating: int | None,
+    ) -> LibraryEntry:
+        if article_id <= 0:
+            raise ValueError("article id must be positive")
+        if interest_rating is not None and (
+            isinstance(interest_rating, bool)
+            or not isinstance(interest_rating, int)
+            or not 1 <= interest_rating <= 5
+        ):
+            raise ValueError("Library interest rating must be an integer between 1 and 5")
+        with self._connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE library_articles
+                SET interest_rating = ?, updated_at = ?
+                WHERE article_id = ? AND saved = 1
+                """,
+                (interest_rating, datetime_to_db(utc_now()), article_id),
+            )
+            entry = _get_library_entry(conn, article_id)
+        if cursor.rowcount != 1 or entry is None:
+            raise ValueError(f"article {article_id} is not saved in the Library")
+        return entry
 
     def get_library_entry(self, article_id: int) -> LibraryEntry | None:
         if article_id <= 0:
@@ -378,7 +468,9 @@ class Database:
                 SELECT
                     articles.*,
                     library_articles.saved_at AS library_saved_at,
-                    library_articles.updated_at AS library_updated_at
+                    library_articles.updated_at AS library_updated_at,
+                    library_articles.reading_state AS library_reading_state,
+                    library_articles.interest_rating AS library_interest_rating
                 FROM library_articles
                 JOIN articles ON articles.id = library_articles.article_id
                 WHERE library_articles.saved = 1
@@ -402,6 +494,417 @@ class Database:
                 tuple(ids),
             ).fetchall()
         return {int(row["article_id"]) for row in rows}
+
+    def create_ai_artifact(
+        self,
+        *,
+        article_id: int,
+        artifact_type: AIArtifactType,
+        content: str,
+        provider: str,
+        model_id: str,
+        reasoning_effort: str | None,
+        generator_version: str,
+        input_fingerprint: str,
+        retention_class: AIArtifactRetentionClass,
+        created_at: datetime | None = None,
+        expires_at: datetime | None = None,
+    ) -> AIArtifact:
+        created = created_at or utc_now()
+        normalized_retention = AIArtifactRetentionClass(retention_class)
+        expires: datetime | None
+        if normalized_retention == AIArtifactRetentionClass.TEMPORARY:
+            expires = expires_at or temporary_artifact_expiration(created)
+        else:
+            expires = expires_at
+        artifact = AIArtifact(
+            id=None,
+            article_id=article_id,
+            artifact_type=AIArtifactType(artifact_type),
+            content=content,
+            created_at=created,
+            provider=provider,
+            model_id=model_id,
+            reasoning_effort=reasoning_effort,
+            generator_version=generator_version,
+            input_fingerprint=input_fingerprint,
+            retention_class=normalized_retention,
+            expires_at=expires,
+        )
+        with self._connection() as conn:
+            if (
+                artifact.retention_class == AIArtifactRetentionClass.LIBRARY
+                and not _is_article_saved(conn, article_id)
+            ):
+                raise ValueError("LIBRARY artifacts require a saved Library article")
+            cursor = conn.execute(
+                """
+                INSERT INTO ai_artifacts (
+                    article_id, artifact_type, content, created_at, provider, model_id,
+                    reasoning_effort, generator_version, input_fingerprint,
+                    retention_class, expires_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    artifact.article_id,
+                    artifact.artifact_type.value,
+                    artifact.content,
+                    datetime_to_db(artifact.created_at),
+                    artifact.provider,
+                    artifact.model_id,
+                    artifact.reasoning_effort,
+                    artifact.generator_version,
+                    artifact.input_fingerprint,
+                    artifact.retention_class.value,
+                    datetime_to_db(artifact.expires_at) if artifact.expires_at else None,
+                ),
+            )
+            saved = _get_ai_artifact(conn, _lastrowid(cursor))
+        if saved is None:
+            raise RuntimeError("failed to load created AI artifact")
+        return saved
+
+    def get_ai_artifact(self, artifact_id: int) -> AIArtifact | None:
+        if artifact_id <= 0:
+            raise ValueError("AI artifact id must be positive")
+        with self._connection() as conn:
+            return _get_ai_artifact(conn, artifact_id)
+
+    def list_ai_artifacts(
+        self,
+        article_id: int,
+        *,
+        artifact_type: AIArtifactType | None = None,
+    ) -> list[AIArtifact]:
+        if article_id <= 0:
+            raise ValueError("article id must be positive")
+        params: list[object] = [article_id]
+        type_filter = ""
+        if artifact_type is not None:
+            type_filter = "AND artifact_type = ?"
+            params.append(AIArtifactType(artifact_type).value)
+        with self._connection() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT *
+                FROM ai_artifacts
+                WHERE article_id = ? {type_filter}
+                ORDER BY created_at DESC, id DESC
+                """,
+                tuple(params),
+            ).fetchall()
+        return [_ai_artifact_from_row(row) for row in rows]
+
+    def get_latest_usable_ai_artifact(
+        self,
+        *,
+        article_id: int,
+        artifact_type: AIArtifactType,
+        now: datetime | None = None,
+    ) -> AIArtifact | None:
+        if article_id <= 0:
+            raise ValueError("article id must be positive")
+        now_text = datetime_to_db(now or utc_now())
+        with self._connection() as conn:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM ai_artifacts
+                WHERE article_id = ?
+                    AND artifact_type = ?
+                    AND (
+                        retention_class != ?
+                        OR expires_at >= ?
+                    )
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+                """,
+                (
+                    article_id,
+                    AIArtifactType(artifact_type).value,
+                    AIArtifactRetentionClass.TEMPORARY.value,
+                    now_text,
+                ),
+            ).fetchone()
+        return _ai_artifact_from_row(row) if row is not None else None
+
+    def set_ai_artifact_retention(
+        self,
+        artifact_id: int,
+        *,
+        retention_class: AIArtifactRetentionClass,
+        effective_at: datetime | None = None,
+    ) -> AIArtifact:
+        if artifact_id <= 0:
+            raise ValueError("AI artifact id must be positive")
+        normalized = AIArtifactRetentionClass(retention_class)
+        transition_at = effective_at or utc_now()
+        expires_at = (
+            datetime_to_db(temporary_artifact_expiration(transition_at))
+            if normalized == AIArtifactRetentionClass.TEMPORARY
+            else None
+        )
+        with self._connection() as conn:
+            existing = _get_ai_artifact(conn, artifact_id)
+            if existing is None:
+                raise ValueError(f"AI artifact {artifact_id} does not exist")
+            if (
+                normalized == AIArtifactRetentionClass.LIBRARY
+                and not _is_article_saved(conn, existing.article_id)
+            ):
+                raise ValueError("LIBRARY artifacts require a saved Library article")
+            conn.execute(
+                """
+                UPDATE ai_artifacts
+                SET retention_class = ?, expires_at = ?
+                WHERE id = ?
+                """,
+                (normalized.value, expires_at, artifact_id),
+            )
+            updated = _get_ai_artifact(conn, artifact_id)
+        if updated is None:
+            raise RuntimeError("failed to load updated AI artifact")
+        return updated
+
+    def collect_expired_ai_artifacts(self, *, now: datetime | None = None) -> int:
+        """Delete only expired temporary derived data with no durable owner."""
+
+        now_text = datetime_to_db(now or utc_now())
+        with self._immediate_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT artifacts.id
+                FROM ai_artifacts AS artifacts
+                WHERE artifacts.retention_class = ?
+                    AND artifacts.expires_at < ?
+                    AND NOT EXISTS (
+                        SELECT 1
+                        FROM library_articles
+                        WHERE library_articles.article_id = artifacts.article_id
+                            AND library_articles.saved = 1
+                    )
+                    AND NOT EXISTS (
+                        SELECT 1
+                        FROM ai_conversations
+                        WHERE ai_conversations.rolling_summary_artifact_id = artifacts.id
+                    )
+                ORDER BY artifacts.id
+                """,
+                (AIArtifactRetentionClass.TEMPORARY.value, now_text),
+            ).fetchall()
+            artifact_ids = [int(row["id"]) for row in rows]
+            if artifact_ids:
+                placeholders = ", ".join("?" for _ in artifact_ids)
+                conn.execute(
+                    f"DELETE FROM ai_artifacts WHERE id IN ({placeholders})",
+                    tuple(artifact_ids),
+                )
+        return len(artifact_ids)
+
+    def get_latest_legacy_digest_summary(
+        self,
+        article_id: int,
+    ) -> ResolvedLibrarySummary | None:
+        """Resolve the existing authoritative analysis cache without copying prose."""
+
+        if article_id <= 0:
+            raise ValueError("article id must be positive")
+        with self._connection() as conn:
+            row = conn.execute(
+                """
+                SELECT summary, analyzed_at
+                FROM relevance_analyses
+                WHERE article_id = ? AND trim(summary) != ''
+                ORDER BY analyzed_at DESC, id DESC
+                LIMIT 1
+                """,
+                (article_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return ResolvedLibrarySummary(
+            article_id=article_id,
+            content=str(row["summary"]),
+            source=LibrarySummarySource.LEGACY_DIGEST_ANALYSIS,
+            created_at=datetime_from_db(str(row["analyzed_at"])),
+        )
+
+    def create_ai_conversation(
+        self,
+        *,
+        article_id: int,
+        title: str,
+        provider: str,
+        model_id: str,
+        conversation_version: int = 1,
+        rolling_summary_artifact_id: int | None = None,
+        created_at: datetime | None = None,
+    ) -> AIConversation:
+        timestamp = created_at or utc_now()
+        conversation = AIConversation(
+            id=None,
+            article_id=article_id,
+            title=title,
+            created_at=timestamp,
+            updated_at=timestamp,
+            provider=provider,
+            model_id=model_id,
+            conversation_version=conversation_version,
+            rolling_summary_artifact_id=rolling_summary_artifact_id,
+        )
+        with self._connection() as conn:
+            _validate_rolling_summary_artifact(
+                conn,
+                article_id=conversation.article_id,
+                artifact_id=conversation.rolling_summary_artifact_id,
+            )
+            cursor = conn.execute(
+                """
+                INSERT INTO ai_conversations (
+                    article_id, title, created_at, updated_at, provider, model_id,
+                    conversation_version, rolling_summary_artifact_id
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    conversation.article_id,
+                    conversation.title,
+                    datetime_to_db(conversation.created_at),
+                    datetime_to_db(conversation.updated_at),
+                    conversation.provider,
+                    conversation.model_id,
+                    conversation.conversation_version,
+                    conversation.rolling_summary_artifact_id,
+                ),
+            )
+            saved = _get_ai_conversation(conn, _lastrowid(cursor))
+        if saved is None:
+            raise RuntimeError("failed to load created AI conversation")
+        return saved
+
+    def get_ai_conversation(self, conversation_id: int) -> AIConversation | None:
+        if conversation_id <= 0:
+            raise ValueError("AI conversation id must be positive")
+        with self._connection() as conn:
+            return _get_ai_conversation(conn, conversation_id)
+
+    def list_ai_conversations(self, article_id: int) -> list[AIConversation]:
+        if article_id <= 0:
+            raise ValueError("article id must be positive")
+        with self._connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM ai_conversations
+                WHERE article_id = ?
+                ORDER BY updated_at DESC, id DESC
+                """,
+                (article_id,),
+            ).fetchall()
+        return [_ai_conversation_from_row(row) for row in rows]
+
+    def set_ai_conversation_rolling_summary(
+        self,
+        conversation_id: int,
+        artifact_id: int | None,
+    ) -> AIConversation:
+        if conversation_id <= 0:
+            raise ValueError("AI conversation id must be positive")
+        with self._connection() as conn:
+            conversation = _get_ai_conversation(conn, conversation_id)
+            if conversation is None:
+                raise ValueError(f"AI conversation {conversation_id} does not exist")
+            _validate_rolling_summary_artifact(
+                conn,
+                article_id=conversation.article_id,
+                artifact_id=artifact_id,
+            )
+            conn.execute(
+                """
+                UPDATE ai_conversations
+                SET rolling_summary_artifact_id = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (artifact_id, datetime_to_db(utc_now()), conversation_id),
+            )
+            updated = _get_ai_conversation(conn, conversation_id)
+        if updated is None:
+            raise RuntimeError("failed to load updated AI conversation")
+        return updated
+
+    def append_ai_conversation_message(
+        self,
+        *,
+        conversation_id: int,
+        role: AIConversationRole,
+        content: str,
+        created_at: datetime | None = None,
+    ) -> AIConversationMessage:
+        timestamp = created_at or utc_now()
+        normalized_role = AIConversationRole(role)
+        with self._immediate_connection() as conn:
+            if _get_ai_conversation(conn, conversation_id) is None:
+                raise ValueError(f"AI conversation {conversation_id} does not exist")
+            row = conn.execute(
+                """
+                SELECT COALESCE(MAX(sequence_number), 0) + 1 AS next_sequence
+                FROM ai_conversation_messages
+                WHERE conversation_id = ?
+                """,
+                (conversation_id,),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("failed to allocate AI conversation sequence")
+            message = AIConversationMessage(
+                id=None,
+                conversation_id=conversation_id,
+                sequence_number=int(row["next_sequence"]),
+                role=normalized_role,
+                content=content,
+                created_at=timestamp,
+            )
+            cursor = conn.execute(
+                """
+                INSERT INTO ai_conversation_messages (
+                    conversation_id, sequence_number, role, content, created_at
+                )
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    message.conversation_id,
+                    message.sequence_number,
+                    message.role.value,
+                    message.content,
+                    datetime_to_db(message.created_at),
+                ),
+            )
+            conn.execute(
+                "UPDATE ai_conversations SET updated_at = ? WHERE id = ?",
+                (datetime_to_db(message.created_at), conversation_id),
+            )
+            saved = _get_ai_conversation_message(conn, _lastrowid(cursor))
+        if saved is None:
+            raise RuntimeError("failed to load created AI conversation message")
+        return saved
+
+    def list_ai_conversation_messages(
+        self,
+        conversation_id: int,
+    ) -> list[AIConversationMessage]:
+        if conversation_id <= 0:
+            raise ValueError("AI conversation id must be positive")
+        with self._connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM ai_conversation_messages
+                WHERE conversation_id = ?
+                ORDER BY sequence_number ASC, id ASC
+                """,
+                (conversation_id,),
+            ).fetchall()
+        return [_ai_conversation_message_from_row(row) for row in rows]
 
     def get_latest_relevance_context(
         self,
@@ -3575,6 +4078,125 @@ def _migration_run_cancellation(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migration_library_l1a_foundation(conn: sqlite3.Connection) -> None:
+    """Add normalized Library state, replaceable AI artifacts, and conversations."""
+
+    if not _table_exists(conn, "library_articles"):
+        _migration_saved_article_library(conn)
+    library_columns = _table_columns(conn, "library_articles")
+    if "reading_state" not in library_columns:
+        conn.execute(
+            """
+            ALTER TABLE library_articles
+            ADD COLUMN reading_state TEXT
+            CHECK(reading_state IS NULL OR reading_state IN (
+                'unread', 'skimmed', 'read', 'reference'
+            ))
+            """
+        )
+    if "interest_rating" not in library_columns:
+        conn.execute(
+            """
+            ALTER TABLE library_articles
+            ADD COLUMN interest_rating INTEGER
+            CHECK(interest_rating IS NULL OR (
+                typeof(interest_rating) = 'integer'
+                AND interest_rating BETWEEN 1 AND 5
+            ))
+            """
+        )
+
+    _execute_schema_statements(
+        conn,
+        (
+            """
+            CREATE TABLE IF NOT EXISTS ai_artifacts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                article_id INTEGER NOT NULL,
+                artifact_type TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                model_id TEXT NOT NULL,
+                reasoning_effort TEXT,
+                generator_version TEXT NOT NULL,
+                input_fingerprint TEXT NOT NULL,
+                retention_class TEXT NOT NULL,
+                expires_at TEXT,
+                CHECK(length(trim(content)) > 0),
+                CHECK(length(trim(provider)) > 0),
+                CHECK(length(trim(model_id)) > 0),
+                CHECK(length(trim(generator_version)) > 0),
+                CHECK(length(trim(input_fingerprint)) > 0),
+                CHECK(artifact_type IN (
+                    'digest_summary', 'library_summary', 'conversation_summary'
+                )),
+                CHECK(retention_class IN ('TEMPORARY', 'LIBRARY', 'USER_PINNED')),
+                CHECK(
+                    (retention_class = 'TEMPORARY' AND expires_at IS NOT NULL)
+                    OR
+                    (retention_class IN ('LIBRARY', 'USER_PINNED') AND expires_at IS NULL)
+                ),
+                FOREIGN KEY(article_id) REFERENCES articles(id) ON DELETE CASCADE
+            )
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_ai_artifacts_article_type_created
+            ON ai_artifacts(article_id, artifact_type, created_at DESC, id DESC)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_ai_artifacts_reuse
+            ON ai_artifacts(
+                article_id, artifact_type, input_fingerprint, created_at DESC, id DESC
+            )
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_ai_artifacts_gc
+            ON ai_artifacts(retention_class, expires_at)
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS ai_conversations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                article_id INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                model_id TEXT NOT NULL,
+                conversation_version INTEGER NOT NULL,
+                rolling_summary_artifact_id INTEGER,
+                CHECK(length(trim(title)) > 0),
+                CHECK(length(trim(provider)) > 0),
+                CHECK(length(trim(model_id)) > 0),
+                CHECK(conversation_version > 0),
+                FOREIGN KEY(article_id) REFERENCES articles(id) ON DELETE CASCADE,
+                FOREIGN KEY(rolling_summary_artifact_id)
+                    REFERENCES ai_artifacts(id) ON DELETE SET NULL
+            )
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_ai_conversations_article_updated
+            ON ai_conversations(article_id, updated_at DESC, id DESC)
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS ai_conversation_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                conversation_id INTEGER NOT NULL,
+                sequence_number INTEGER NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                CHECK(sequence_number > 0),
+                CHECK(role IN ('user', 'assistant')),
+                CHECK(length(trim(content)) > 0),
+                UNIQUE(conversation_id, sequence_number),
+                FOREIGN KEY(conversation_id) REFERENCES ai_conversations(id) ON DELETE CASCADE
+            )
+            """,
+        ),
+    )
+
+
 def _create_source_scoped_coverage_table(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
@@ -3846,6 +4468,11 @@ MIGRATIONS: Sequence[SchemaMigration] = (
         18,
         "durable run cancellation and provider process ownership",
         _migration_run_cancellation,
+    ),
+    SchemaMigration(
+        19,
+        "Library L1-A stable core and AI persistence foundation",
+        _migration_library_l1a_foundation,
     ),
 )
 
@@ -4132,7 +4759,9 @@ def _get_library_entry(conn: sqlite3.Connection, article_id: int) -> LibraryEntr
         SELECT
             articles.*,
             library_articles.saved_at AS library_saved_at,
-            library_articles.updated_at AS library_updated_at
+            library_articles.updated_at AS library_updated_at,
+            library_articles.reading_state AS library_reading_state,
+            library_articles.interest_rating AS library_interest_rating
         FROM library_articles
         JOIN articles ON articles.id = library_articles.article_id
         WHERE library_articles.article_id = ? AND library_articles.saved = 1
@@ -4140,6 +4769,61 @@ def _get_library_entry(conn: sqlite3.Connection, article_id: int) -> LibraryEntr
         (article_id,),
     ).fetchone()
     return _library_entry_from_row(row) if row is not None else None
+
+
+def _is_article_saved(conn: sqlite3.Connection, article_id: int) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM library_articles WHERE article_id = ? AND saved = 1",
+        (article_id,),
+    ).fetchone()
+    return row is not None
+
+
+def _get_ai_artifact(conn: sqlite3.Connection, artifact_id: int) -> AIArtifact | None:
+    row = conn.execute(
+        "SELECT * FROM ai_artifacts WHERE id = ?",
+        (artifact_id,),
+    ).fetchone()
+    return _ai_artifact_from_row(row) if row is not None else None
+
+
+def _get_ai_conversation(
+    conn: sqlite3.Connection,
+    conversation_id: int,
+) -> AIConversation | None:
+    row = conn.execute(
+        "SELECT * FROM ai_conversations WHERE id = ?",
+        (conversation_id,),
+    ).fetchone()
+    return _ai_conversation_from_row(row) if row is not None else None
+
+
+def _get_ai_conversation_message(
+    conn: sqlite3.Connection,
+    message_id: int,
+) -> AIConversationMessage | None:
+    row = conn.execute(
+        "SELECT * FROM ai_conversation_messages WHERE id = ?",
+        (message_id,),
+    ).fetchone()
+    return _ai_conversation_message_from_row(row) if row is not None else None
+
+
+def _validate_rolling_summary_artifact(
+    conn: sqlite3.Connection,
+    *,
+    article_id: int,
+    artifact_id: int | None,
+) -> None:
+    if artifact_id is None:
+        return
+    artifact = _get_ai_artifact(conn, artifact_id)
+    if artifact is None:
+        raise ValueError(f"AI artifact {artifact_id} does not exist")
+    if artifact.article_id != article_id:
+        raise ValueError("rolling summary artifact must belong to the conversation article")
+    if artifact.artifact_type != AIArtifactType.CONVERSATION_SUMMARY:
+        raise ValueError("rolling summary artifact must be a conversation summary")
 
 
 def _get_library_tag_by_normalized_name(
@@ -4416,6 +5100,68 @@ def _library_entry_from_row(row: sqlite3.Row) -> LibraryEntry:
         article=_article_from_row(row),
         saved_at=datetime_from_db(str(row["library_saved_at"])),
         updated_at=datetime_from_db(str(row["library_updated_at"])),
+        reading_state=(
+            ReadingState(str(row["library_reading_state"]))
+            if row["library_reading_state"] is not None
+            else None
+        ),
+        interest_rating=(
+            int(row["library_interest_rating"])
+            if row["library_interest_rating"] is not None
+            else None
+        ),
+    )
+
+
+def _ai_artifact_from_row(row: sqlite3.Row) -> AIArtifact:
+    return AIArtifact(
+        id=int(row["id"]),
+        article_id=int(row["article_id"]),
+        artifact_type=AIArtifactType(str(row["artifact_type"])),
+        content=str(row["content"]),
+        created_at=datetime_from_db(str(row["created_at"])),
+        provider=str(row["provider"]),
+        model_id=str(row["model_id"]),
+        reasoning_effort=(
+            str(row["reasoning_effort"]) if row["reasoning_effort"] is not None else None
+        ),
+        generator_version=str(row["generator_version"]),
+        input_fingerprint=str(row["input_fingerprint"]),
+        retention_class=AIArtifactRetentionClass(str(row["retention_class"])),
+        expires_at=(
+            datetime_from_db(str(row["expires_at"]))
+            if row["expires_at"] is not None
+            else None
+        ),
+    )
+
+
+def _ai_conversation_from_row(row: sqlite3.Row) -> AIConversation:
+    return AIConversation(
+        id=int(row["id"]),
+        article_id=int(row["article_id"]),
+        title=str(row["title"]),
+        created_at=datetime_from_db(str(row["created_at"])),
+        updated_at=datetime_from_db(str(row["updated_at"])),
+        provider=str(row["provider"]),
+        model_id=str(row["model_id"]),
+        conversation_version=int(row["conversation_version"]),
+        rolling_summary_artifact_id=(
+            int(row["rolling_summary_artifact_id"])
+            if row["rolling_summary_artifact_id"] is not None
+            else None
+        ),
+    )
+
+
+def _ai_conversation_message_from_row(row: sqlite3.Row) -> AIConversationMessage:
+    return AIConversationMessage(
+        id=int(row["id"]),
+        conversation_id=int(row["conversation_id"]),
+        sequence_number=int(row["sequence_number"]),
+        role=AIConversationRole(str(row["role"])),
+        content=str(row["content"]),
+        created_at=datetime_from_db(str(row["created_at"])),
     )
 
 

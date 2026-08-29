@@ -61,6 +61,36 @@ class LibraryContextOrigin(StrEnum):
     DETERMINISTIC = "DETERMINISTIC"
 
 
+class ReadingState(StrEnum):
+    UNREAD = "unread"
+    SKIMMED = "skimmed"
+    READ = "read"
+    REFERENCE = "reference"
+
+
+class AIArtifactType(StrEnum):
+    DIGEST_SUMMARY = "digest_summary"
+    LIBRARY_SUMMARY = "library_summary"
+    CONVERSATION_SUMMARY = "conversation_summary"
+
+
+class AIArtifactRetentionClass(StrEnum):
+    TEMPORARY = "TEMPORARY"
+    LIBRARY = "LIBRARY"
+    USER_PINNED = "USER_PINNED"
+
+
+class AIConversationRole(StrEnum):
+    USER = "user"
+    ASSISTANT = "assistant"
+
+
+class LibrarySummarySource(StrEnum):
+    LIBRARY_ARTIFACT = "library_artifact"
+    DIGEST_ARTIFACT = "digest_artifact"
+    LEGACY_DIGEST_ANALYSIS = "legacy_digest_analysis"
+
+
 class DateSelectionKind(StrEnum):
     LATEST_AVAILABLE = "LATEST_AVAILABLE"
     SINGLE_DATE = "SINGLE_DATE"
@@ -342,12 +372,168 @@ class LibraryEntry:
     article: Article
     saved_at: datetime
     updated_at: datetime
+    reading_state: ReadingState | None
+    interest_rating: int | None
 
     def __post_init__(self) -> None:
         if self.article.id is None:
             raise ModelValidationError("library entry article id is required")
+        if self.reading_state is not None:
+            try:
+                reading_state = ReadingState(self.reading_state)
+            except ValueError as exc:
+                raise ModelValidationError("unsupported Library reading state") from exc
+            object.__setattr__(self, "reading_state", reading_state)
+        if self.interest_rating is not None and (
+            isinstance(self.interest_rating, bool)
+            or not isinstance(self.interest_rating, int)
+            or not 1 <= self.interest_rating <= 5
+        ):
+            raise ModelValidationError(
+                "Library interest rating must be an integer between 1 and 5"
+            )
         object.__setattr__(self, "saved_at", ensure_utc(self.saved_at))
         object.__setattr__(self, "updated_at", ensure_utc(self.updated_at))
+
+
+@dataclass(frozen=True)
+class AIArtifact:
+    id: int | None
+    article_id: int
+    artifact_type: AIArtifactType
+    content: str
+    created_at: datetime
+    provider: str
+    model_id: str
+    reasoning_effort: str | None
+    generator_version: str
+    input_fingerprint: str
+    retention_class: AIArtifactRetentionClass
+    expires_at: datetime | None
+
+    def __post_init__(self) -> None:
+        if self.id is not None and self.id <= 0:
+            raise ModelValidationError("AI artifact id must be positive")
+        if self.article_id <= 0:
+            raise ModelValidationError("AI artifact article id must be positive")
+        if not self.content.strip():
+            raise ModelValidationError("AI artifact content is required")
+        if not self.provider.strip():
+            raise ModelValidationError("AI artifact provider is required")
+        if not self.model_id.strip():
+            raise ModelValidationError("AI artifact model id is required")
+        if not self.generator_version.strip():
+            raise ModelValidationError("AI artifact generator version is required")
+        if not self.input_fingerprint.strip():
+            raise ModelValidationError("AI artifact input fingerprint is required")
+        artifact_type = AIArtifactType(self.artifact_type)
+        retention_class = AIArtifactRetentionClass(self.retention_class)
+        if retention_class == AIArtifactRetentionClass.TEMPORARY and self.expires_at is None:
+            raise ModelValidationError("temporary AI artifacts require an expiration")
+        if retention_class != AIArtifactRetentionClass.TEMPORARY and self.expires_at is not None:
+            raise ModelValidationError("retained AI artifacts must not expire")
+        object.__setattr__(self, "artifact_type", artifact_type)
+        object.__setattr__(self, "retention_class", retention_class)
+        object.__setattr__(self, "provider", normalize_whitespace(self.provider))
+        object.__setattr__(self, "model_id", normalize_whitespace(self.model_id))
+        object.__setattr__(
+            self,
+            "reasoning_effort",
+            normalize_whitespace(self.reasoning_effort) if self.reasoning_effort else None,
+        )
+        object.__setattr__(
+            self,
+            "generator_version",
+            normalize_whitespace(self.generator_version),
+        )
+        object.__setattr__(self, "input_fingerprint", self.input_fingerprint.strip())
+        object.__setattr__(self, "created_at", ensure_utc(self.created_at))
+        if self.expires_at is not None:
+            object.__setattr__(self, "expires_at", ensure_utc(self.expires_at))
+
+
+@dataclass(frozen=True)
+class ResolvedLibrarySummary:
+    article_id: int
+    content: str
+    source: LibrarySummarySource
+    created_at: datetime
+    artifact_id: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.article_id <= 0:
+            raise ModelValidationError("resolved summary article id must be positive")
+        if self.artifact_id is not None and self.artifact_id <= 0:
+            raise ModelValidationError("resolved summary artifact id must be positive")
+        if not self.content.strip():
+            raise ModelValidationError("resolved summary content is required")
+        source = LibrarySummarySource(self.source)
+        if source == LibrarySummarySource.LEGACY_DIGEST_ANALYSIS:
+            if self.artifact_id is not None:
+                raise ModelValidationError("legacy digest summaries have no artifact id")
+        elif self.artifact_id is None:
+            raise ModelValidationError("artifact-backed summaries require an artifact id")
+        object.__setattr__(self, "source", source)
+        object.__setattr__(self, "created_at", ensure_utc(self.created_at))
+
+
+@dataclass(frozen=True)
+class AIConversation:
+    id: int | None
+    article_id: int
+    title: str
+    created_at: datetime
+    updated_at: datetime
+    provider: str
+    model_id: str
+    conversation_version: int
+    rolling_summary_artifact_id: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.id is not None and self.id <= 0:
+            raise ModelValidationError("AI conversation id must be positive")
+        if self.article_id <= 0:
+            raise ModelValidationError("AI conversation article id must be positive")
+        if not self.title.strip():
+            raise ModelValidationError("AI conversation title is required")
+        if not self.provider.strip():
+            raise ModelValidationError("AI conversation provider is required")
+        if not self.model_id.strip():
+            raise ModelValidationError("AI conversation model id is required")
+        if self.conversation_version <= 0:
+            raise ModelValidationError("AI conversation version must be positive")
+        if (
+            self.rolling_summary_artifact_id is not None
+            and self.rolling_summary_artifact_id <= 0
+        ):
+            raise ModelValidationError("rolling summary artifact id must be positive")
+        object.__setattr__(self, "title", normalize_whitespace(self.title))
+        object.__setattr__(self, "provider", normalize_whitespace(self.provider))
+        object.__setattr__(self, "model_id", normalize_whitespace(self.model_id))
+        object.__setattr__(self, "created_at", ensure_utc(self.created_at))
+        object.__setattr__(self, "updated_at", ensure_utc(self.updated_at))
+
+
+@dataclass(frozen=True)
+class AIConversationMessage:
+    id: int | None
+    conversation_id: int
+    sequence_number: int
+    role: AIConversationRole
+    content: str
+    created_at: datetime
+
+    def __post_init__(self) -> None:
+        if self.id is not None and self.id <= 0:
+            raise ModelValidationError("AI conversation message id must be positive")
+        if self.conversation_id <= 0:
+            raise ModelValidationError("AI conversation id must be positive")
+        if self.sequence_number <= 0:
+            raise ModelValidationError("AI conversation sequence number must be positive")
+        if not self.content.strip():
+            raise ModelValidationError("AI conversation message content is required")
+        object.__setattr__(self, "role", AIConversationRole(self.role))
+        object.__setattr__(self, "created_at", ensure_utc(self.created_at))
 
 
 @dataclass(frozen=True)
@@ -517,6 +703,12 @@ class LibraryNote:
         object.__setattr__(self, "note_text", self.note_text.strip())
         object.__setattr__(self, "created_at", ensure_utc(self.created_at))
         object.__setattr__(self, "updated_at", ensure_utc(self.updated_at))
+
+    @property
+    def content_markdown(self) -> str:
+        """Expose the existing note body under its L1 logical meaning."""
+
+        return self.note_text
 
 
 @dataclass(frozen=True)

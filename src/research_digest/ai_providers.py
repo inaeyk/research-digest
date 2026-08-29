@@ -1,0 +1,42 @@
+"""Narrow, model-neutral provider boundaries for later Library AI stages."""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+from dataclasses import dataclass
+from typing import Protocol
+
+from research_digest.models import AIConversationMessage, Article
+
+
+@dataclass(frozen=True)
+class GeneratedAIText:
+    """Provider output plus provenance required by the artifact store."""
+
+    content: str
+    provider: str
+    model_id: str
+    reasoning_effort: str | None
+    generator_version: str
+    input_fingerprint: str
+
+
+class LibrarySummaryProvider(Protocol):
+    def generate_summary(
+        self,
+        *,
+        article: Article,
+        context: str,
+    ) -> GeneratedAIText:
+        """Generate one explicit Library summary request."""
+
+
+class ResearchConversationProvider(Protocol):
+    def respond(
+        self,
+        *,
+        article: Article,
+        messages: Sequence[AIConversationMessage],
+        context: str,
+    ) -> GeneratedAIText:
+        """Generate one explicit conversation response."""
