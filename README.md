@@ -770,10 +770,11 @@ profile text.
 - Analysis is abstract-level; full-paper/PDF deep reading is deferred.
 - Model scores are ordinal judgments, not calibrated probabilities.
 - Library connections are model inferences and should be reviewed critically.
-- The prior v0.4.0 source-checkout installation was human-qualified on Windows/WSL
-  and macOS. Release-asset-only v0.4.1 smokes remain pending, including the
-  documented Windows cold-WSL-start/real-Codex and macOS login/logout or
-  full-restart checks.
+- The exact v0.4.1 release-asset set passed real macOS and Windows/WSL hardware
+  acceptance. A cold Windows `wsl --shutdown` followed by Desktop launch,
+  automatic browser opening, and a real Codex-backed run remains explicitly
+  deferred until terminating unrelated live WSL work is safe; this is an
+  environment smoke, not a product failure.
 - Research Digest is local and single-user; it has no multi-user or cloud
   collaboration layer.
 
