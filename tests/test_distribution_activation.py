@@ -156,7 +156,7 @@ class DistributionActivationTests(unittest.TestCase):
 
     def prepare_runtime(self, root: Path) -> tuple[Path, Path]:
         runtime_root = root / "data" / "runtime"
-        version_root = runtime_root / "0.4.1"
+        version_root = runtime_root / "0.5.0"
         command = version_root / "venv" / "bin" / "research-digest"
         command.parent.mkdir(parents=True)
         runtime_root.chmod(0o700)
@@ -167,7 +167,7 @@ class DistributionActivationTests(unittest.TestCase):
         (runtime_root / RUNTIME_ROOT_MARKER).write_text(json.dumps(owned), encoding="utf-8")
         (runtime_root / RUNTIME_ROOT_MARKER).chmod(0o600)
         (version_root / RUNTIME_VERSION_MARKER).write_text(
-            json.dumps({**owned, "version": "0.4.1", "wheel_sha256": "a" * 64}),
+            json.dumps({**owned, "version": "0.5.0", "wheel_sha256": "a" * 64}),
             encoding="utf-8",
         )
         (version_root / RUNTIME_VERSION_MARKER).chmod(0o600)
@@ -186,7 +186,7 @@ class DistributionActivationTests(unittest.TestCase):
         result = activate_distribution(
             config=config(root),
             runtime_root=runtime_root,
-            version="0.4.1",
+            version="0.5.0",
             command_executable=command,
             distro="Research Debian",
             scheduler_backend=scheduler,
@@ -209,7 +209,7 @@ class DistributionActivationTests(unittest.TestCase):
 
             current = json.loads((runtime_root / CURRENT_RUNTIME_STATE).read_text())
             self.assertEqual(scheduler.requests, [])
-            self.assertIn("/runtime/0.4.1/venv/bin/research-digest", current["command"])
+            self.assertIn("/runtime/0.5.0/venv/bin/research-digest", current["command"])
             self.assertEqual(launcher.requests[0].command_executable, current["command"])
             self.assertEqual(data_file.read_bytes(), before)
             self.assertFalse((root / "data" / "research_digest.sqlite3").exists())
@@ -298,7 +298,7 @@ class DistributionActivationTests(unittest.TestCase):
             result = activate_distribution(
                 config=config(root),
                 runtime_root=runtime_root,
-                version="0.4.1",
+                version="0.5.0",
                 command_executable=command,
                 distro="Research Debian",
                 scheduler_backend=scheduler,
@@ -347,7 +347,7 @@ class DistributionActivationTests(unittest.TestCase):
                 activate_distribution(
                     config=config(root),
                     runtime_root=runtime_root,
-                    version="0.4.1",
+                    version="0.5.0",
                     command_executable=command,
                     distro="Research Debian",
                     scheduler_backend=scheduler,
@@ -394,7 +394,7 @@ class DistributionActivationTests(unittest.TestCase):
                 activate_distribution(
                     config=config(root),
                     runtime_root=runtime_root,
-                    version="0.4.1",
+                    version="0.5.0",
                     command_executable=command,
                     distro="Research Debian",
                     scheduler_backend=scheduler,
@@ -443,7 +443,7 @@ class DistributionActivationTests(unittest.TestCase):
                 activate_distribution(
                     config=config(root),
                     runtime_root=runtime_root,
-                    version="0.4.1",
+                    version="0.5.0",
                     command_executable=command,
                     distro="Research Debian",
                     scheduler_backend=scheduler,
@@ -474,7 +474,7 @@ class DistributionActivationTests(unittest.TestCase):
                 activate_distribution(
                     config=config(root),
                     runtime_root=runtime_root,
-                    version="0.4.1",
+                    version="0.5.0",
                     command_executable=command,
                     distro="Research Debian",
                     scheduler_backend=scheduler,
@@ -496,7 +496,7 @@ class DistributionActivationTests(unittest.TestCase):
                 activate_distribution(
                     config=config(root),
                     runtime_root=runtime_root,
-                    version="0.4.1",
+                    version="0.5.0",
                     command_executable=command,
                     distro="Research Debian",
                     scheduler_backend=FakeScheduler(uninstalled_schedule()),
@@ -524,7 +524,7 @@ class DistributionActivationTests(unittest.TestCase):
                 activate_distribution(
                     config=config(root),
                     runtime_root=runtime_root,
-                    version="0.4.1",
+                    version="0.5.0",
                     command_executable=bin_directory / "research-digest",
                     distro="Research Debian",
                     scheduler_backend=FakeScheduler(uninstalled_schedule()),
@@ -548,7 +548,7 @@ class DistributionActivationTests(unittest.TestCase):
                         "--runtime-root",
                         str(runtime_root),
                         "--version",
-                        "0.4.1",
+                        "0.5.0",
                         "--command",
                         str(command),
                         "--distro",
@@ -597,7 +597,7 @@ class DistributionActivationTests(unittest.TestCase):
                         "--runtime-root",
                         str(runtime_root),
                         "--version",
-                        "0.4.1",
+                        "0.5.0",
                         "--command",
                         str(command),
                         "--distro",

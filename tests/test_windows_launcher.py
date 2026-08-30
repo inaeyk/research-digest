@@ -94,7 +94,7 @@ class WindowsLauncherTests(unittest.TestCase):
             distro="Research Ubuntu 24.04",
             wsl_executable="C:\\Windows\\System32\\wsl.exe",
             command_executable=(
-                "/home/person/.local/share/research-digest/runtime/0.4.1/venv/bin/"
+                "/home/person/.local/share/research-digest/runtime/0.5.0/venv/bin/"
                 "research-digest"
             ),
             codex_executable=str(self.codex),
@@ -102,7 +102,7 @@ class WindowsLauncherTests(unittest.TestCase):
 
     def actual_machine_request(self) -> WindowsLauncherRequest:
         command = (
-            "/home/inaeyk/.local/share/research-digest/runtime/0.4.1/venv/bin/"
+            "/home/inaeyk/.local/share/research-digest/runtime/0.5.0/venv/bin/"
             "research-digest"
         )
         return WindowsLauncherRequest(
@@ -111,7 +111,7 @@ class WindowsLauncherTests(unittest.TestCase):
             command_executable=command,
             environment={
                 "PATH": (
-                    "/home/inaeyk/.local/share/research-digest/runtime/0.4.1/"
+                    "/home/inaeyk/.local/share/research-digest/runtime/0.5.0/"
                     "venv/bin:/home/inaeyk/.nvm/versions/node/v22.22.2/bin:"
                     "/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
                 ),
@@ -190,7 +190,7 @@ class WindowsLauncherTests(unittest.TestCase):
 
         self.assertEqual(request.distro, "Research Ubuntu 24.04")
         self.assertEqual(request.wsl_arguments[:4], ["-d", request.distro, "--exec", "env"])
-        self.assertIn("runtime/0.4.1/venv/bin/research-digest", request.windows_arguments)
+        self.assertIn("runtime/0.5.0/venv/bin/research-digest", request.windows_arguments)
         self.assertEqual(
             request.wsl_arguments[-3:],
             ["launch", "--launcher-id", WINDOWS_LAUNCHER_ID],
@@ -205,7 +205,7 @@ class WindowsLauncherTests(unittest.TestCase):
 
         self.assertIn(str(self.codex.parent), path_entries)
         self.assertIn(
-            "/home/person/.local/share/research-digest/runtime/0.4.1/venv/bin",
+            "/home/person/.local/share/research-digest/runtime/0.5.0/venv/bin",
             path_entries,
         )
         for entry in WINDOWS_LAUNCHER_DEFAULT_PATH.split(os.pathsep):
@@ -230,7 +230,7 @@ class WindowsLauncherTests(unittest.TestCase):
         self.assertEqual(len(request.windows_arguments), 537)
         self.assertEqual(
             hashlib.sha256(request.windows_arguments.encode()).hexdigest(),
-            "72e61cd413c981e17cf45ec20b7a7dde059e9280744963fbdb877ee500a23c4c",
+            "c7be039a46b9a8b08c211d6b874dc2c30d5bbfdc369517e9dda7a661b71cb69b",
         )
         self.assertTrue(
             request.windows_arguments.endswith(
@@ -358,7 +358,7 @@ class WindowsLauncherTests(unittest.TestCase):
                 " launch --launcher-id research-digest-wsl-v1"
             ),
             "changed_private_runtime": arguments.replace(
-                "/runtime/0.4.1/", "/runtime/0.4.0/", 1
+                "/runtime/0.5.0/", "/runtime/0.4.0/", 1
             ),
             "changed_distro": arguments.replace("-d Ubuntu", "-d Debian", 1),
             "changed_launcher_id": arguments.replace(

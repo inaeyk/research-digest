@@ -34,6 +34,7 @@ from research_digest.models import (
     AIArtifactRetentionClass,
     AIArtifactType,
     AIConversationRole,
+    AnalysisResult,
     Article,
     ReadingState,
     TagOrigin,
@@ -316,9 +317,85 @@ class LibraryUiSmokeTests(unittest.TestCase):
         self.assert_no_streamlit_exceptions(at)
         self.assert_text_present(at, "No AI summary generated.")
         self.assert_text_present(at, "No discussions yet.")
-        self.assert_button_present(at, "Generate summary")
+        self.assert_button_present(at, "Generate Library summary")
         self.assert_button_absent(at, "Ask AI")
         self.assert_button_present(at, "Create discussion")
+
+    def test_digest_fallback_discloses_first_library_summary_generation(self) -> None:
+        create_artifact(
+            self.db,
+            article_id=self.second_article_id,
+            artifact_type=AIArtifactType.DIGEST_SUMMARY,
+            content="Existing digest summary remains reusable display prose.",
+            provider="digest-fixture",
+            model_id="digest-model",
+            reasoning_effort=None,
+            generator_version="digest-summary-v1",
+            input_fingerprint="sha256:digest-fixture",
+            retention_class=AIArtifactRetentionClass.LIBRARY,
+        )
+        with mock.patch(
+            "research_digest.ui.pages.library.get_library_summary_provider",
+            side_effect=AssertionError("displaying a digest fallback invoked AI"),
+        ) as provider_factory:
+            at = self.run_app()
+            self.click_button(at, "Second saved paper").run()
+
+        provider_factory.assert_not_called()
+        self.assert_no_streamlit_exceptions(at)
+        self.assert_text_present(at, "Existing digest summary remains reusable display prose.")
+        self.assert_button_present(at, "Generate Library summary")
+        self.assert_button_absent(at, "Regenerate summary")
+
+        provider = _CountingLibrarySummaryProvider()
+        with mock.patch(
+            "research_digest.ui.pages.library.get_library_summary_provider",
+            return_value=(provider, None),
+        ):
+            self.click_button(at, "Generate Library summary").run()
+
+        self.assert_no_streamlit_exceptions(at)
+        self.assertEqual(provider.calls, 1)
+        self.assert_text_present(at, "Explicit generated summary 1.")
+        self.assert_button_present(at, "Regenerate summary")
+        artifacts = self.db.list_ai_artifacts(self.second_article_id)
+        self.assertEqual(
+            {artifact.artifact_type for artifact in artifacts},
+            {AIArtifactType.DIGEST_SUMMARY, AIArtifactType.LIBRARY_SUMMARY},
+        )
+
+    def test_grandfathered_digest_fallback_uses_generate_library_wording(self) -> None:
+        profile = self.db.create_interest_profile(
+            name="Legacy summary fixture",
+            description="Preserve grandfathered summary display.",
+            relevance_threshold=0.5,
+        )
+        assert profile.id is not None
+        self.db.upsert_analysis(
+            article_id=self.second_article_id,
+            profile_id=profile.id,
+            profile_fingerprint="legacy-summary-profile-fingerprint",
+            analysis=AnalysisResult(
+                relevance_score=0.8,
+                relevance_reason="Legacy relevance reason.",
+                matched_topics=["legacy"],
+                summary="Grandfathered inline digest summary.",
+                why_it_matters="Legacy why-it-matters.",
+                reading_priority="HIGH",
+            ),
+        )
+        with mock.patch(
+            "research_digest.ui.pages.library.get_library_summary_provider",
+            side_effect=AssertionError("displaying a legacy digest summary invoked AI"),
+        ) as provider_factory:
+            at = self.run_app()
+            self.click_button(at, "Second saved paper").run()
+
+        provider_factory.assert_not_called()
+        self.assert_no_streamlit_exceptions(at)
+        self.assert_text_present(at, "Grandfathered inline digest summary.")
+        self.assert_button_present(at, "Generate Library summary")
+        self.assert_button_absent(at, "Regenerate summary")
 
     def test_explicit_generate_calls_once_and_refresh_does_not_repeat(self) -> None:
         provider = _CountingLibrarySummaryProvider()
@@ -328,7 +405,7 @@ class LibraryUiSmokeTests(unittest.TestCase):
         ) as provider_factory:
             at = self.run_app()
             self.click_button(at, "Second saved paper").run()
-            self.click_button(at, "Generate summary").run()
+            self.click_button(at, "Generate Library summary").run()
 
             self.assert_no_streamlit_exceptions(at)
             self.assertEqual(provider.calls, 1)
@@ -351,7 +428,7 @@ class LibraryUiSmokeTests(unittest.TestCase):
         ):
             at = self.run_app()
             self.click_button(at, "Second saved paper").run()
-            self.click_button(at, "Generate summary").run()
+            self.click_button(at, "Generate Library summary").run()
 
         self.assert_no_streamlit_exceptions(at)
         self.assertEqual(provider.calls, 1)

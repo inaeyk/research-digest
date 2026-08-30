@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-VERSION = "0.4.1"
+VERSION = "0.5.0"
 RELEASE_TAG = f"v{VERSION}"
 RELEASE_BASE_URL = (
     "https://github.com/inaeyk/research-digest/releases/download/" + RELEASE_TAG

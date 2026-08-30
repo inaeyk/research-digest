@@ -5,6 +5,8 @@ import unittest
 from pathlib import Path
 
 from research_digest import __version__
+from research_digest.config import CONFIG_VERSION
+from research_digest.db import CURRENT_SCHEMA_VERSION
 
 
 class ReleaseDocsTests(unittest.TestCase):
@@ -13,14 +15,20 @@ class ReleaseDocsTests(unittest.TestCase):
         readme = Path("README.md").read_text(encoding="utf-8")
         changelog = Path("CHANGELOG.md").read_text(encoding="utf-8")
         release_notes = Path("docs/releases/V0.4.0.md").read_text(encoding="utf-8")
+        v050_notes = Path("docs/releases/V0.5.0.md").read_text(encoding="utf-8")
         candidate = Path(
             "docs/releases/V0.4.1_DISTRIBUTION_CANDIDATE.md"
         ).read_text(encoding="utf-8")
 
-        self.assertEqual(project["project"]["version"], "0.4.1")
-        self.assertEqual(__version__, "0.4.1")
-        self.assertTrue(readme.startswith("# Research Digest v0.4.1 distribution candidate\n"))
-        self.assertIn("## [0.4.1] - Unreleased", changelog)
+        self.assertEqual(project["project"]["version"], "0.5.0")
+        self.assertIn("openai>=1.99.1", project["project"]["dependencies"])
+        self.assertNotIn("openai>=1.99.0", project["project"]["dependencies"])
+        self.assertEqual(__version__, "0.5.0")
+        self.assertEqual(CURRENT_SCHEMA_VERSION, 20)
+        self.assertEqual(CONFIG_VERSION, 5)
+        self.assertTrue(readme.startswith("# Research Digest v0.5.0 release candidate\n"))
+        self.assertIn("## [0.5.0] - Unreleased", changelog)
+        self.assertIn("## [0.4.1] - 2026-08-29", changelog)
         self.assertIn("## [0.4.0] - 2026-08-27", changelog)
         self.assertIn("Windows Task Scheduler", release_notes)
         self.assertIn("macOS launchd", release_notes)
@@ -30,6 +38,14 @@ class ReleaseDocsTests(unittest.TestCase):
         self.assertIn("Python 3.11 or newer", release_notes)
         self.assertIn("wsl --shutdown", release_notes)
         self.assertIn("macOS login/logout or full restart", release_notes)
+        self.assertIn("Abstract, My Notes, AI Summary", v050_notes)
+        self.assertIn("complete transcript", v050_notes.lower())
+        self.assertIn("Only bounded context is sent", v050_notes)
+        self.assertIn("schema-18 or schema-19 database", v050_notes)
+        self.assertIn("Streamlit: 1.51.0 or newer", v050_notes)
+        self.assertIn("OpenAI Python package for API-provider mode: 1.99.1", v050_notes)
+        self.assertNotIn("PDF-grounded conversation", v050_notes)
+        self.assertNotIn("web research capability", v050_notes)
         self.assertIn("The GitHub Release is not\npublished", candidate)
         self.assertIn("v0.4.1` tag is published and remains fixed", candidate)
         self.assertIn("SQLite schema: `18` (unchanged)", candidate)
@@ -72,7 +88,7 @@ class ReleaseDocsTests(unittest.TestCase):
         ordinary_install = readme.split("### Development and contributing", maxsplit=1)[0]
         self.assertNotIn("git clone", ordinary_install)
         self.assertNotIn("python3 -m venv", ordinary_install)
-        self.assertIn("releases/download/v0.4.1", ordinary_install)
+        self.assertIn("releases/download/v0.5.0", ordinary_install)
         self.assertIn("SHA256SUMS", ordinary_install)
         self.assertNotIn("RESEARCH_DIGEST_PYTHON=/path/to/", readme)
         self.assertIn(
@@ -85,7 +101,7 @@ class ReleaseDocsTests(unittest.TestCase):
         self.assertIn("ui-stop` stops only the UI server", readme)
         self.assertIn("does not disable its schedule", readme)
         self.assertIn("History does not gain a no-op run", readme)
-        self.assertIn("runtime/0.4.1/venv", readme)
+        self.assertIn("runtime/0.5.0/venv", readme)
         self.assertIn("The old checkout and its `.venv` are never deleted", readme)
         self.assertIn("normal uninstall", readme.lower())
         self.assertIn("v0.4.0 wheel-first audit", candidate)
@@ -106,6 +122,33 @@ class ReleaseDocsTests(unittest.TestCase):
 
         self.assertNotIn("/Users/", acceptance)
         self.assertNotIn("research-digest-install-smoke", acceptance)
+
+    def test_readme_documents_complete_ai_cost_boundary(self) -> None:
+        readme = Path("README.md").read_text(encoding="utf-8")
+
+        for zero_ai_interaction in (
+            "app startup and Today, Library, or History browsing",
+            "save and unsave",
+            "interest rating and reading state",
+            "deterministic local intelligence refresh",
+            "displaying an existing summary",
+            "promoting a reviewed takeaway into My Notes",
+        ):
+            self.assertIn(zero_ai_interaction, readme)
+
+        for ai_capable_work in (
+            "Manual, CLI, or scheduled digest processing",
+            "automatic Library-context reasoning",
+            "Find Library connections",
+            "Generate Library summary",
+            "Regenerate summary",
+            "Send",
+            "Retry",
+            "Rolling conversation compression",
+        ):
+            self.assertIn(ai_capable_work, readme)
+
+        self.assertIn("ordinary browsing never silently invokes AI", readme)
 
 
 if __name__ == "__main__":

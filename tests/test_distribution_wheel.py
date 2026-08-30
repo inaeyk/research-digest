@@ -35,10 +35,10 @@ class DistributionWheelTests(unittest.TestCase):
             and path.as_posix() != "src/research_digest/analysis/fake.py"
         }
         metadata = {
-            "research_digest-0.4.1.dist-info/METADATA",
-            "research_digest-0.4.1.dist-info/WHEEL",
-            "research_digest-0.4.1.dist-info/entry_points.txt",
-            "research_digest-0.4.1.dist-info/RECORD",
+            "research_digest-0.5.0.dist-info/METADATA",
+            "research_digest-0.5.0.dist-info/WHEEL",
+            "research_digest-0.5.0.dist-info/entry_points.txt",
+            "research_digest-0.5.0.dist-info/RECORD",
         }
         self.assertEqual(names, expected_package | metadata)
         self.assertFalse(any(name.startswith("tests/") for name in names))
@@ -113,7 +113,7 @@ class DistributionWheelTests(unittest.TestCase):
                     code = cli.run_cli(argv=arguments, stdout=stdout, stderr=stderr)
                     assert code == 0, (name, code, stdout.getvalue(), stderr.getvalue())
                     outputs[name] = stdout.getvalue()
-                assert outputs["version"].strip() == "research-digest 0.4.1"
+                assert outputs["version"].strip() == "research-digest 0.5.0"
                 assert "Failures: 0" in outputs["doctor"]
                 assert json.loads(outputs["ui"])["status"] == "completed"
                 print(outputs["version"], end="")
@@ -130,7 +130,7 @@ class DistributionWheelTests(unittest.TestCase):
             self.assertFalse((root / "data" / "research_digest.sqlite3").exists())
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.assertEqual(completed.stdout.strip(), "research-digest 0.4.1")
+        self.assertEqual(completed.stdout.strip(), "research-digest 0.5.0")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,38 @@
 # Changelog
 
-## [0.4.1] - Unreleased
+## [0.5.0] - Unreleased
+
+### Added
+
+- Dense Library browsing with nullable 1–5 interest ratings, reading state,
+  notes, tags, collections, and an improved source-first paper detail view.
+- Explicit Library summaries that reuse existing digest summaries for display
+  and perform generation only after a user action.
+- Persistent per-paper AI discussions with complete local transcripts, bounded
+  provider context, conditional rolling compression, and reviewed takeaway
+  promotion into My Notes.
+
+### Changed
+
+- Paper detail now follows the stable hierarchy Abstract, My Notes, AI Summary,
+  and AI Discussions.
+- Summary actions distinguish generating the first Library summary from
+  regenerating an existing Library summary.
+- Package and installer identity advances to 0.5.0.
+
+### Compatibility
+
+- SQLite schema 18 or 19 upgrades additively to schema 20 after creating a
+  pre-migration backup. JSON config remains version 5.
+- Streamlit 1.51 remains supported; Today no longer passes the post-1.51
+  `required` keyword to segmented controls.
+- OpenAI Python 1.99.1 is the minimum supported API-provider dependency;
+  1.99.0 has a broken internal Responses API import used by the production
+  adapters.
+- Full discussion transcripts remain local. Only bounded context is sent to the
+  configured provider.
+
+## [0.4.1] - 2026-08-29
 
 ### Added
 
@@ -35,10 +67,8 @@
 
 ### Release status
 
-- Candidate packaging only. No v0.4.1 tag, GitHub Release, or published asset
-  exists until the release procedure is explicitly authorized and completed.
-- Clean release-asset-only human smokes on macOS and Windows/WSL remain release
-  acceptance steps after candidate artifacts are staged.
+- Published as the fixed v0.4.1 wheel-first distribution release after clean
+  release-asset-only human smokes on macOS and Windows/WSL.
 
 ## [0.4.0] - 2026-08-27
 

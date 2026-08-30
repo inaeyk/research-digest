@@ -9,7 +9,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$Version = "0.4.1"
+$Version = "0.5.0"
 $ReleaseUrl = "https://github.com/inaeyk/research-digest/releases/download/v$Version"
 $TemporaryDirectory = Join-Path ([System.IO.Path]::GetTempPath()) (
     "research-digest-installer-" + [guid]::NewGuid().ToString("N")
@@ -104,10 +104,10 @@ try {
         throw "Installer SHA-256 verification failed; nothing was installed."
     }
     if ($Action -eq "Install") {
-        $WheelPath = Join-Path $TemporaryDirectory "research_digest-0.4.1-py3-none-any.whl"
+        $WheelPath = Join-Path $TemporaryDirectory "research_digest-0.5.0-py3-none-any.whl"
         Invoke-WebRequest `
             -UseBasicParsing `
-            -Uri "$ReleaseUrl/research_digest-0.4.1-py3-none-any.whl" `
+            -Uri "$ReleaseUrl/research_digest-0.5.0-py3-none-any.whl" `
             -OutFile $WheelPath
     }
 

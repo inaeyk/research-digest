@@ -46,7 +46,7 @@ class MacDistributionInstallerTests(unittest.TestCase):
                 f"  */SHA256SUMS) printf '%s' '{manifest}' > \"$output\" ;;\n"
                 "  */install-research-digest.py) "
                 f"printf '%s\\n' \"{core.decode().strip()}\" > \"$output\" ;;\n"
-                "  */research_digest-0.4.1-py3-none-any.whl) "
+                "  */research_digest-0.5.0-py3-none-any.whl) "
                 "printf '%s' 'wheel' > \"$output\" ;;\n"
                 "  *) exit 3 ;;\n"
                 "esac\n"

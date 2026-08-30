@@ -47,6 +47,7 @@ from research_digest.models import (
     AIConversationMessage,
     AIConversationRole,
     LibraryCollection,
+    LibrarySummarySource,
     LibraryTag,
     ReadingState,
 )
@@ -592,12 +593,16 @@ def _render_ai_summary(item: LibraryItem) -> None:
     summary = resolve_preferred_library_summary(get_database(), article_id=article_id)
     if summary is None:
         st.caption("No AI summary generated.")
-        action_label = "Generate summary"
+        action_label = "Generate Library summary"
         regenerate = False
     else:
         st.caption(summary_source_label(summary))
         st.markdown(summary.content)
-        action_label = "Regenerate summary"
+        action_label = (
+            "Regenerate summary"
+            if summary.source == LibrarySummarySource.LIBRARY_ARTIFACT
+            else "Generate Library summary"
+        )
         regenerate = True
     request_key = f"library_summary_request_{article_id}"
     running = bool(st.session_state.get(request_key, False))

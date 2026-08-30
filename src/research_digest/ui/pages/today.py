@@ -402,7 +402,6 @@ def _render_date_selection_control(
         "Source dates",
         options=_DATE_SELECTION_MODES,
         default=default_mode,
-        required=True,
         format_func=date_selection_mode_label,
         width="stretch",
     )
@@ -608,7 +607,6 @@ def _render_items(result: DigestResult, db: Database) -> None:
         "Result view",
         options=_VIEW_OPTIONS,
         default=_RELEVANT_VIEW,
-        required=True,
         format_func=lambda view: digest_view_label(view, counts[view]),
         key=f"digest_view_{result.run_id}",
         width="stretch",
@@ -1051,7 +1049,6 @@ def _render_feedback_control(
         f'Does this paper match "{profile.name}"?',
         options=_FEEDBACK_OPTIONS,
         default=current_feedback.profile_match if current_feedback is not None else None,
-        required=False,
         format_func=lambda label: _FEEDBACK_LABELS[label],
         key=(
             f"feedback_profile_match_{profile.id}_{item.article.id}_"
@@ -1067,7 +1064,6 @@ def _render_feedback_control(
         "Are you personally interested in this paper?",
         options=_FEEDBACK_OPTIONS,
         default=current_feedback.personal_interest if current_feedback is not None else None,
-        required=False,
         format_func=lambda label: _FEEDBACK_LABELS[label],
         key=(
             f"feedback_personal_interest_{profile.id}_{item.article.id}_"

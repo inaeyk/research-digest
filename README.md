@@ -1,4 +1,4 @@
-# Research Digest v0.4.1 distribution candidate
+# Research Digest v0.5.0 release candidate
 
 Research Digest is a local-first, personalized research-monitoring
 application. It currently monitors arXiv, screens new papers against
@@ -42,7 +42,7 @@ links, their original abstract on demand, and a Save to Library action.
 
 Ordinary users install the versioned wheel and installer assets from the exact
 GitHub release. They do not clone or retain this source repository, create a
-virtual environment, or run Research Digest from a Git checkout. The v0.4.1
+virtual environment, or run Research Digest from a Git checkout. The v0.5.0
 commands below become usable when those release assets are published; this
 repository currently contains the implementation candidate only.
 
@@ -62,14 +62,14 @@ codex login status
 
 ### macOS
 
-Download and run the exact v0.4.1 installer asset. It verifies its own installer
+Download and run the exact v0.5.0 installer asset. It verifies its own installer
 core and the wheel against the release `SHA256SUMS` manifest before creating a
 runtime:
 
 ```bash
 curl --fail --location --proto '=https' --tlsv1.2 \
   --output install-research-digest-macos.sh \
-  https://github.com/inaeyk/research-digest/releases/download/v0.4.1/install-research-digest-macos.sh
+  https://github.com/inaeyk/research-digest/releases/download/v0.5.0/install-research-digest-macos.sh
 sh install-research-digest-macos.sh
 ```
 
@@ -77,7 +77,7 @@ The installer searches compatible Python commands instead of failing merely
 because the shell's first `python3` is too old. It creates and verifies:
 
 ```text
-~/Library/Application Support/Research Digest/runtime/0.4.1/venv/
+~/Library/Application Support/Research Digest/runtime/0.5.0/venv/
 ~/Applications/Research Digest.app
 ```
 
@@ -105,7 +105,7 @@ From Windows PowerShell, download and run the exact installer:
 
 ```powershell
 Invoke-WebRequest `
-  -Uri "https://github.com/inaeyk/research-digest/releases/download/v0.4.1/install-research-digest-windows.ps1" `
+  -Uri "https://github.com/inaeyk/research-digest/releases/download/v0.5.0/install-research-digest-windows.ps1" `
   -OutFile ".\install-research-digest-windows.ps1"
 powershell -ExecutionPolicy Bypass -File ".\install-research-digest-windows.ps1"
 ```
@@ -122,7 +122,7 @@ The distribution name above is only an example; use the exact output from
 `wsl.exe --list --quiet`. The installer creates the private runtime at:
 
 ```text
-~/.local/share/research-digest/runtime/0.4.1/venv/
+~/.local/share/research-digest/runtime/0.5.0/venv/
 ```
 
 It then installs or updates the owned **Research Digest** Windows Desktop
@@ -131,7 +131,7 @@ source checkout needs to remain open.
 
 ### What the installer verifies
 
-Both platform entry points are pinned to v0.4.1 and verify the exact wheel
+Both platform entry points are pinned to v0.5.0 and verify the exact wheel
 SHA-256 before installation. The shared installer then checks:
 
 ```text
@@ -157,13 +157,16 @@ Failures: 0
 
 The installer creates the private runtime directory, so that directory's
 existence is not a warning. On first normal initialization the expected
-versions remain schema `18` and config `5`; no schema or config migration was
-introduced for distribution packaging.
+versions are schema `20` and config `5`. Upgrading an existing schema-18 or
+schema-19 database creates a pre-migration SQLite backup before the additive
+Library migration runs.
 
 ### Upgrading an existing source-checkout installation
 
-Run the same release installer. It builds and verifies the private v0.4.1
-runtime before repointing the owned launcher. If a Research Digest-owned daily
+Run the same release installer. It builds and verifies the private v0.5.0
+runtime before repointing the owned launcher. A published v0.4.1 installation
+upgrades in place while preserving its established user-data paths. If a
+Research Digest-owned daily
 schedule already exists, the installer repoints it while preserving its exact
 daily time and enabled or disabled state. If no schedule exists, none is
 created. Database, config, Library, History, profiles, coverage, and Codex login
@@ -515,15 +518,35 @@ not automatically mean "not interested."
 
 Library features include:
 
-- AI-generated tags
+- dense saved-paper browsing, search, sorting, and filters
+- a nullable 1–5 personal interest rating
+- reading state
 - user tags
-- visible tag provenance
-- removal and suppression of unwanted AI tags
 - personal notes
 - collections/projects
-- search and filtering
+- visible AI-tag provenance and removal of unwanted AI tags
 - related-paper and scientific connection suggestions
-- Show abstract
+- lazy explicit Library summaries and persistent per-paper AI discussions
+
+Paper detail keeps stable source and human-authored information ahead of
+replaceable generated prose:
+
+1. Abstract
+2. My Notes
+3. AI Summary
+4. AI Discussions
+
+An existing digest summary is displayed without a new model call. **Generate
+Library summary** explicitly creates a Library summary; **Regenerate summary**
+explicitly replaces the preferred Library summary. New generated prose follows
+the Library retention policy rather than being copied into every view.
+
+AI Discussions retain the complete transcript in local SQLite. Only bounded
+paper and conversation context is sent to the configured provider. When an
+individual Send or Retry cannot fit the live-message bound, Research Digest may
+make a separate rolling-compression call while keeping the original transcript.
+Promoting an assistant takeaway copies only the reviewed text into My Notes and
+does not call a model.
 
 ## Library Connections
 
@@ -549,6 +572,35 @@ automatically comparing that paper against the Library.
 
 If automatic connections are off, digest runs perform no automatic Library
 connection model work. Manual Find Library connections remains available.
+
+## AI cost boundary
+
+Ordinary browsing and local editing do not silently invoke a model. These
+interactions are zero-AI:
+
+- app startup and Today, Library, or History browsing
+- save and unsave
+- interest rating and reading state
+- notes, user tags, and collections
+- deterministic local intelligence refresh
+- displaying an existing summary
+- listing, opening, renaming, or inspecting discussion transcripts
+- promoting a reviewed takeaway into My Notes
+
+The following actions or configured workflows can invoke the selected model:
+
+1. Manual, CLI, or scheduled digest processing, including configured
+   preselection and analysis stages.
+2. Optional automatic Library-context reasoning during digest processing when
+   Automatic Library connections is enabled and its threshold is met.
+3. Today: **Find Library connections**.
+4. Library: **Generate Library summary** or **Regenerate summary**.
+5. AI Discussion: **Send** or **Retry**.
+6. Rolling conversation compression, only when Send or Retry requires it to
+   satisfy the provider-context bound.
+
+Scheduled digest processing is opt-in scheduled work. Connection generation is
+explicit or configured AI work; ordinary browsing never silently invokes AI.
 
 ## Scoring Guide
 
@@ -735,7 +787,7 @@ codex login
 On macOS, the launcher and launchd schedule capture the exact non-secret PATH
 needed for the installed Research Digest and Codex commands, because Finder and
 launchd do not load interactive shell startup files. If Research Digest, Codex,
-Homebrew, npm, or a supporting interpreter moves, rerun the pinned v0.4.1
+Homebrew, npm, or a supporting interpreter moves, rerun the pinned v0.5.0
 installer and update the automatic schedule from Settings. The owned launchd
 log is `scheduler.log` in the Research Digest data directory. Normal users
 should manage the schedule through Settings, not raw `launchctl` commands.

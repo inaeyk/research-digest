@@ -305,7 +305,7 @@ class SchedulerTests(unittest.TestCase):
         arguments = (
             '-d "Research Debian" --exec env '
             '"PATH=/home/person/npm with spaces/bin:/usr/bin" '
-            '"/home/person/private runtime/0.4.1/venv/bin/research-digest" run'
+            '"/home/person/private runtime/0.5.0/venv/bin/research-digest" run'
         )
         runner = FakeRunner(
             stdout=json.dumps(
@@ -327,7 +327,7 @@ class SchedulerTests(unittest.TestCase):
 
         self.assertEqual(
             status.command_executable,
-            "/home/person/private runtime/0.4.1/venv/bin/research-digest",
+            "/home/person/private runtime/0.5.0/venv/bin/research-digest",
         )
         self.assertEqual(status.time_of_day, "19:10")
         self.assertTrue(status.owned)

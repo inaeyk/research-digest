@@ -15,7 +15,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 import _research_digest_build as wheel_backend  # noqa: E402
 
-VERSION = "0.4.1"
+VERSION = "0.5.0"
 WHEEL_NAME = f"research_digest-{VERSION}-py3-none-any.whl"
 ASSET_SOURCES = {
     "install-research-digest.py": PROJECT_ROOT / "installers" / "install_research_digest.py",

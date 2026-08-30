@@ -322,9 +322,23 @@ class StreamlitStartupSideEffectTests(unittest.TestCase):
             db.close()
 
     def button(self, at: AppTest, label: str) -> Any:
+        self.prepare_floor_button_groups(at)
         matches = [button for button in at.button if str(button.label) == label]
         self.assertEqual(len(matches), 1)
         return matches[0]
+
+    def prepare_floor_button_groups(self, at: AppTest) -> None:
+        if hasattr(at, "segmented_control"):
+            return
+        for control in at.get("button_group"):
+            value = control.value
+            if isinstance(value, list):
+                continue
+            control.set_value([] if value is None else [value])
+
+    def run_again(self, at: AppTest) -> AppTest:
+        self.prepare_floor_button_groups(at)
+        return at.run()
 
     def plain_text(self, at: AppTest) -> str:
         texts: list[str] = []
@@ -368,8 +382,8 @@ class StreamlitStartupSideEffectTests(unittest.TestCase):
             default_timeout=5,
             args=(self.root, counters),
         ).run()
-        at.run()
-        at.run()
+        self.run_again(at)
+        self.run_again(at)
 
         self.assertEqual([str(value) for value in at.exception], [])
         self.assertEqual(self.app_run_count(), before)
@@ -591,7 +605,7 @@ class StreamlitStartupSideEffectTests(unittest.TestCase):
         self.assertIn("Cancel digest will be available", self.plain_text(at))
 
         run_id, owner = self.start_active_manual_run()
-        at.run()
+        self.run_again(at)
         self.assertEqual([str(value) for value in at.exception], [])
         self.assertTrue(self.button(at, "Run digest").disabled)
         self.assertEqual(str(self.button(at, "Cancel digest").label), "Cancel digest")
@@ -608,7 +622,7 @@ class StreamlitStartupSideEffectTests(unittest.TestCase):
         self.assertIn("70", self.plain_text(at))
         self.assertIn("28", self.plain_text(at))
 
-        at.run()
+        self.run_again(at)
         self.assertEqual([str(value) for value in at.exception], [])
         self.assertEqual(counters.get("worker_start"), 1)
         self.terminalize_run(run_id, owner, status=APP_RUN_CANCELLED)
@@ -636,7 +650,7 @@ class StreamlitStartupSideEffectTests(unittest.TestCase):
         self.assertFalse(any(str(button.label) == "Cancel digest" for button in at.button))
 
         self.terminalize_run(run_id, owner, status=APP_RUN_CANCELLED)
-        at.run()
+        self.run_again(at)
         self.assertEqual([str(value) for value in at.exception], [])
         self.assertFalse(self.button(at, "Run digest").disabled)
         self.assertFalse(any(str(button.label) == "Cancel digest" for button in at.button))
@@ -679,7 +693,7 @@ class StreamlitStartupSideEffectTests(unittest.TestCase):
             default_timeout=5,
             args=(self.root, {}),
         ).run()
-        at.run()
+        self.run_again(at)
 
         self.assertEqual([str(value) for value in at.exception], [])
         self.assertEqual(str(self.button(at, "Cancel digest").label), "Cancel digest")
@@ -718,7 +732,7 @@ class StreamlitStartupSideEffectTests(unittest.TestCase):
         ).run()
 
         self.terminalize_run(run_id, owner, status=APP_RUN_COMPLETED)
-        at.run()
+        self.run_again(at)
         self.assertEqual([str(value) for value in at.exception], [])
         self.assertFalse(self.button(at, "Run digest").disabled)
         self.assertFalse(any(str(button.label) == "Cancel digest" for button in at.button))

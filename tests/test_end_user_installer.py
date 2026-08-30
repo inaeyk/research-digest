@@ -86,7 +86,7 @@ def fake_create(root: Path, wheel_path: Path, wheel_sha256: str) -> Path:
 class EndUserInstallerTests(unittest.TestCase):
     def prepare_owned_install(self, home: Path) -> tuple[Path, Path]:
         root = home / ".local" / "share" / "research-digest" / "runtime"
-        version_root = root / "0.4.1"
+        version_root = root / "0.5.0"
         command = version_root / "venv" / "bin" / "research-digest"
         command.parent.mkdir(parents=True)
         root.chmod(0o700)
@@ -94,10 +94,10 @@ class EndUserInstallerTests(unittest.TestCase):
         command.write_text("#!/bin/sh\n", encoding="utf-8")
         command.chmod(0o755)
         write_owned(root / installer.ROOT_MARKER)
-        write_owned(version_root / installer.VERSION_MARKER, version="0.4.1")
+        write_owned(version_root / installer.VERSION_MARKER, version="0.5.0")
         write_owned(
             root / installer.CURRENT_STATE,
-            version="0.4.1",
+            version="0.5.0",
             command=str(command),
         )
         return root, command
@@ -115,7 +115,7 @@ class EndUserInstallerTests(unittest.TestCase):
             mock.patch.object(
                 installer,
                 "verify_runtime",
-                return_value={"version": "research-digest 0.4.1", "doctor_failures": 0},
+                return_value={"version": "research-digest 0.5.0", "doctor_failures": 0},
             ),
             mock.patch.object(
                 installer,
@@ -151,7 +151,7 @@ class EndUserInstallerTests(unittest.TestCase):
                 / "share"
                 / "research-digest"
                 / "runtime"
-                / "0.4.1"
+                / "0.5.0"
                 / "venv"
                 / "bin"
                 / "research-digest",
@@ -318,7 +318,7 @@ class EndUserInstallerTests(unittest.TestCase):
                     installer,
                     "verify_runtime",
                     return_value={
-                        "version": "research-digest 0.4.1",
+                        "version": "research-digest 0.5.0",
                         "doctor_failures": 0,
                     },
                 ),
@@ -334,7 +334,7 @@ class EndUserInstallerTests(unittest.TestCase):
                 installer.install(asset_dir=assets, distro="Research Debian")
 
             runtime_root = data.parent / "runtime"
-            self.assertTrue((runtime_root / "0.4.1").is_dir())
+            self.assertTrue((runtime_root / "0.5.0").is_dir())
             self.assertFalse((runtime_root / installer.CURRENT_STATE).exists())
             self.assertEqual(data.read_bytes(), b"existing research data")
 
@@ -373,13 +373,13 @@ class EndUserInstallerTests(unittest.TestCase):
             def inspect_command(command: Path) -> dict[str, object]:
                 observed.append(command)
                 script = command.read_text(encoding="utf-8")
-                expected_python = root / "0.4.1" / "venv" / "bin" / "python"
+                expected_python = root / "0.5.0" / "venv" / "bin" / "python"
                 # pip uses a /bin/sh trampoline when the absolute shebang path
                 # contains spaces, but the embedded interpreter must still be
                 # the final version path rather than a renamed staging path.
                 self.assertIn(str(expected_python), script)
                 self.assertNotIn("installing", script)
-                return {"version": "research-digest 0.4.1"}
+                return {"version": "research-digest 0.5.0"}
 
             with (
                 mock.patch.object(installer, "_run_checked", side_effect=run_without_dependencies),
@@ -395,7 +395,7 @@ class EndUserInstallerTests(unittest.TestCase):
 
             self.assertEqual(observed, [command])
             self.assertNotIn("installing", str(command))
-            self.assertTrue((root / "0.4.1" / installer.VERSION_MARKER).exists())
+            self.assertTrue((root / "0.5.0" / installer.VERSION_MARKER).exists())
 
     def test_self_verification_invokes_no_scientific_work(self) -> None:
         command = Path("/private/runtime/research-digest")
@@ -405,7 +405,7 @@ class EndUserInstallerTests(unittest.TestCase):
             del executable
             calls.append(tuple(arguments))
             if arguments == ("--version",):
-                output = "research-digest 0.4.1\n"
+                output = "research-digest 0.5.0\n"
             elif arguments == ("doctor",):
                 output = "Research Digest doctor\nFailures: 0; warnings: 6\n"
             else:
@@ -433,17 +433,17 @@ class EndUserInstallerTests(unittest.TestCase):
                 "XDG_CONFIG_HOME": str(home / ".config"),
             }
             root = home / ".local" / "share" / "research-digest" / "runtime"
-            command = root / "0.4.1" / "venv" / "bin" / "research-digest"
+            command = root / "0.5.0" / "venv" / "bin" / "research-digest"
             command.parent.mkdir(parents=True)
             root.chmod(0o700)
-            (root / "0.4.1").chmod(0o700)
+            (root / "0.5.0").chmod(0o700)
             command.write_text("#!/bin/sh\n", encoding="utf-8")
             command.chmod(0o755)
             write_owned(root / installer.ROOT_MARKER)
-            write_owned(root / "0.4.1" / installer.VERSION_MARKER, version="0.4.1")
+            write_owned(root / "0.5.0" / installer.VERSION_MARKER, version="0.5.0")
             write_owned(
                 root / installer.CURRENT_STATE,
-                version="0.4.1",
+                version="0.5.0",
                 command=str(command),
             )
             data = root.parent / "library.bin"
@@ -483,17 +483,17 @@ class EndUserInstallerTests(unittest.TestCase):
             home = Path(tmp).resolve() / "home"
             home.mkdir()
             root = home / ".local" / "share" / "research-digest" / "runtime"
-            command = root / "0.4.1" / "venv" / "bin" / "research-digest"
+            command = root / "0.5.0" / "venv" / "bin" / "research-digest"
             command.parent.mkdir(parents=True)
             root.chmod(0o700)
-            (root / "0.4.1").chmod(0o700)
+            (root / "0.5.0").chmod(0o700)
             command.write_text("#!/bin/sh\n", encoding="utf-8")
             command.chmod(0o755)
             write_owned(root / installer.ROOT_MARKER)
-            write_owned(root / "0.4.1" / installer.VERSION_MARKER, version="0.4.1")
+            write_owned(root / "0.5.0" / installer.VERSION_MARKER, version="0.5.0")
             write_owned(
                 root / installer.CURRENT_STATE,
-                version="0.4.1",
+                version="0.5.0",
                 command=str(command),
             )
             custom_db = home / "databases" / "custom.sqlite3"
@@ -530,7 +530,7 @@ class EndUserInstallerTests(unittest.TestCase):
             home = Path(tmp).resolve() / "home"
             home.mkdir()
             root = home / ".local" / "share" / "research-digest" / "runtime"
-            version_root = root / "0.4.1"
+            version_root = root / "0.5.0"
             command = version_root / "venv" / "bin" / "research-digest"
             unrelated = home / "unrelated-command"
             command.parent.mkdir(parents=True)
@@ -540,10 +540,10 @@ class EndUserInstallerTests(unittest.TestCase):
             unrelated.chmod(0o755)
             command.symlink_to(unrelated)
             write_owned(root / installer.ROOT_MARKER)
-            write_owned(version_root / installer.VERSION_MARKER, version="0.4.1")
+            write_owned(version_root / installer.VERSION_MARKER, version="0.5.0")
             write_owned(
                 root / installer.CURRENT_STATE,
-                version="0.4.1",
+                version="0.5.0",
                 command=str(command),
             )
             environment = {
@@ -662,7 +662,7 @@ class EndUserInstallerTests(unittest.TestCase):
             previous = root / installer.PREVIOUS_STATE
             write_owned(
                 previous,
-                version="0.4.1",
+                version="0.5.0",
                 command=str(command),
             )
             previous.chmod(0o666)
@@ -692,7 +692,7 @@ class EndUserInstallerTests(unittest.TestCase):
             home.mkdir()
             root, _ = self.prepare_owned_install(home)
             write_owned(
-                root / "0.4.1" / installer.VERSION_MARKER,
+                root / "0.5.0" / installer.VERSION_MARKER,
                 version="9.9.9",
             )
             environment = {

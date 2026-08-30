@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-version="0.4.1"
+version="0.5.0"
 release_url="https://github.com/inaeyk/research-digest/releases/download/v${version}"
 
 if [ "$(uname -s)" != "Darwin" ]; then
@@ -70,7 +70,7 @@ installer_tmp=$(mktemp -d "${TMPDIR:-/tmp}/research-digest-installer.XXXXXX")
 cleanup() {
     rm -f -- \
         "$installer_tmp/install-research-digest.py" \
-        "$installer_tmp/research_digest-0.4.1-py3-none-any.whl" \
+        "$installer_tmp/research_digest-0.5.0-py3-none-any.whl" \
         "$installer_tmp/SHA256SUMS"
     rmdir -- "$installer_tmp" 2>/dev/null || true
 }
@@ -110,8 +110,8 @@ fi
 case "$action" in
     install)
         curl --fail --location --proto '=https' --tlsv1.2 \
-            --output "$installer_tmp/research_digest-0.4.1-py3-none-any.whl" \
-            "$release_url/research_digest-0.4.1-py3-none-any.whl"
+            --output "$installer_tmp/research_digest-0.5.0-py3-none-any.whl" \
+            "$release_url/research_digest-0.5.0-py3-none-any.whl"
         "$selected_python" "$installer_tmp/install-research-digest.py" \
             install --asset-dir "$installer_tmp" "$@"
         ;;

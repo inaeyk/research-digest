@@ -5,6 +5,8 @@ import tempfile
 import unittest
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any, cast
+from unittest import mock
 
 from streamlit.testing.v1 import AppTest
 
@@ -77,6 +79,18 @@ def _history_snapshot_app(
     from research_digest.ui.pages.history import _render_snapshot
 
     _render_snapshot(snapshot, db)
+
+
+def _date_selection_app(
+    default_selection: "DateSelection",  # noqa: UP037
+    source_config: "ArxivSourceConfig",  # noqa: UP037
+) -> None:
+    import streamlit as st
+
+    from research_digest.ui.pages.today import _render_date_selection_control
+
+    control = _render_date_selection_control(default_selection, source_config=source_config)
+    st.write(control.selection.kind.value if control.selection is not None else "incomplete")
 
 
 class AbstractUiSmokeTests(unittest.TestCase):
@@ -188,7 +202,7 @@ class AbstractUiSmokeTests(unittest.TestCase):
         self.assert_no_streamlit_exceptions(at)
         self.assert_text_present(at, "Preselected-out source abstract.")
 
-        at.segmented_control[0].set_value("below_threshold").run()
+        self.set_segmented_control(at, 0, "below_threshold").run()
         self.assert_no_streamlit_exceptions(at)
         self.assert_text_present(at, "Below Threshold Author")
         self.assert_button_present(at, "Find Library connections")
@@ -196,10 +210,28 @@ class AbstractUiSmokeTests(unittest.TestCase):
         self.assert_no_streamlit_exceptions(at)
         self.assert_text_present(at, "Below threshold source abstract.")
 
-        at.segmented_control[0].set_value("all_analyzed").run()
+        self.set_segmented_control(at, 0, "all_analyzed").run()
         self.assert_no_streamlit_exceptions(at)
         self.assert_text_present(at, "Relevant Result Author")
         self.assert_text_present(at, "Below Threshold Author")
+
+    def test_today_source_date_segmented_control_preserves_safe_defaults(self) -> None:
+        default = DateSelection.latest_available()
+        at = AppTest.from_function(
+            _date_selection_app,
+            default_timeout=5,
+            args=(default, self.result.source_config),
+        ).run()
+
+        self.assert_no_streamlit_exceptions(at)
+        self.assertEqual(self.segmented_controls(at)[0].label, "Source dates")
+        self.assertEqual(self.segmented_value(at, 0), "latest_available")
+        self.assert_text_present(at, "LATEST_AVAILABLE")
+
+        self.set_segmented_control(at, 0, "single_date").run()
+        self.assert_no_streamlit_exceptions(at)
+        self.assertEqual(self.segmented_value(at, 0), "single_date")
+        self.assert_text_present(at, "SINGLE_DATE")
 
     def test_today_preselected_out_abstract_renders_when_no_items_are_analyzed(self) -> None:
         skipped = self.result.skipped_articles[0]
@@ -334,21 +366,22 @@ class AbstractUiSmokeTests(unittest.TestCase):
         ).run()
         self.assert_no_streamlit_exceptions(at)
         self.assert_text_present(at, "Help Research Digest learn")
-        self.assertEqual(at.segmented_control[1].label, 'Does this paper match "Gravity"?')
+        controls = self.segmented_controls(at)
+        self.assertEqual(controls[1].label, 'Does this paper match "Gravity"?')
         self.assertEqual(
-            at.segmented_control[2].label,
+            controls[2].label,
             "Are you personally interested in this paper?",
         )
-        self.assertIsNone(at.segmented_control[1].value)
-        self.assertIsNone(at.segmented_control[2].value)
+        self.assertIsNone(self.segmented_value(at, 1))
+        self.assertIsNone(self.segmented_value(at, 2))
 
-        at.segmented_control[1].set_value("YES").run()
+        self.set_segmented_control(at, 1, "YES").run()
         self.assert_no_streamlit_exceptions(at)
-        at.segmented_control[2].set_value("NO").run()
+        self.set_segmented_control(at, 2, "NO").run()
         self.assert_no_streamlit_exceptions(at)
 
-        self.assertEqual(at.segmented_control[1].value, "YES")
-        self.assertEqual(at.segmented_control[2].value, "NO")
+        self.assertEqual(self.segmented_value(at, 1), "YES")
+        self.assertEqual(self.segmented_value(at, 2), "NO")
         feedback = self.db.get_article_feedback(
             article_id=self.result.items[0].article.id or 0,
             profile_id=self.profile.id or 0,
@@ -359,7 +392,7 @@ class AbstractUiSmokeTests(unittest.TestCase):
         self.assertEqual(feedback.profile_match, "YES")
         self.assertEqual(feedback.personal_interest, "NO")
 
-        at.segmented_control[1].set_value("UNANSWERED").run()
+        self.set_segmented_control(at, 1, "UNANSWERED").run()
         self.assert_no_streamlit_exceptions(at)
         cleared = self.db.get_article_feedback(
             article_id=self.result.items[0].article.id or 0,
@@ -370,6 +403,33 @@ class AbstractUiSmokeTests(unittest.TestCase):
         assert cleared is not None
         self.assertIsNone(cleared.profile_match)
         self.assertEqual(cleared.personal_interest, "NO")
+
+    def test_today_library_connection_generation_is_explicit_ai(self) -> None:
+        generator = object()
+        with (
+            mock.patch(
+                "research_digest.ui.pages.today.get_library_context_generator",
+                return_value=(generator, None),
+            ) as provider_factory,
+            mock.patch(
+                "research_digest.ui.pages.today.generate_library_context_for_item",
+                return_value=[],
+            ) as execution,
+        ):
+            at = AppTest.from_function(
+                _today_items_app,
+                default_timeout=5,
+                args=(self.result, self.db),
+            ).run()
+
+            provider_factory.assert_not_called()
+            execution.assert_not_called()
+            self.click_button(at, "Find Library connections", occurrence=0).run()
+
+        self.assert_no_streamlit_exceptions(at)
+        provider_factory.assert_called_once_with()
+        execution.assert_called_once()
+        self.assertIs(execution.call_args.kwargs["generator"], generator)
 
     def test_quantitative_calibration_prompt_hides_model_score_until_submit(self) -> None:
         run_id = self.db.create_app_run(profile_id=self.profile.id, source_name="arxiv")
@@ -434,9 +494,38 @@ class AbstractUiSmokeTests(unittest.TestCase):
         self.assertNotIn(expected, haystack)
 
     def click_button(self, at: AppTest, label: str, *, occurrence: int) -> AppTest:
+        self.prepare_floor_button_groups(at)
         matches = [button for button in at.button if str(button.label) == label]
         self.assertGreater(len(matches), occurrence)
         return matches[occurrence].click()
+
+    def segmented_controls(self, at: AppTest) -> list[Any]:
+        controls = list(getattr(at, "segmented_control", ()))
+        if controls:
+            return controls
+        return list(at.get("button_group"))
+
+    def segmented_value(self, at: AppTest, index: int) -> object | None:
+        value = self.segmented_controls(at)[index].value
+        if isinstance(value, list):
+            return value[0] if value else None
+        return cast(object | None, value)
+
+    def set_segmented_control(self, at: AppTest, index: int, value: object) -> Any:
+        controls = self.segmented_controls(at)
+        if not hasattr(at, "segmented_control"):
+            self.prepare_floor_button_groups(at)
+            return controls[index].set_value([value])
+        return controls[index].set_value(value)
+
+    def prepare_floor_button_groups(self, at: AppTest) -> None:
+        if hasattr(at, "segmented_control"):
+            return
+        for control in at.get("button_group"):
+            value = control.value
+            if isinstance(value, list):
+                continue
+            control.set_value([] if value is None else [value])
 
     def assert_button_present(self, at: AppTest, label: str) -> None:
         labels = [str(button.label) for button in at.button]
