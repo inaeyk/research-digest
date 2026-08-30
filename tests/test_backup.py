@@ -19,6 +19,8 @@ from research_digest.collections import (
 from research_digest.db import APP_RUN_COMPLETED, Database
 from research_digest.library_context import build_collection_intelligence_snapshot
 from research_digest.models import (
+    AIArtifactProvenance,
+    AnalysisResult,
     Article,
     ArxivSourceConfig,
     RunOrigin,
@@ -176,6 +178,27 @@ class BackupTests(unittest.TestCase):
         assert related.id is not None
         self.db.save_library_article(article.id)
         self.db.save_library_article(related.id)
+        canonical_summary = self.db.persist_generated_digest_analysis(
+            article_id=article.id,
+            profile_id=profile.id,
+            profile_fingerprint=profile_semantic_fingerprint(profile),
+            analysis=AnalysisResult(
+                relevance_score=0.8,
+                relevance_reason="Canonical backup summary fixture.",
+                matched_topics=["gravity"],
+                summary="Canonical artifact body.",
+                why_it_matters="It validates backup ownership.",
+                reading_priority="HIGH",
+            ),
+            provenance=AIArtifactProvenance(
+                provider="fixture",
+                model_id="fixture-model",
+                reasoning_effort=None,
+                generator_version="fixture-digest-v1",
+                input_fingerprint="fixture-input",
+            ),
+        )
+        assert canonical_summary.id is not None
         add_user_tag(self.db, article_id=article.id, tag="Black branes")
         assign_ai_tags(
             self.db,
@@ -321,6 +344,11 @@ class BackupTests(unittest.TestCase):
         )
         self.assertEqual(payload["library_article_notes"][0]["note_text"], "Private local note.")
         self.assertEqual(payload["library_collections"][0]["name"], "GL project")
+        self.assertEqual(payload["ai_artifacts"][0]["content"], "Canonical artifact body.")
+        self.assertEqual(
+            payload["relevance_analysis_summary_links"][0]["summary_artifact_id"],
+            canonical_summary.id,
+        )
         self.assertEqual(
             payload["library_collection_memberships"][0]["collection"]["name"],
             "GL project",

@@ -12,7 +12,12 @@ from research_digest.db import (
     APP_RUN_PARTIAL,
     Database,
 )
-from research_digest.history import RunHistoryEntry, get_run_snapshot, list_run_history
+from research_digest.history import (
+    RunHistoryEntry,
+    get_run_snapshot,
+    list_run_history,
+    resolve_snapshot_summaries,
+)
 from research_digest.models import InterestProfile, profile_semantic_fingerprint
 from research_digest.ui.abstracts import render_abstract_control
 from research_digest.ui.article_header import render_snapshot_article_header
@@ -112,7 +117,8 @@ def _render_snapshot(snapshot: dict[str, object], db: Database) -> None:
         st.info("No analyzed papers were persisted for this run.")
     else:
         st.markdown("**Persisted digest**")
-        for item in items:
+        summary_displays = resolve_snapshot_summaries(db, items)
+        for item_index, item in enumerate(items):
             if not isinstance(item, dict):
                 continue
             with st.container(border=True):
@@ -130,9 +136,12 @@ def _render_snapshot(snapshot: dict[str, object], db: Database) -> None:
                     f"Priority: {item.get('reading_priority', '-')}. "
                     f"Origin: {item.get('analysis_origin', '-')}."
                 )
-                summary = item.get("summary")
-                if isinstance(summary, str) and summary:
-                    st.write(summary)
+                summary = summary_displays[item_index]
+                if summary.content is not None:
+                    if summary.unavailable:
+                        st.info(summary.content, icon=":material/history:")
+                    else:
+                        st.write(summary.content)
                 why_it_matters = item.get("why_it_matters")
                 if isinstance(why_it_matters, str) and why_it_matters:
                     st.write(why_it_matters)

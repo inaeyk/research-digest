@@ -125,9 +125,9 @@ class DenseLibraryPresentationTests(unittest.TestCase):
         self.assertIsNone(row.note_preview)
         self.assertIsNone(build_note_preview(" \n\t "))
 
-    def test_l1b_adds_no_schema_or_persisted_preview_field(self) -> None:
-        self.assertEqual(CURRENT_SCHEMA_VERSION, 19)
-        self.assertEqual(self.db.get_schema_version(), 19)
+    def test_l1b_adds_no_persisted_preview_field_after_l1c_migration(self) -> None:
+        self.assertEqual(CURRENT_SCHEMA_VERSION, 20)
+        self.assertEqual(self.db.get_schema_version(), 20)
         with sqlite3.connect(self.db.path) as conn:
             library_columns = {
                 str(row[1]) for row in conn.execute("PRAGMA table_info(library_articles)")

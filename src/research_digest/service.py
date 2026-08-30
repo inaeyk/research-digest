@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, cast
@@ -247,6 +248,7 @@ def run_digest_for_profile(
             )
             if effective_status == APP_RUN_CANCELLED:
                 raise RunCancelled(digest.run_id)
+            _collect_terminal_artifacts(db)
             return ProfileDigestRun(
                 digest=digest,
                 calibration=calibration,
@@ -262,6 +264,7 @@ def run_digest_for_profile(
             status=APP_RUN_CANCELLED if cancelled else APP_RUN_FAILED,
             error_message="Cancelled by user." if cancelled else sanitize_error(exc),
         )
+        _collect_terminal_artifacts(db)
         raise
 
 
@@ -574,6 +577,13 @@ def _finish_digest_result(
         retrieval_complete=digest.retrieval_complete,
         retrieval_safety_limit=digest.retrieval_safety_limit,
     )
+
+
+def _collect_terminal_artifacts(db: Database) -> None:
+    """Run low-frequency GC after any durable terminal run state."""
+
+    with suppress(Exception):
+        db.collect_expired_ai_artifacts()
 
 
 def _profile_digest_error_message(digest: ProfileDigestRun) -> str:

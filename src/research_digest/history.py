@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 from research_digest.coverage import source_config_accepted_semantic_fingerprints
 from research_digest.db import APP_RUN_CANCELLED, APP_RUN_FAILED, Database
 from research_digest.models import (
+    AIArtifactRetentionClass,
     AnalysisOrigin,
+    AnalysisResult,
+    AnalysisSummaryReference,
+    AnalysisSummaryStorage,
     Article,
     DateSelection,
     DigestItem,
@@ -19,6 +24,7 @@ from research_digest.models import (
     RunOrigin,
     datetime_from_db,
     profile_semantic_fingerprint,
+    utc_now,
 )
 from research_digest.synthesis import CrossPaperSynthesis
 
@@ -49,11 +55,22 @@ class RunHistoryEntry:
     retrieval_safety_limit: int | None
 
 
+SUMMARY_EXPIRED_MESSAGE = "AI summary expired under retention policy."
+
+
+@dataclass(frozen=True)
+class SnapshotSummaryDisplay:
+    content: str | None
+    unavailable: bool = False
+
+
 def build_run_snapshot(
     *,
     digest: DigestResult,
     synthesis: CrossPaperSynthesis,
+    summary_references: Mapping[int, AnalysisSummaryReference] | None = None,
 ) -> dict[str, Any]:
+    references = summary_references or {}
     return {
         "run_id": digest.run_id,
         "profile_id": digest.profile.id,
@@ -75,9 +92,7 @@ def build_run_snapshot(
         "requested_source_dates": [value.isoformat() for value in digest.requested_source_dates],
         "covered_source_dates": [value.isoformat() for value in digest.covered_source_dates],
         "empty_source_dates": [value.isoformat() for value in digest.empty_source_dates],
-        "incomplete_source_dates": [
-            value.isoformat() for value in digest.incomplete_source_dates
-        ],
+        "incomplete_source_dates": [value.isoformat() for value in digest.incomplete_source_dates],
         "retrieval_complete": digest.retrieval_complete,
         "retrieval_safety_limit": digest.retrieval_safety_limit,
         "preselection_decisions": [
@@ -120,7 +135,9 @@ def build_run_snapshot(
                 "abstract_url": item.article.abstract_url,
                 "published_at": item.article.published_at.isoformat(),
                 "relevance_score": item.analysis.relevance_score,
-                "summary": item.analysis.summary,
+                "summary_reference": _snapshot_summary_reference(
+                    references.get(item.article.id or 0)
+                ),
                 "why_it_matters": item.analysis.why_it_matters,
                 "reading_priority": item.analysis.reading_priority,
                 "analysis_origin": item.analysis_origin.value,
@@ -162,13 +179,119 @@ def persist_run_snapshot(
     digest: DigestResult,
     synthesis: CrossPaperSynthesis,
 ) -> None:
+    if digest.profile.id is None:
+        raise ValueError("digest profile id is required for summary references")
+    references = db.list_analysis_summary_references(
+        article_ids=(item.article.id for item in digest.items if item.article.id is not None),
+        profile_id=digest.profile.id,
+        profile_fingerprint=profile_semantic_fingerprint(digest.profile),
+    )
     db.save_run_snapshot(
         run_id=digest.run_id,
         snapshot_json=json.dumps(
-            build_run_snapshot(digest=digest, synthesis=synthesis),
+            build_run_snapshot(
+                digest=digest,
+                synthesis=synthesis,
+                summary_references=references,
+            ),
             sort_keys=True,
         ),
     )
+
+
+def resolve_snapshot_summaries(
+    db: Database,
+    payload: object,
+    *,
+    now: datetime | None = None,
+) -> tuple[SnapshotSummaryDisplay, ...]:
+    """Resolve legacy prose or new references in at most two batched reads."""
+
+    if not isinstance(payload, list):
+        return ()
+    artifact_ids: set[int] = set()
+    legacy_analysis_ids: set[int] = set()
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        reference = item.get("summary_reference")
+        if not isinstance(reference, dict):
+            continue
+        kind = reference.get("kind")
+        reference_id = reference.get("artifact_id" if kind == "artifact" else "analysis_id")
+        if not isinstance(reference_id, int) or reference_id <= 0:
+            continue
+        if kind == "artifact":
+            artifact_ids.add(reference_id)
+        elif kind == "legacy_analysis":
+            legacy_analysis_ids.add(reference_id)
+    artifacts = db.get_ai_artifacts_by_ids(artifact_ids)
+    legacy_summaries = db.get_legacy_analysis_summaries(legacy_analysis_ids)
+    effective_now = now or utc_now()
+    displays: list[SnapshotSummaryDisplay] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            displays.append(SnapshotSummaryDisplay(content=None))
+            continue
+        inline = item.get("summary")
+        if isinstance(inline, str) and inline.strip():
+            displays.append(SnapshotSummaryDisplay(content=inline))
+            continue
+        reference = item.get("summary_reference")
+        if not isinstance(reference, dict):
+            displays.append(SnapshotSummaryDisplay(content=None))
+            continue
+        if reference.get("kind") == "artifact":
+            artifact_id = reference.get("artifact_id")
+            artifact = artifacts.get(artifact_id) if isinstance(artifact_id, int) else None
+            if artifact is None or (
+                artifact.retention_class == AIArtifactRetentionClass.TEMPORARY
+                and artifact.expires_at is not None
+                and artifact.expires_at < effective_now
+            ):
+                displays.append(
+                    SnapshotSummaryDisplay(
+                        content=SUMMARY_EXPIRED_MESSAGE,
+                        unavailable=True,
+                    )
+                )
+            else:
+                displays.append(SnapshotSummaryDisplay(content=artifact.content))
+            continue
+        if reference.get("kind") == "legacy_analysis":
+            analysis_id = reference.get("analysis_id")
+            content = legacy_summaries.get(analysis_id) if isinstance(analysis_id, int) else None
+            displays.append(
+                SnapshotSummaryDisplay(
+                    content=content or "AI summary unavailable.",
+                    unavailable=content is None,
+                )
+            )
+            continue
+        displays.append(SnapshotSummaryDisplay(content=None))
+    return tuple(displays)
+
+
+def _snapshot_summary_reference(
+    reference: AnalysisSummaryReference | None,
+) -> dict[str, object] | None:
+    if reference is None:
+        return None
+    if reference.storage == AnalysisSummaryStorage.ARTIFACT:
+        return {
+            "kind": "artifact",
+            "artifact_id": reference.artifact_id,
+            "created_at": reference.analyzed_at.isoformat(),
+            "provider": reference.provider,
+            "model_id": reference.model_id,
+            "reasoning_effort": reference.reasoning_effort,
+            "generator_version": reference.generator_version,
+        }
+    return {
+        "kind": "legacy_analysis",
+        "analysis_id": reference.analysis_id,
+        "analyzed_at": reference.analyzed_at.isoformat(),
+    }
 
 
 def list_run_history(db: Database, *, limit: int = 25) -> list[RunHistoryEntry]:
@@ -269,9 +392,7 @@ def reconstruct_digest_result(db: Database, *, run_id: int) -> DigestResult | No
         new_analysis_count=sum(
             item.analysis_origin == AnalysisOrigin.NEW_THIS_RUN for item in items
         ),
-        reused_analysis_count=sum(
-            item.analysis_origin == AnalysisOrigin.REUSED for item in items
-        ),
+        reused_analysis_count=sum(item.analysis_origin == AnalysisOrigin.REUSED for item in items),
         above_threshold_count=int(row["relevant_count"]),
         analysis_available=bool(snapshot.get("analysis_available", True)),
         items=items,
@@ -310,7 +431,8 @@ def _snapshot_digest_items(
     if not isinstance(payload, list):
         return []
     items: list[DigestItem] = []
-    for item in payload:
+    summary_displays = resolve_snapshot_summaries(db, payload)
+    for item_index, item in enumerate(payload):
         if not isinstance(item, dict):
             continue
         article = _snapshot_article(db, item)
@@ -321,6 +443,12 @@ def _snapshot_digest_items(
             profile_id=profile_id,
             profile_fingerprint=profile_fingerprint,
         )
+        summary_display = summary_displays[item_index]
+        analysis = _snapshot_history_analysis(
+            item,
+            summary_display,
+            fallback=analysis,
+        )
         if analysis is None:
             continue
         try:
@@ -329,6 +457,39 @@ def _snapshot_digest_items(
             origin = AnalysisOrigin.REUSED
         items.append(DigestItem(article=article, analysis=analysis, analysis_origin=origin))
     return items
+
+
+def _snapshot_history_analysis(
+    item: dict[str, object],
+    summary: SnapshotSummaryDisplay,
+    *,
+    fallback: AnalysisResult | None,
+) -> AnalysisResult | None:
+    if summary.content is None:
+        return fallback
+    score = item.get("relevance_score")
+    priority = item.get("reading_priority")
+    if isinstance(score, bool) or not isinstance(score, (int, float)):
+        return None
+    if priority not in {"LOW", "MEDIUM", "HIGH"}:
+        return None
+    why_it_matters = item.get("why_it_matters")
+    return AnalysisResult(
+        relevance_score=float(score),
+        relevance_reason=(
+            fallback.relevance_reason
+            if fallback is not None
+            else "Historical analysis facts retained; detailed explanation unavailable."
+        ),
+        matched_topics=list(fallback.matched_topics) if fallback is not None else [],
+        summary=summary.content,
+        why_it_matters=(
+            why_it_matters
+            if isinstance(why_it_matters, str) and why_it_matters.strip()
+            else "Historical relevance judgment retained."
+        ),
+        reading_priority=priority,
+    )
 
 
 def _snapshot_articles(db: Database, payload: object) -> list[Article]:

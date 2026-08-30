@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any
 
 from research_digest.analysis.base import LLMAnalyzer, article_analysis_key
+from research_digest.analysis_provenance import digest_analysis_provenance
 from research_digest.cancellation import (
     RunCancelled,
     activate_run_cancellation,
@@ -411,6 +413,7 @@ def run_digest(
             )
             if effective_status == APP_RUN_CANCELLED:
                 raise RunCancelled(run_id)
+            _collect_terminal_artifacts(db)
         result = DigestResult(
             run_id=run_id,
             profile=profile,
@@ -490,6 +493,8 @@ def run_digest(
             retrieval_complete=failed_retrieval_complete,
             retrieval_safety_limit=retrieval_safety_limit,
         )
+        if not defer_terminalization:
+            _collect_terminal_artifacts(db)
         deactivate_run_cancellation(cancellation_binding)
         raise
 
@@ -588,11 +593,16 @@ def _analyze_candidates_with_bounded_retries(
                     continue
                 if article.id is None:
                     raise DigestPipelineError("saved article is missing an id")
-                db.upsert_analysis(
+                db.persist_generated_digest_analysis(
                     article_id=article.id,
                     profile_id=profile.id,
                     profile_fingerprint=profile_fingerprint,
                     analysis=analysis,
+                    provenance=digest_analysis_provenance(
+                        analyzer,
+                        profile=profile,
+                        article=article,
+                    ),
                 )
                 analyses[key] = analysis
             db.update_app_run_progress(
@@ -677,3 +687,10 @@ def _unresolved_analysis_message(articles: Sequence[Article]) -> str:
     identifiers = ", ".join(article_analysis_key(article) for article in articles[:10])
     suffix = "" if len(articles) <= 10 else f", and {len(articles) - 10} more"
     return f"Analysis unavailable for {len(articles)} paper(s): {identifiers}{suffix}"
+
+
+def _collect_terminal_artifacts(db: Database) -> None:
+    """A cleanup failure must not change the scientific run verdict."""
+
+    with suppress(Exception):
+        db.collect_expired_ai_artifacts()

@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import cast
 
+from research_digest.ai_providers import LibrarySummaryProvider
 from research_digest.analysis.base import LLMAnalyzer
 from research_digest.analysis.codex_connections import CodexLibraryConnectionGenerator
 from research_digest.analysis.codex_context import CodexLibraryContextGenerator
@@ -14,6 +15,7 @@ from research_digest.config import AnalyzerProvider, AppConfig, ConfigError, loa
 from research_digest.connections import LibraryConnectionGenerator
 from research_digest.db import Database
 from research_digest.library_context import LibraryContextGenerator
+from research_digest.summary_providers import build_configured_library_summary_provider
 from research_digest.tags import AITagGenerator
 
 
@@ -60,6 +62,50 @@ def get_analyzer() -> tuple[LLMAnalyzer | None, str | None]:
     return cast(
         tuple[LLMAnalyzer | None, str | None],
         _connect_analyzer(
+            config.analyzer_provider,
+            config.openai_api_key is not None,
+            config.openai_model,
+            config.codex_model,
+            config.codex_timeout_seconds,
+        ),
+    )
+
+
+def get_library_summary_provider() -> tuple[LibrarySummaryProvider | None, str | None]:
+    """Build the configured summary adapter only after an explicit UI action."""
+
+    import streamlit as st
+
+    @st.cache_resource(show_spinner=False)  # type: ignore[untyped-decorator]
+    def _connect(
+        provider_name: AnalyzerProvider,
+        api_key_present: bool,
+        openai_model: str,
+        codex_model: str | None,
+        codex_timeout_seconds: float,
+    ) -> tuple[LibrarySummaryProvider | None, str | None]:
+        active = load_config()
+        connection = build_configured_library_summary_provider(
+            AppConfig(
+                db_path=active.db_path,
+                data_dir=active.data_dir,
+                config_dir=active.config_dir,
+                analyzer_provider=provider_name,
+                openai_api_key=active.openai_api_key if api_key_present else None,
+                openai_model=openai_model,
+                codex_model=codex_model,
+                codex_timeout_seconds=codex_timeout_seconds,
+            )
+        )
+        return connection.provider, connection.message
+
+    try:
+        config = load_config()
+    except ConfigError as exc:
+        return None, str(exc)
+    return cast(
+        tuple[LibrarySummaryProvider | None, str | None],
+        _connect(
             config.analyzer_provider,
             config.openai_api_key is not None,
             config.openai_model,

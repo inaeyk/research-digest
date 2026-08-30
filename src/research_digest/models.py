@@ -91,6 +91,11 @@ class LibrarySummarySource(StrEnum):
     LEGACY_DIGEST_ANALYSIS = "legacy_digest_analysis"
 
 
+class AnalysisSummaryStorage(StrEnum):
+    ARTIFACT = "artifact"
+    LEGACY_INLINE = "legacy_inline"
+
+
 class DateSelectionKind(StrEnum):
     LATEST_AVAILABLE = "LATEST_AVAILABLE"
     SINGLE_DATE = "SINGLE_DATE"
@@ -450,6 +455,67 @@ class AIArtifact:
         object.__setattr__(self, "created_at", ensure_utc(self.created_at))
         if self.expires_at is not None:
             object.__setattr__(self, "expires_at", ensure_utc(self.expires_at))
+
+
+@dataclass(frozen=True)
+class AIArtifactProvenance:
+    provider: str
+    model_id: str
+    reasoning_effort: str | None
+    generator_version: str
+    input_fingerprint: str
+
+    def __post_init__(self) -> None:
+        if not self.provider.strip():
+            raise ModelValidationError("AI provenance provider is required")
+        if not self.model_id.strip():
+            raise ModelValidationError("AI provenance model id is required")
+        if not self.generator_version.strip():
+            raise ModelValidationError("AI provenance generator version is required")
+        if not self.input_fingerprint.strip():
+            raise ModelValidationError("AI provenance input fingerprint is required")
+        object.__setattr__(self, "provider", normalize_whitespace(self.provider))
+        object.__setattr__(self, "model_id", normalize_whitespace(self.model_id))
+        object.__setattr__(
+            self,
+            "reasoning_effort",
+            normalize_whitespace(self.reasoning_effort) if self.reasoning_effort else None,
+        )
+        object.__setattr__(
+            self,
+            "generator_version",
+            normalize_whitespace(self.generator_version),
+        )
+        object.__setattr__(self, "input_fingerprint", self.input_fingerprint.strip())
+
+
+@dataclass(frozen=True)
+class AnalysisSummaryReference:
+    analysis_id: int
+    article_id: int
+    storage: AnalysisSummaryStorage
+    analyzed_at: datetime
+    artifact_id: int | None = None
+    provider: str | None = None
+    model_id: str | None = None
+    reasoning_effort: str | None = None
+    generator_version: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.analysis_id <= 0:
+            raise ModelValidationError("analysis summary reference id must be positive")
+        if self.article_id <= 0:
+            raise ModelValidationError("analysis summary reference article id must be positive")
+        storage = AnalysisSummaryStorage(self.storage)
+        if storage == AnalysisSummaryStorage.ARTIFACT:
+            if self.artifact_id is None or self.artifact_id <= 0:
+                raise ModelValidationError("artifact summary reference requires an artifact id")
+            if not self.provider or not self.model_id or not self.generator_version:
+                raise ModelValidationError("artifact summary reference requires provenance")
+        elif self.artifact_id is not None:
+            raise ModelValidationError("legacy inline summary reference has no artifact id")
+        object.__setattr__(self, "storage", storage)
+        object.__setattr__(self, "analyzed_at", ensure_utc(self.analyzed_at))
 
 
 @dataclass(frozen=True)

@@ -10,6 +10,7 @@ from unittest import mock
 from streamlit.testing.v1 import AppTest
 
 from research_digest.ai_artifacts import create_artifact
+from research_digest.ai_providers import GeneratedAIText
 from research_digest.collections import (
     add_article_to_collection,
     create_collection,
@@ -26,6 +27,7 @@ from research_digest.library import (
     set_interest_rating,
     set_reading_state,
 )
+from research_digest.library_summaries import library_summary_input_fingerprint
 from research_digest.models import (
     AIArtifactRetentionClass,
     AIArtifactType,
@@ -78,6 +80,36 @@ def _library_app(config_dir: str, data_dir: str) -> None:
     from research_digest.ui.pages.library import render
 
     render()
+
+
+class _CountingLibrarySummaryProvider:
+    provider = "app-test-summary"
+    model_id = "app-test-model"
+    reasoning_effort: str | None = "low"
+    generator_version = "app-test-summary-v1"
+
+    def __init__(self, *, fail: bool = False) -> None:
+        self.calls = 0
+        self.fail = fail
+
+    def generate_summary(
+        self,
+        *,
+        article: Article,
+        context: str,
+    ) -> GeneratedAIText:
+        del article
+        self.calls += 1
+        if self.fail:
+            raise RuntimeError("private /home/researcher sk-secret-summary-token")
+        return GeneratedAIText(
+            content=f"Explicit generated summary {self.calls}.",
+            provider=self.provider,
+            model_id=self.model_id,
+            reasoning_effort=self.reasoning_effort,
+            generator_version=self.generator_version,
+            input_fingerprint=library_summary_input_fingerprint(context),
+        )
 
 
 class LibraryUiSmokeTests(unittest.TestCase):
@@ -216,7 +248,7 @@ class LibraryUiSmokeTests(unittest.TestCase):
             {"Source page", "PDF"},
         )
         self.assertIn("Show all authors", [str(status.label) for status in at.status])
-        self.assert_button_absent(at, "Generate summary")
+        self.assert_button_present(at, "Regenerate summary")
         self.assert_button_absent(at, "New discussion")
         overview = list_conversation_overviews(self.db, article_id=self.article_id)[0]
         self.selectbox(at, "Inspect stored transcript").select(overview).run()
@@ -225,18 +257,59 @@ class LibraryUiSmokeTests(unittest.TestCase):
         self.assert_text_present(at, "The stored answer remains local and read-only.")
 
     def test_detail_without_summary_or_discussion_is_explicit(self) -> None:
-        at = self.run_app()
-        self.click_button(at, "Second saved paper").run()
+        with mock.patch(
+            "research_digest.ui.pages.library.get_library_summary_provider",
+            side_effect=AssertionError("rendering a missing summary invoked AI"),
+        ) as provider_factory:
+            at = self.run_app()
+            self.click_button(at, "Second saved paper").run()
 
+        provider_factory.assert_not_called()
         self.assert_no_streamlit_exceptions(at)
         self.assert_text_present(at, "No AI summary generated.")
-        self.assert_text_present(
-            at,
-            "Summary generation will be added in a later Library stage.",
-        )
         self.assert_text_present(at, "No discussions yet.")
-        self.assert_button_absent(at, "Generate summary")
+        self.assert_button_present(at, "Generate summary")
         self.assert_button_absent(at, "Ask AI")
+
+    def test_explicit_generate_calls_once_and_refresh_does_not_repeat(self) -> None:
+        provider = _CountingLibrarySummaryProvider()
+        with mock.patch(
+            "research_digest.ui.pages.library.get_library_summary_provider",
+            return_value=(provider, None),
+        ) as provider_factory:
+            at = self.run_app()
+            self.click_button(at, "Second saved paper").run()
+            self.click_button(at, "Generate summary").run()
+
+            self.assert_no_streamlit_exceptions(at)
+            self.assertEqual(provider.calls, 1)
+            self.assert_text_present(at, "Explicit generated summary 1.")
+            self.assert_button_present(at, "Regenerate summary")
+            at.run()
+            self.assertEqual(provider.calls, 1)
+
+        provider_factory.assert_called_once()
+        artifacts = self.db.list_ai_artifacts(self.second_article_id)
+        self.assertEqual(len(artifacts), 1)
+        self.assertEqual(artifacts[0].content, "Explicit generated summary 1.")
+        self.assertIsNone(self.db.get_library_note(self.second_article_id))
+
+    def test_provider_failure_is_sanitized_and_preserves_no_summary_state(self) -> None:
+        provider = _CountingLibrarySummaryProvider(fail=True)
+        with mock.patch(
+            "research_digest.ui.pages.library.get_library_summary_provider",
+            return_value=(provider, None),
+        ):
+            at = self.run_app()
+            self.click_button(at, "Second saved paper").run()
+            self.click_button(at, "Generate summary").run()
+
+        self.assert_no_streamlit_exceptions(at)
+        self.assertEqual(provider.calls, 1)
+        errors = [str(element.value) for element in at.error]
+        self.assertTrue(any("Summary generation failed" in value for value in errors))
+        self.assertFalse(any("/home/" in value or "sk-secret" in value for value in errors))
+        self.assertEqual(self.db.list_ai_artifacts(self.second_article_id), [])
 
     def test_detail_edits_persist_without_crossing_note_or_provenance_boundaries(self) -> None:
         at = self.run_app()
@@ -344,6 +417,10 @@ class LibraryUiSmokeTests(unittest.TestCase):
                 "research_digest.library_context.generate_library_context_for_item",
                 side_effect=forbidden,
             ) as context_execution,
+            mock.patch(
+                "research_digest.ui.pages.library.get_library_summary_provider",
+                side_effect=forbidden,
+            ) as summary_provider,
         ):
             at = self.run_app()
             self.text_input(at, "Search").set_value("Library")
@@ -369,6 +446,7 @@ class LibraryUiSmokeTests(unittest.TestCase):
             tag_execution,
             connection_execution,
             context_execution,
+            summary_provider,
         ):
             boundary.assert_not_called()
 

@@ -470,7 +470,7 @@ class AIArtifactFoundationTests(unittest.TestCase):
         self.assertIsNone(self.db.get_ai_artifact(expired.id))
         self.assertIsNotNone(self.db.get_ai_artifact(future.id))
 
-    def test_gc_protects_saved_and_conversation_referenced_artifacts(self) -> None:
+    def test_gc_reclaims_nonretained_saved_artifact_but_protects_conversation_ref(self) -> None:
         save_article(self.db, self.article_id)
         saved_temporary = self.db.create_ai_artifact(
             article_id=self.article_id,
@@ -505,9 +505,9 @@ class AIArtifactFoundationTests(unittest.TestCase):
         self.assertIsNotNone(conversation.id)
         self.assertEqual(
             collect_expired_artifacts(self.db, now=FIXED_NOW + timedelta(days=10)),
-            0,
+            1,
         )
-        self.assertIsNotNone(self.db.get_ai_artifact(saved_temporary.id))
+        self.assertIsNone(self.db.get_ai_artifact(saved_temporary.id))
         self.assertIsNotNone(self.db.get_ai_artifact(rolling.id))
 
     def test_preferred_summary_resolution_reuses_without_generation_or_copy(self) -> None:
@@ -719,12 +719,12 @@ class Schema19MigrationTests(unittest.TestCase):
         analyzer_factory.assert_not_called()
         openai_analyze.assert_not_called()
         codex_analyze.assert_not_called()
-        self.assertEqual(CURRENT_SCHEMA_VERSION, 19)
-        self.assertEqual(migrated.get_schema_version(), 19)
+        self.assertEqual(CURRENT_SCHEMA_VERSION, 20)
+        self.assertEqual(migrated.get_schema_version(), 20)
         self.assertIsNotNone(migrated.last_migration_backup_path)
         assert migrated.last_migration_backup_path is not None
         self.assertTrue(migrated.last_migration_backup_path.exists())
-        self.assertIn("backup-v18-to-v19", migrated.last_migration_backup_path.name)
+        self.assertIn("backup-v18-to-v20", migrated.last_migration_backup_path.name)
         with sqlite3.connect(migrated.last_migration_backup_path) as backup:
             version = backup.execute(
                 "SELECT value FROM schema_metadata WHERE key = 'schema_version'"
@@ -783,7 +783,7 @@ class Schema19MigrationTests(unittest.TestCase):
         migrated = Database(self.path)
         first_backup = migrated.last_migration_backup_path
         reopened = Database(self.path)
-        self.assertEqual(reopened.get_schema_version(), 19)
+        self.assertEqual(reopened.get_schema_version(), 20)
         self.assertIsNone(reopened.last_migration_backup_path)
         self.assertEqual(reopened.get_last_migration_backup_path(), first_backup)
         entry = set_interest_rating(reopened, article_id=1, interest_rating=4)
@@ -815,7 +815,7 @@ class Schema19MigrationTests(unittest.TestCase):
             content="Export this complete transcript.",
         )
         payload = export_user_data(db_path=self.path)
-        self.assertEqual(payload["schema_version"], 19)
+        self.assertEqual(payload["schema_version"], 20)
         self.assertEqual(payload["library_articles"][0]["interest_rating"], 4)  # type: ignore[index]
         self.assertEqual(payload["ai_artifacts"][0]["id"], artifact.id)  # type: ignore[index]
         self.assertEqual(payload["ai_conversations"][0]["id"], conversation.id)  # type: ignore[index]

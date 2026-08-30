@@ -33,6 +33,7 @@ from research_digest.preselection import (
 
 _REDACTED_ENV_KEYS = ("OPENAI_API_KEY", "CODEX_API_KEY")
 CODEX_ABSTRACT_PRESELECTOR_VERSION = "codex_abstract_v1"
+CODEX_DIGEST_ANALYSIS_VERSION = "codex_digest_analysis_v1"
 DEFAULT_PRESELECTION_CHUNK_SIZE = 20
 
 
@@ -51,6 +52,10 @@ class CodexRunner(Protocol):
 
 class CodexCLIAnalyzer(LLMAnalyzer):
     """Analyze articles in batches using `codex exec`."""
+
+    artifact_provider = "codex_cli"
+    artifact_generator_version = CODEX_DIGEST_ANALYSIS_VERSION
+    artifact_reasoning_effort: str | None = None
 
     def __init__(
         self,
@@ -74,6 +79,10 @@ class CodexCLIAnalyzer(LLMAnalyzer):
                     "codex executable not found. Install Codex CLI and sign in with ChatGPT."
                 )
             self.codex_path = resolved
+
+    @property
+    def artifact_model_id(self) -> str:
+        return self.model or "UNAVAILABLE"
 
     def analyze(self, *, profile: InterestProfile, article: Article) -> AnalysisResult:
         results = self.analyze_many(profile=profile, articles=[article])

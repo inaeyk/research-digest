@@ -35,6 +35,7 @@ from research_digest.library import (
     unsave_article,
 )
 from research_digest.library_context import build_collection_intelligence_snapshot
+from research_digest.library_summaries import generate_library_summary
 from research_digest.models import LibraryCollection, LibraryTag, ReadingState
 from research_digest.tags import (
     TagValidationError,
@@ -44,7 +45,7 @@ from research_digest.tags import (
     remove_user_tag,
 )
 from research_digest.ui.article_header import render_article_header
-from research_digest.ui.common import get_database
+from research_digest.ui.common import get_database, get_library_summary_provider
 from research_digest.ui.library_view import (
     build_dense_library_row,
     format_compact_date,
@@ -580,10 +581,51 @@ def _render_ai_summary(item: LibraryItem) -> None:
     summary = resolve_preferred_library_summary(get_database(), article_id=article_id)
     if summary is None:
         st.caption("No AI summary generated.")
-        st.caption("Summary generation will be added in a later Library stage.")
+        action_label = "Generate summary"
+        regenerate = False
+    else:
+        st.caption(summary_source_label(summary))
+        st.markdown(summary.content)
+        action_label = "Regenerate summary"
+        regenerate = True
+    request_key = f"library_summary_request_{article_id}"
+    running = bool(st.session_state.get(request_key, False))
+    if not st.button(
+        action_label,
+        key=f"library_detail_summary_action_{article_id}",
+        type="tertiary",
+        icon=":material/auto_awesome:",
+        disabled=running,
+    ):
         return
-    st.caption(summary_source_label(summary))
-    st.markdown(summary.content)
+    if running:
+        return
+    st.session_state[request_key] = True
+    try:
+        provider, provider_message = get_library_summary_provider()
+        if provider is None:
+            st.error(
+                provider_message or "The configured summary provider is unavailable.",
+                icon=":material/error:",
+            )
+            return
+        with st.spinner("Generating a concise summary from the stored abstract…"):
+            result = generate_library_summary(
+                get_database(),
+                article_id=article_id,
+                provider=provider,
+                regenerate=regenerate,
+            )
+        message = "Existing compatible summary reused." if result.reused else "Summary saved."
+        st.toast(message, icon=":material/check_circle:")
+        st.rerun()
+    except Exception as exc:
+        st.error(
+            f"Summary generation failed: {sanitize_error(exc)}",
+            icon=":material/error:",
+        )
+    finally:
+        st.session_state.pop(request_key, None)
 
 
 def _render_ai_discussions(item: LibraryItem) -> None:

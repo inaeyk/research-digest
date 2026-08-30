@@ -23,11 +23,16 @@ from research_digest.preselection import (
 )
 
 OPENAI_ABSTRACT_PRESELECTOR_VERSION = "openai_abstract_v1"
+OPENAI_DIGEST_ANALYSIS_VERSION = "openai_digest_analysis_v1"
 DEFAULT_PRESELECTION_CHUNK_SIZE = 20
 
 
 class OpenAIAnalyzer(LLMAnalyzer):
     """Analyze articles against interest profiles using OpenAI's Responses API."""
+
+    artifact_provider = "openai"
+    artifact_generator_version = OPENAI_DIGEST_ANALYSIS_VERSION
+    artifact_reasoning_effort: str | None = None
 
     def __init__(self, *, api_key: str | None = None, model: str | None = None) -> None:
         self.api_key = api_key or os.environ.get("OPENAI_API_KEY") or None
@@ -41,6 +46,10 @@ class OpenAIAnalyzer(LLMAnalyzer):
             raise AnalyzerUnavailable("the openai package is not installed") from exc
 
         self._client = OpenAI(api_key=self.api_key)
+
+    @property
+    def artifact_model_id(self) -> str:
+        return self.model
 
     @classmethod
     def from_environment(cls) -> OpenAIAnalyzer:

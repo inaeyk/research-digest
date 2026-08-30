@@ -20,8 +20,25 @@ class GeneratedAIText:
     generator_version: str
     input_fingerprint: str
 
+    def __post_init__(self) -> None:
+        if not self.content.strip():
+            raise ValueError("generated AI text content is required")
+        for label, value in (
+            ("provider", self.provider),
+            ("model id", self.model_id),
+            ("generator version", self.generator_version),
+            ("input fingerprint", self.input_fingerprint),
+        ):
+            if not value.strip():
+                raise ValueError(f"generated AI text {label} is required")
+
 
 class LibrarySummaryProvider(Protocol):
+    provider: str
+    model_id: str
+    reasoning_effort: str | None
+    generator_version: str
+
     def generate_summary(
         self,
         *,

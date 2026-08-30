@@ -188,6 +188,7 @@ def export_user_data(*, db_path: Path, schema_version: int | None = None) -> dic
             "library_collections": _library_collections(conn),
             "library_collection_memberships": _library_collection_memberships(conn),
             "ai_artifacts": _ai_artifacts(conn),
+            "relevance_analysis_summary_links": _relevance_analysis_summary_links(conn),
             "ai_conversations": _ai_conversations(conn),
             "ai_conversation_messages": _ai_conversation_messages(conn),
             "library_article_connections": _library_article_connections(conn),
@@ -689,6 +690,44 @@ def _ai_artifacts(conn: sqlite3.Connection) -> list[dict[str, object]]:
             "input_fingerprint": str(row["input_fingerprint"]),
             "retention_class": str(row["retention_class"]),
             "expires_at": str(row["expires_at"]) if row["expires_at"] is not None else None,
+        }
+        for row in rows
+    ]
+
+
+def _relevance_analysis_summary_links(
+    conn: sqlite3.Connection,
+) -> list[dict[str, object]]:
+    if (
+        not _table_exists(conn, "relevance_analyses")
+        or "summary_artifact_id" not in _table_columns(conn, "relevance_analyses")
+    ):
+        return []
+    rows = conn.execute(
+        """
+        SELECT
+            analyses.id,
+            analyses.profile_id,
+            analyses.profile_fingerprint,
+            analyses.summary_artifact_id,
+            articles.source,
+            articles.source_article_id
+        FROM relevance_analyses AS analyses
+        JOIN articles ON articles.id = analyses.article_id
+        WHERE analyses.summary_artifact_id IS NOT NULL
+        ORDER BY analyses.id
+        """
+    ).fetchall()
+    return [
+        {
+            "analysis_id": int(row["id"]),
+            "profile_id": int(row["profile_id"]),
+            "profile_fingerprint": str(row["profile_fingerprint"]),
+            "summary_artifact_id": int(row["summary_artifact_id"]),
+            "article": {
+                "source": str(row["source"]),
+                "source_article_id": str(row["source_article_id"]),
+            },
         }
         for row in rows
     ]
@@ -1297,3 +1336,9 @@ def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
         (table_name,),
     ).fetchone()
     return row is not None
+
+
+def _table_columns(conn: sqlite3.Connection, table_name: str) -> set[str]:
+    if not _table_exists(conn, table_name):
+        return set()
+    return {str(row["name"]) for row in conn.execute(f"PRAGMA table_info({table_name})")}
