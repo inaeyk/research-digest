@@ -2,10 +2,23 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 
 from research_digest.db import Database
 from research_digest.models import AIConversation, AIConversationMessage, AIConversationRole
+
+
+@dataclass(frozen=True)
+class AIConversationOverview:
+    conversation: AIConversation
+    message_count: int
+
+    def __post_init__(self) -> None:
+        if self.conversation.id is None:
+            raise ValueError("persisted conversation id is required")
+        if self.message_count < 0:
+            raise ValueError("message count must not be negative")
 
 
 def create_conversation(
@@ -58,6 +71,19 @@ def list_messages(
     conversation_id: int,
 ) -> list[AIConversationMessage]:
     return db.list_ai_conversation_messages(conversation_id)
+
+
+def list_conversation_overviews(
+    db: Database,
+    *,
+    article_id: int,
+) -> list[AIConversationOverview]:
+    """List stored discussions with counts in one read-only query."""
+
+    return [
+        AIConversationOverview(conversation=conversation, message_count=message_count)
+        for conversation, message_count in db.list_ai_conversation_overviews(article_id)
+    ]
 
 
 def set_rolling_summary(

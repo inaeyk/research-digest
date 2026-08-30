@@ -56,10 +56,11 @@ def refresh_library_search_document(db: Database, *, article_id: int) -> None:
 
 
 def search_saved_library_article_ids(db: Database, *, query: str) -> list[int]:
+    """Search current normalized Library content without rebuilding per-paper caches."""
+
     if not query.strip():
         return []
-    rebuild_library_search_index(db)
-    return db.search_library_document_article_ids(query)
+    return db.search_saved_library_content_article_ids(query)
 
 
 def build_library_search_document(db: Database, *, article: Article) -> str:

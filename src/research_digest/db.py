@@ -479,6 +479,23 @@ class Database:
             ).fetchall()
         return [_library_entry_from_row(row) for row in rows]
 
+    def list_saved_library_notes(self) -> dict[int, LibraryNote]:
+        """Load every saved-paper note in one bounded query."""
+
+        with self._connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT notes.*
+                FROM library_article_notes AS notes
+                JOIN library_articles
+                    ON library_articles.article_id = notes.article_id
+                WHERE library_articles.saved = 1
+                ORDER BY notes.article_id ASC
+                """
+            ).fetchall()
+        notes = (_library_note_from_row(row) for row in rows)
+        return {note.article_id: note for note in notes}
+
     def list_saved_library_article_ids(self, article_ids: Iterable[int]) -> set[int]:
         ids = sorted({int(article_id) for article_id in article_ids if int(article_id) > 0})
         if not ids:
@@ -906,6 +923,34 @@ class Database:
             ).fetchall()
         return [_ai_conversation_message_from_row(row) for row in rows]
 
+    def list_ai_conversation_overviews(
+        self,
+        article_id: int,
+    ) -> list[tuple[AIConversation, int]]:
+        """Load conversation headers and message counts without per-thread queries."""
+
+        if article_id <= 0:
+            raise ValueError("article id must be positive")
+        with self._connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    conversations.*,
+                    COUNT(messages.id) AS message_count
+                FROM ai_conversations AS conversations
+                LEFT JOIN ai_conversation_messages AS messages
+                    ON messages.conversation_id = conversations.id
+                WHERE conversations.article_id = ?
+                GROUP BY conversations.id
+                ORDER BY conversations.updated_at DESC, conversations.id DESC
+                """,
+                (article_id,),
+            ).fetchall()
+        return [
+            (_ai_conversation_from_row(row), int(row["message_count"]))
+            for row in rows
+        ]
+
     def get_latest_relevance_context(
         self,
         article_id: int,
@@ -930,6 +975,46 @@ class Database:
                 (article_id,),
             ).fetchone()
         return _library_relevance_context_from_row(row) if row is not None else None
+
+    def list_latest_saved_library_relevance_contexts(
+        self,
+    ) -> dict[int, LibraryRelevanceContext]:
+        """Load the newest analysis context for every saved paper without N+1 reads."""
+
+        with self._connection() as conn:
+            rows = conn.execute(
+                """
+                WITH ranked_contexts AS (
+                    SELECT
+                        relevance_analyses.article_id,
+                        relevance_analyses.profile_id,
+                        interest_profiles.name AS profile_name,
+                        relevance_analyses.relevance_score,
+                        relevance_analyses.reading_priority,
+                        relevance_analyses.analyzed_at,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY relevance_analyses.article_id
+                            ORDER BY
+                                relevance_analyses.analyzed_at DESC,
+                                relevance_analyses.id DESC
+                        ) AS context_rank
+                    FROM relevance_analyses
+                    JOIN interest_profiles
+                        ON interest_profiles.id = relevance_analyses.profile_id
+                    JOIN library_articles
+                        ON library_articles.article_id = relevance_analyses.article_id
+                    WHERE library_articles.saved = 1
+                )
+                SELECT *
+                FROM ranked_contexts
+                WHERE context_rank = 1
+                ORDER BY article_id ASC
+                """
+            ).fetchall()
+        return {
+            int(row["article_id"]): _library_relevance_context_from_row(row)
+            for row in rows
+        }
 
     def upsert_library_tag(
         self,
@@ -1087,6 +1172,44 @@ class Database:
                 (article_id,),
             ).fetchall()
         return [_library_tag_assignment_from_row(row) for row in rows]
+
+    def list_saved_library_tag_assignments(
+        self,
+    ) -> dict[int, list[LibraryTagAssignment]]:
+        """Load normalized tag relationships for all saved papers in one query."""
+
+        with self._connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    assignments.id AS assignment_id,
+                    assignments.article_id,
+                    assignments.origin,
+                    assignments.ai_provenance_json,
+                    assignments.created_at AS assignment_created_at,
+                    assignments.updated_at AS assignment_updated_at,
+                    tags.id AS tag_id,
+                    tags.normalized_name,
+                    tags.display_name,
+                    tags.created_at AS tag_created_at,
+                    tags.updated_at AS tag_updated_at
+                FROM library_tag_assignments AS assignments
+                JOIN library_tags AS tags ON tags.id = assignments.tag_id
+                JOIN library_articles
+                    ON library_articles.article_id = assignments.article_id
+                WHERE library_articles.saved = 1
+                ORDER BY
+                    assignments.article_id ASC,
+                    assignments.origin DESC,
+                    tags.display_name COLLATE NOCASE ASC,
+                    tags.id ASC
+                """
+            ).fetchall()
+        assignments_by_article: dict[int, list[LibraryTagAssignment]] = {}
+        for row in rows:
+            assignment = _library_tag_assignment_from_row(row)
+            assignments_by_article.setdefault(assignment.article_id, []).append(assignment)
+        return assignments_by_article
 
     def suppress_ai_library_tag(
         self,
@@ -1349,6 +1472,37 @@ class Database:
             ).fetchall()
         return [_library_collection_from_row(row) for row in rows]
 
+    def list_saved_library_collections_by_article(
+        self,
+    ) -> dict[int, list[LibraryCollection]]:
+        """Load normalized collection pointers for all saved papers in one query."""
+
+        with self._connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    memberships.article_id AS membership_article_id,
+                    collections.*
+                FROM library_collection_memberships AS memberships
+                JOIN library_collections AS collections
+                    ON collections.id = memberships.collection_id
+                JOIN library_articles
+                    ON library_articles.article_id = memberships.article_id
+                WHERE library_articles.saved = 1
+                ORDER BY
+                    memberships.article_id ASC,
+                    collections.name COLLATE NOCASE ASC,
+                    collections.id ASC
+                """
+            ).fetchall()
+        collections_by_article: dict[int, list[LibraryCollection]] = {}
+        for row in rows:
+            article_id = int(row["membership_article_id"])
+            collections_by_article.setdefault(article_id, []).append(
+                _library_collection_from_row(row)
+            )
+        return collections_by_article
+
     def list_library_collection_memberships(
         self,
         collection_id: int | None = None,
@@ -1444,6 +1598,70 @@ class Database:
                 ORDER BY library_articles.saved_at DESC, docs.article_id ASC
                 """,
                 (pattern,),
+            ).fetchall()
+        return [int(row["article_id"]) for row in rows]
+
+    def search_saved_library_content_article_ids(self, query: str) -> list[int]:
+        """Search normalized saved-paper content in one read-only SQLite query."""
+
+        needle = query.strip().casefold()
+        if not needle:
+            return []
+        pattern = f"%{_escape_like(needle)}%"
+        params = (pattern,) * 13
+        with self._connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT library_articles.article_id
+                FROM library_articles
+                JOIN articles ON articles.id = library_articles.article_id
+                LEFT JOIN library_article_notes AS notes
+                    ON notes.article_id = articles.id
+                WHERE library_articles.saved = 1
+                  AND (
+                    lower(articles.title) LIKE ? ESCAPE '\\'
+                    OR lower(articles.authors_json) LIKE ? ESCAPE '\\'
+                    OR lower(articles.abstract) LIKE ? ESCAPE '\\'
+                    OR lower(articles.categories_json) LIKE ? ESCAPE '\\'
+                    OR lower(articles.source) LIKE ? ESCAPE '\\'
+                    OR lower(articles.source_article_id) LIKE ? ESCAPE '\\'
+                    OR lower(COALESCE(notes.note_text, '')) LIKE ? ESCAPE '\\'
+                    OR EXISTS (
+                        SELECT 1
+                        FROM library_tag_assignments AS assignments
+                        JOIN library_tags AS tags ON tags.id = assignments.tag_id
+                        WHERE assignments.article_id = articles.id
+                          AND (
+                            lower(tags.display_name) LIKE ? ESCAPE '\\'
+                            OR lower(tags.normalized_name) LIKE ? ESCAPE '\\'
+                          )
+                    )
+                    OR EXISTS (
+                        SELECT 1
+                        FROM library_collection_memberships AS memberships
+                        JOIN library_collections AS collections
+                            ON collections.id = memberships.collection_id
+                        WHERE memberships.article_id = articles.id
+                          AND (
+                            lower(collections.name) LIKE ? ESCAPE '\\'
+                            OR lower(collections.description) LIKE ? ESCAPE '\\'
+                          )
+                    )
+                    OR EXISTS (
+                        SELECT 1
+                        FROM relevance_analyses
+                        JOIN interest_profiles
+                            ON interest_profiles.id = relevance_analyses.profile_id
+                        WHERE relevance_analyses.article_id = articles.id
+                          AND (
+                            lower(interest_profiles.name) LIKE ? ESCAPE '\\'
+                            OR lower(relevance_analyses.reading_priority) LIKE ? ESCAPE '\\'
+                          )
+                    )
+                  )
+                ORDER BY library_articles.saved_at DESC, articles.id ASC
+                """,
+                params,
             ).fetchall()
         return [int(row["article_id"]) for row in rows]
 

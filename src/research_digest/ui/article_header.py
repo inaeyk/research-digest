@@ -25,7 +25,7 @@ _MONTH_NAMES = (
     "Dec",
 )
 
-ArticleTitleStyle = Literal["subheader", "markdown"]
+ArticleTitleStyle = Literal["title", "subheader", "markdown"]
 
 
 @dataclass(frozen=True)
@@ -124,7 +124,9 @@ def render_article_identity(
 ) -> None:
     import streamlit as st
 
-    if title_style == "subheader":
+    if title_style == "title":
+        st.title(title)
+    elif title_style == "subheader":
         st.subheader(title)
     else:
         st.markdown(f"**{title}**")
@@ -133,9 +135,7 @@ def render_article_identity(
     if show_all_authors and author_presentation.hidden_count:
         with st.expander(
             "Show all authors",
-            key=f"article_authors_{context}",
             icon=":material/group:",
-            type="compact",
         ):
             st.write(author_presentation.full)
     st.caption(
