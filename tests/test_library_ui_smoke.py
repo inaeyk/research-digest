@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import tempfile
 import unittest
 from datetime import UTC, datetime
@@ -20,6 +21,7 @@ from research_digest.conversations import (
     append_message,
     create_conversation,
     list_conversation_overviews,
+    list_messages,
 )
 from research_digest.db import Database
 from research_digest.library import (
@@ -109,6 +111,51 @@ class _CountingLibrarySummaryProvider:
             reasoning_effort=self.reasoning_effort,
             generator_version=self.generator_version,
             input_fingerprint=library_summary_input_fingerprint(context),
+        )
+
+
+class _CountingConversationProvider:
+    provider = "app-test-conversation"
+    model_id = "app-test-research-model"
+    reasoning_effort: str | None = "high"
+    response_generator_version = "app-test-conversation-v1"
+    summary_generator_version = "app-test-conversation-summary-v1"
+    timeout_seconds = 5.0
+
+    def __init__(self, *, fail: bool = False) -> None:
+        self.response_calls = 0
+        self.summary_calls = 0
+        self.fail = fail
+
+    def respond(self, *, article: Article, context: str) -> GeneratedAIText:
+        del article
+        self.response_calls += 1
+        if self.fail:
+            raise RuntimeError("private /home/researcher sk-secret-conversation-token")
+        return GeneratedAIText(
+            content=f"Persisted research answer {self.response_calls}.",
+            provider=self.provider,
+            model_id=self.model_id,
+            reasoning_effort=self.reasoning_effort,
+            generator_version=self.response_generator_version,
+            input_fingerprint=hashlib.sha256(context.encode("utf-8")).hexdigest(),
+        )
+
+    def summarize_conversation(
+        self,
+        *,
+        article: Article,
+        context: str,
+    ) -> GeneratedAIText:
+        del article
+        self.summary_calls += 1
+        return GeneratedAIText(
+            content="Bounded rolling research state.",
+            provider=self.provider,
+            model_id=self.model_id,
+            reasoning_effort=self.reasoning_effort,
+            generator_version=self.summary_generator_version,
+            input_fingerprint=hashlib.sha256(context.encode("utf-8")).hexdigest(),
         )
 
 
@@ -227,8 +274,8 @@ class LibraryUiSmokeTests(unittest.TestCase):
             [str(value.value) for value in at.subheader],
             [
                 "My Library state",
-                "My Notes",
                 "Abstract",
+                "My Notes",
                 "AI Summary",
                 "AI Discussions",
                 "Bibliography and links",
@@ -239,7 +286,7 @@ class LibraryUiSmokeTests(unittest.TestCase):
         self.assert_text_present(at, "Stored source abstract for Library smoke paper.")
         self.assert_text_present(at, "Stored preferred AI summary for display only.")
         self.assert_text_present(at, "Library summary · 2026-08-20")
-        self.assert_text_present(at, "Stored discussion")
+        self.assert_button_present(at, "Stored discussion")
         self.assert_text_present(at, "2 messages · updated")
         self.assert_text_present(at, "Published Aug 14, 2026")
         self.assert_text_present(at, "arXiv:2608.library-smoke")
@@ -250,11 +297,12 @@ class LibraryUiSmokeTests(unittest.TestCase):
         self.assertIn("Show all authors", [str(status.label) for status in at.status])
         self.assert_button_present(at, "Regenerate summary")
         self.assert_button_absent(at, "New discussion")
-        overview = list_conversation_overviews(self.db, article_id=self.article_id)[0]
-        self.selectbox(at, "Inspect stored transcript").select(overview).run()
+        self.assert_button_present(at, "Create discussion")
+        self.click_button(at, "Stored discussion").run()
         self.assert_no_streamlit_exceptions(at)
         self.assert_text_present(at, "What is the instability mechanism?")
         self.assert_text_present(at, "The stored answer remains local and read-only.")
+        self.text_area(at, "Message")
 
     def test_detail_without_summary_or_discussion_is_explicit(self) -> None:
         with mock.patch(
@@ -270,6 +318,7 @@ class LibraryUiSmokeTests(unittest.TestCase):
         self.assert_text_present(at, "No discussions yet.")
         self.assert_button_present(at, "Generate summary")
         self.assert_button_absent(at, "Ask AI")
+        self.assert_button_present(at, "Create discussion")
 
     def test_explicit_generate_calls_once_and_refresh_does_not_repeat(self) -> None:
         provider = _CountingLibrarySummaryProvider()
@@ -328,17 +377,15 @@ class LibraryUiSmokeTests(unittest.TestCase):
         self.assertEqual(entry.interest_rating, 4)
         self.assertEqual(entry.reading_state, ReadingState.UNREAD)
         self.assertEqual(
-            {collection.name for collection in self.db.list_library_collections_for_article(
-                self.article_id
-            )},
+            {
+                collection.name
+                for collection in self.db.list_library_collections_for_article(self.article_id)
+            },
             {"Core papers", "Follow-up"},
         )
         assignments = self.db.list_library_tag_assignments(self.article_id)
         self.assertEqual(
-            {
-                (assignment.tag.display_name, assignment.origin.value)
-                for assignment in assignments
-            },
+            {(assignment.tag.display_name, assignment.origin.value) for assignment in assignments},
             {
                 ("comparison", "USER"),
                 ("gravity", "USER"),
@@ -421,6 +468,10 @@ class LibraryUiSmokeTests(unittest.TestCase):
                 "research_digest.ui.pages.library.get_library_summary_provider",
                 side_effect=forbidden,
             ) as summary_provider,
+            mock.patch(
+                "research_digest.ui.pages.library.get_research_conversation_provider",
+                side_effect=forbidden,
+            ) as conversation_provider,
         ):
             at = self.run_app()
             self.text_input(at, "Search").set_value("Library")
@@ -433,8 +484,7 @@ class LibraryUiSmokeTests(unittest.TestCase):
             self.multiselect(at, "User tags").select("comparison").run()
             self.text_area(at, "Note").set_value("AI-free note edit.")
             self.click_button(at, "Save note").run()
-            overview = list_conversation_overviews(self.db, article_id=self.article_id)[0]
-            self.selectbox(at, "Inspect stored transcript").select(overview).run()
+            self.click_button(at, "Stored discussion").run()
 
         self.assert_no_streamlit_exceptions(at)
         for boundary in (
@@ -447,8 +497,114 @@ class LibraryUiSmokeTests(unittest.TestCase):
             connection_execution,
             context_execution,
             summary_provider,
+            conversation_provider,
         ):
             boundary.assert_not_called()
+
+    def test_new_discussion_is_zero_ai_and_send_is_exactly_one_call(self) -> None:
+        provider = _CountingConversationProvider()
+        with mock.patch(
+            "research_digest.ui.pages.library.get_research_conversation_provider",
+            return_value=(provider, None),
+        ) as provider_factory:
+            at = self.run_app()
+            self.click_button(at, "Second saved paper").run()
+            self.text_input(at, "Title (optional)").set_value("Scalar subsector")
+            self.click_button(at, "Create discussion").run()
+
+            self.assertEqual(provider.response_calls, 0)
+            self.assertEqual(provider.summary_calls, 0)
+            self.text_area(at, "Message").set_value("How does the scalar mode enter?")
+            self.click_button(at, "Send").run()
+
+            self.assert_no_streamlit_exceptions(at)
+            self.assertEqual(provider.response_calls, 1)
+            self.assertEqual(provider.summary_calls, 0)
+            self.assert_text_present(at, "How does the scalar mode enter?")
+            self.assert_text_present(at, "Persisted research answer 1.")
+            at.run()
+            self.assertEqual(provider.response_calls, 1)
+
+        provider_factory.assert_called_once()
+        overviews = list_conversation_overviews(self.db, article_id=self.second_article_id)
+        self.assertEqual(len(overviews), 1)
+        self.assertEqual(overviews[0].conversation.title, "Scalar subsector")
+        assert overviews[0].conversation.id is not None
+        self.assertEqual(
+            [
+                message.role
+                for message in list_messages(
+                    self.db,
+                    conversation_id=overviews[0].conversation.id,
+                )
+            ],
+            [AIConversationRole.USER, AIConversationRole.ASSISTANT],
+        )
+
+    def test_takeaway_requires_editable_confirmation_and_spends_no_new_ai(self) -> None:
+        provider = _CountingConversationProvider()
+        with mock.patch(
+            "research_digest.ui.pages.library.get_research_conversation_provider",
+            return_value=(provider, None),
+        ):
+            at = self.run_app()
+            self.click_button(at, "Library smoke paper").run()
+            self.click_button(at, "Stored discussion").run()
+            self.click_button(at, "Add takeaway to My Notes").run()
+
+            note_before = self.db.get_library_note(self.article_id)
+            assert note_before is not None
+            self.assertEqual(
+                note_before.note_text,
+                "Human note remains authoritative and separate.",
+            )
+            self.text_area(at, "Review takeaway before adding").set_value(
+                "Human-approved instability takeaway."
+            )
+            self.click_button(at, "Add to My Notes").run()
+
+        self.assert_no_streamlit_exceptions(at)
+        note_after = self.db.get_library_note(self.article_id)
+        assert note_after is not None
+        self.assertEqual(
+            note_after.note_text,
+            "Human note remains authoritative and separate.\n\n"
+            "Human-approved instability takeaway.",
+        )
+        self.assertEqual(provider.response_calls, 0)
+        self.assertEqual(provider.summary_calls, 0)
+        conversation = list_conversation_overviews(self.db, article_id=self.article_id)[0]
+        assert conversation.conversation.id is not None
+        transcript = list_messages(
+            self.db,
+            conversation_id=conversation.conversation.id,
+        )
+        self.assertEqual(transcript[-1].content, "The stored answer remains local and read-only.")
+
+    def test_conversation_failure_is_sanitized_and_explicit_retry_succeeds(self) -> None:
+        provider = _CountingConversationProvider(fail=True)
+        with mock.patch(
+            "research_digest.ui.pages.library.get_research_conversation_provider",
+            return_value=(provider, None),
+        ):
+            at = self.run_app()
+            self.click_button(at, "Library smoke paper").run()
+            self.click_button(at, "Stored discussion").run()
+            self.text_area(at, "Message").set_value("A question that initially fails")
+            self.click_button(at, "Send").run()
+
+            self.assertEqual(provider.response_calls, 1)
+            errors = [str(element.value) for element in at.error]
+            self.assertTrue(any("Discussion response failed" in value for value in errors))
+            self.assertFalse(any("/home/" in value or "sk-secret" in value for value in errors))
+            at.run()
+            self.assert_button_present(at, "Retry response")
+            provider.fail = False
+            self.click_button(at, "Retry response").run()
+
+        self.assert_no_streamlit_exceptions(at)
+        self.assertEqual(provider.response_calls, 2)
+        self.assert_text_present(at, "Persisted research answer 2.")
 
     def run_app(self) -> AppTest:
         return AppTest.from_function(

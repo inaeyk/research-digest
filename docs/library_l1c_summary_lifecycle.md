@@ -3,8 +3,8 @@
 L1-C makes `AIArtifact` the sole durable owner of every newly generated summary
 body while preserving schema-19 summaries as a read-only compatibility class. It
 adds lazy summary generation only inside the existing paper-detail `AI Summary`
-section. The frozen L1-B order remains My Notes, Abstract, AI Summary, then AI
-Discussions.
+section. At the L1-C freeze, the inherited L1-B order was My Notes, Abstract, AI
+Summary, then AI Discussions.
 
 ## Pre-change ownership audit
 
@@ -239,3 +239,13 @@ transitions survived refresh. The fixture did not touch the real Library.
 
 This human smoke closes L1-C qualification and authorizes the local freeze. It
 does not authorize a push, tag, release, or any L1-D behavior.
+
+## Final L1 milestone hierarchy amendment
+
+Final L1-D human validation intentionally superseded the earlier L1-B/L1-C
+presentation contract. The active hierarchy is Abstract, My Notes, AI Summary,
+then AI Discussions: authoritative source first, user interpretation/work next,
+and AI-derived interpretation/discussion last. The original L1-C smoke and
+freeze above accurately record the order tested at that time. This later UI-only
+amendment does not change canonical summary ownership, lazy generation,
+retention, GC, History, provider routing, or any schema-20 persistence behavior.

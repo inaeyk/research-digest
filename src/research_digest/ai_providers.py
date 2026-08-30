@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
-from research_digest.models import AIConversationMessage, Article
+from research_digest.models import Article
 
 
 @dataclass(frozen=True)
@@ -49,11 +48,25 @@ class LibrarySummaryProvider(Protocol):
 
 
 class ResearchConversationProvider(Protocol):
+    provider: str
+    model_id: str
+    reasoning_effort: str | None
+    timeout_seconds: float
+    response_generator_version: str
+    summary_generator_version: str
+
     def respond(
         self,
         *,
         article: Article,
-        messages: Sequence[AIConversationMessage],
         context: str,
     ) -> GeneratedAIText:
         """Generate one explicit conversation response."""
+
+    def summarize_conversation(
+        self,
+        *,
+        article: Article,
+        context: str,
+    ) -> GeneratedAIText:
+        """Compress bounded older turns without replacing the full transcript."""

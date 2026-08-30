@@ -43,7 +43,7 @@ floor.
 ## Paper detail
 
 Detail uses the same Streamlit page and a single `paper` query parameter rather
-than a duplicate route. Its fixed order is:
+than a duplicate route. At the L1-B freeze, its fixed order was:
 
 1. title, compact/full authors, publication/source identity;
 2. interest, reading state, collections, and tags;
@@ -132,10 +132,20 @@ human accepted the research-use density, primary title hierarchy, lightweight
 interest/reading state, bounded secondary metadata, intuitive filters and detail
 navigation, and passive presentation of existing AI summaries and discussions.
 Rating, reading-state, and note edits persisted across refresh. The accepted
-detail hierarchy is fixed as My Notes, Abstract, AI Summary, then AI Discussions;
-the authoritative source abstract remains above and visually prior to derived AI
-interpretation. Browsing and editing produced no visible model work, and stored
-related-paper material remained secondary.
+L1-B detail hierarchy was My Notes, Abstract, AI Summary, then AI Discussions;
+the authoritative source abstract remained above and visually prior to derived
+AI interpretation. Browsing and editing produced no visible model work, and
+stored related-paper material remained secondary.
+
+### Final L1 milestone hierarchy amendment
+
+Final L1-D human validation intentionally superseded that original L1-B order.
+The active paper-detail hierarchy is now Abstract, My Notes, AI Summary, then AI
+Discussions. This human-approved amendment makes the progression authoritative
+paper source, user interpretation/work, then AI-derived interpretation and
+discussion. It changes presentation order only: the dense list, normalized note
+store, summary/conversation services, zero-AI browsing invariant, and all L1-B
+persistence/query semantics are unchanged.
 
 ## Freeze qualification
 

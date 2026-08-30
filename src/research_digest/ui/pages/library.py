@@ -19,8 +19,15 @@ from research_digest.collections import (
 from research_digest.connections import dismiss_connection, list_related_connections
 from research_digest.conversations import (
     AIConversationOverview,
+    ConversationError,
+    create_conversation,
     list_conversation_overviews,
     list_messages,
+    promote_assistant_takeaway_to_note,
+    rename_conversation,
+    retry_conversation_response,
+    rolling_summary_boundary,
+    send_conversation_message,
 )
 from research_digest.errors import sanitize_error
 from research_digest.library import (
@@ -36,7 +43,13 @@ from research_digest.library import (
 )
 from research_digest.library_context import build_collection_intelligence_snapshot
 from research_digest.library_summaries import generate_library_summary
-from research_digest.models import LibraryCollection, LibraryTag, ReadingState
+from research_digest.models import (
+    AIConversationMessage,
+    AIConversationRole,
+    LibraryCollection,
+    LibraryTag,
+    ReadingState,
+)
 from research_digest.tags import (
     TagValidationError,
     add_user_tag,
@@ -45,7 +58,12 @@ from research_digest.tags import (
     remove_user_tag,
 )
 from research_digest.ui.article_header import render_article_header
-from research_digest.ui.common import get_database, get_library_summary_provider
+from research_digest.ui.common import (
+    get_database,
+    get_library_summary_provider,
+    get_research_conversation_provider,
+    get_research_conversation_route,
+)
 from research_digest.ui.library_view import (
     build_dense_library_row,
     format_compact_date,
@@ -58,6 +76,7 @@ from research_digest.ui.tag_controls import (
 )
 
 _DETAIL_QUERY_PARAM = "paper"
+_DISCUSSION_QUERY_PARAM = "discussion"
 _FILTER_SESSION_KEY = "library_filter_selection"
 _SORT_OPTIONS: tuple[LibrarySort, ...] = (
     "saved_newest",
@@ -188,20 +207,12 @@ def _render_filter_controls(
     )
     collection_options = [None, *collections]
     selected_collection = next(
-        (
-            collection
-            for collection in collections
-            if collection.id == defaults.collection_id
-        ),
+        (collection for collection in collections if collection.id == defaults.collection_id),
         None,
     )
     tag_options = [None, *known_tags]
     selected_tag = next(
-        (
-            tag
-            for tag in known_tags
-            if tag.normalized_name == defaults.normalized_tag_name
-        ),
+        (tag for tag in known_tags if tag.normalized_name == defaults.normalized_tag_name),
         None,
     )
     with st.form("library_filters", border=False):
@@ -288,13 +299,9 @@ def _persisted_filter_selection(
         sort_by=value.sort_by if value.sort_by in _SORT_OPTIONS else "saved_newest",
         interest=value.interest if value.interest in _INTEREST_FILTER_OPTIONS else "any",
         reading=value.reading if value.reading in _READING_FILTER_OPTIONS else "any",
-        collection_id=(
-            value.collection_id if value.collection_id in collection_ids else None
-        ),
+        collection_id=(value.collection_id if value.collection_id in collection_ids else None),
         normalized_tag_name=(
-            value.normalized_tag_name
-            if value.normalized_tag_name in normalized_tag_names
-            else None
+            value.normalized_tag_name if value.normalized_tag_name in normalized_tag_names else None
         ),
     )
 
@@ -355,6 +362,8 @@ def _render_paper_detail(article_id: int) -> None:
         key="library_detail_back",
     ):
         del st.query_params[_DETAIL_QUERY_PARAM]
+        if _DISCUSSION_QUERY_PARAM in st.query_params:
+            del st.query_params[_DISCUSSION_QUERY_PARAM]
         st.rerun()
     if item is None:
         st.title("Library paper unavailable")
@@ -368,8 +377,8 @@ def _render_paper_detail(article_id: int) -> None:
         title_style="title",
     )
     _render_detail_user_state(item)
-    _render_notes(item)
     _render_abstract(item)
+    _render_notes(item)
     _render_ai_summary(item)
     _render_ai_discussions(item)
     _render_related_saved_papers(item)
@@ -422,6 +431,8 @@ def _render_detail_user_state(item: LibraryItem) -> None:
     ):
         unsave_article(db, article_id)
         del st.query_params[_DETAIL_QUERY_PARAM]
+        if _DISCUSSION_QUERY_PARAM in st.query_params:
+            del st.query_params[_DISCUSSION_QUERY_PARAM]
         st.rerun()
 
 
@@ -635,32 +646,292 @@ def _render_ai_discussions(item: LibraryItem) -> None:
     if article_id is None:
         return
     st.subheader("AI Discussions")
-    overviews = list_conversation_overviews(get_database(), article_id=article_id)
+    db = get_database()
+    overviews = list_conversation_overviews(db, article_id=article_id)
+    selected_id = parse_detail_article_id(st.query_params.get(_DISCUSSION_QUERY_PARAM))
+    selected = next(
+        (overview for overview in overviews if overview.conversation.id == selected_id),
+        None,
+    )
+    if selected is not None:
+        _render_conversation_thread(item, selected)
+        return
+    if selected_id is not None:
+        st.warning("That discussion is unavailable for this paper.", icon=":material/warning:")
+        del st.query_params[_DISCUSSION_QUERY_PARAM]
+
     if not overviews:
         st.caption("No discussions yet.")
+    else:
+        for overview in overviews:
+            conversation_id = overview.conversation.id
+            if conversation_id is None:
+                continue
+            if st.button(
+                overview.conversation.title,
+                key=f"library_open_discussion_{conversation_id}",
+                type="tertiary",
+                width="stretch",
+                help=f"Open discussion {overview.conversation.title}",
+            ):
+                st.query_params[_DISCUSSION_QUERY_PARAM] = str(conversation_id)
+                st.rerun()
+            st.caption(_conversation_caption(overview))
+
+    with st.expander("New discussion", icon=":material/add_comment:"):
+        with st.form(
+            f"library_new_discussion_{article_id}",
+            clear_on_submit=True,
+            border=False,
+        ):
+            title = st.text_input(
+                "Title (optional)",
+                placeholder=f"Discussion {len(overviews) + 1}",
+            )
+            create_requested = st.form_submit_button(
+                "Create discussion",
+                icon=":material/add_comment:",
+            )
+        if create_requested:
+            try:
+                route = get_research_conversation_route()
+                created = create_conversation(
+                    db,
+                    article_id=article_id,
+                    title=title,
+                    provider=route.provider,
+                    model_id=route.model_id,
+                )
+                if created.id is None:
+                    raise RuntimeError("created discussion id is unavailable")
+                st.query_params[_DISCUSSION_QUERY_PARAM] = str(created.id)
+                st.rerun()
+            except Exception as exc:
+                st.error(
+                    f"Discussion creation failed: {sanitize_error(exc)}",
+                    icon=":material/error:",
+                )
+
+
+def _render_conversation_thread(
+    item: LibraryItem,
+    overview: AIConversationOverview,
+) -> None:
+    import streamlit as st
+
+    article_id = item.article.id
+    conversation_id = overview.conversation.id
+    if article_id is None or conversation_id is None:
         return
-    for overview in overviews:
-        st.markdown(f"**{overview.conversation.title}**")
-        st.caption(_conversation_caption(overview))
-    selected = st.selectbox(
-        "Inspect stored transcript",
-        options=[None, *overviews],
-        index=0,
-        format_func=lambda value: (
-            "Choose a discussion" if value is None else value.conversation.title
-        ),
-        key=f"library_detail_discussion_{article_id}",
+    if st.button(
+        "Back to discussions",
+        key=f"library_discussion_back_{conversation_id}",
+        type="tertiary",
+        icon=":material/arrow_back:",
+    ):
+        del st.query_params[_DISCUSSION_QUERY_PARAM]
+        st.rerun()
+    st.markdown(f"**{overview.conversation.title}**")
+    st.caption(
+        f"{_conversation_caption(overview)} · "
+        f"{overview.conversation.provider} / {overview.conversation.model_id}"
     )
-    if selected is None or selected.conversation.id is None:
-        return
-    messages = list_messages(get_database(), conversation_id=selected.conversation.id)
+    if overview.conversation.rolling_summary_artifact_id is not None:
+        artifact = get_database().get_ai_artifact(overview.conversation.rolling_summary_artifact_id)
+        if artifact is not None:
+            try:
+                boundary = rolling_summary_boundary(
+                    conversation_id=conversation_id,
+                    artifact=artifact,
+                )
+                st.caption(
+                    f"Bounded model context summarizes through message {boundary}; "
+                    "the full transcript remains stored below."
+                )
+            except ConversationError:
+                st.caption("Rolling context metadata is unavailable; the transcript is intact.")
+    with st.expander("Rename discussion", icon=":material/edit:"):
+        with st.form(f"library_rename_discussion_{conversation_id}", border=False):
+            title = st.text_input("Discussion title", value=overview.conversation.title)
+            rename_requested = st.form_submit_button(
+                "Save title",
+                icon=":material/save:",
+            )
+        if rename_requested:
+            try:
+                rename_conversation(
+                    get_database(),
+                    conversation_id=conversation_id,
+                    title=title,
+                )
+                st.toast("Discussion renamed.", icon=":material/check_circle:")
+                st.rerun()
+            except Exception as exc:
+                st.error(
+                    f"Rename failed: {sanitize_error(exc)}",
+                    icon=":material/error:",
+                )
+
+    messages = list_messages(get_database(), conversation_id=conversation_id)
     if not messages:
-        st.caption("This discussion has no messages.")
-        return
+        st.caption("No messages yet. Ask a question about the stored paper context.")
     for message in messages:
-        role = "You" if message.role.value == "user" else "Assistant"
-        st.markdown(f"**{role} · message {message.sequence_number}**")
-        st.markdown(message.content)
+        with st.chat_message(message.role.value):
+            st.markdown(message.content)
+            if message.role == AIConversationRole.ASSISTANT:
+                _render_takeaway_action(item, message)
+
+    pending = bool(messages and messages[-1].role == AIConversationRole.USER)
+    if pending:
+        st.warning(
+            "The last question is saved but has no assistant response.",
+            icon=":material/warning:",
+        )
+        _render_retry_response(conversation_id)
+        return
+
+    with st.form(
+        f"library_discussion_send_{conversation_id}",
+        clear_on_submit=True,
+        border=False,
+    ):
+        content = st.text_area(
+            "Message",
+            placeholder="Ask a technical question about this paper…",
+            height=120,
+        )
+        send_requested = st.form_submit_button(
+            "Send",
+            icon=":material/send:",
+        )
+    if send_requested:
+        _run_conversation_request(
+            conversation_id=conversation_id,
+            content=content,
+            retry=False,
+        )
+
+
+def _render_retry_response(conversation_id: int) -> None:
+    import streamlit as st
+
+    request_key = f"library_discussion_request_{conversation_id}"
+    running = bool(st.session_state.get(request_key, False))
+    if st.button(
+        "Retry response",
+        key=f"library_discussion_retry_{conversation_id}",
+        type="tertiary",
+        icon=":material/refresh:",
+        disabled=running,
+    ):
+        _run_conversation_request(
+            conversation_id=conversation_id,
+            content=None,
+            retry=True,
+        )
+
+
+def _run_conversation_request(
+    *,
+    conversation_id: int,
+    content: str | None,
+    retry: bool,
+) -> None:
+    import streamlit as st
+
+    request_key = f"library_discussion_request_{conversation_id}"
+    if bool(st.session_state.get(request_key, False)):
+        return
+    st.session_state[request_key] = True
+    try:
+        provider, provider_message = get_research_conversation_provider()
+        if provider is None:
+            st.error(
+                provider_message or "The configured discussion provider is unavailable.",
+                icon=":material/error:",
+            )
+            return
+        with st.spinner(
+            "Retrying the saved question…" if retry else "Working from bounded paper context…"
+        ):
+            if retry:
+                retry_conversation_response(
+                    get_database(),
+                    conversation_id=conversation_id,
+                    provider=provider,
+                )
+            else:
+                if content is None:
+                    raise ConversationError("Write a message before sending.")
+                send_conversation_message(
+                    get_database(),
+                    conversation_id=conversation_id,
+                    content=content,
+                    provider=provider,
+                )
+        st.rerun()
+    except Exception as exc:
+        st.error(
+            f"Discussion response failed: {sanitize_error(exc)}",
+            icon=":material/error:",
+        )
+        st.caption(
+            "If the question was accepted before the provider failed, it remains saved "
+            "and can be retried explicitly."
+        )
+    finally:
+        st.session_state.pop(request_key, None)
+
+
+def _render_takeaway_action(
+    item: LibraryItem,
+    message: AIConversationMessage,
+) -> None:
+    import streamlit as st
+
+    article_id = item.article.id
+    if article_id is None or message.id is None:
+        return
+    selection_key = f"library_takeaway_selection_{message.conversation_id}"
+    if st.button(
+        "Add takeaway to My Notes",
+        key=f"library_takeaway_choose_{message.id}",
+        type="tertiary",
+        icon=":material/note_add:",
+    ):
+        st.session_state[selection_key] = message.id
+    if st.session_state.get(selection_key) != message.id:
+        return
+    with st.form(f"library_takeaway_confirm_{message.id}", border=True):
+        approved_text = st.text_area(
+            "Review takeaway before adding",
+            value=message.content,
+            height=160,
+        )
+        confirm = st.form_submit_button(
+            "Add to My Notes",
+            icon=":material/note_add:",
+        )
+        cancel = st.form_submit_button("Cancel", type="tertiary")
+    if cancel:
+        st.session_state.pop(selection_key, None)
+        st.rerun()
+    if confirm:
+        try:
+            promote_assistant_takeaway_to_note(
+                get_database(),
+                article_id=article_id,
+                message_id=message.id,
+                approved_text=approved_text,
+            )
+            st.session_state.pop(selection_key, None)
+            st.toast("Takeaway added to My Notes.", icon=":material/check_circle:")
+            st.rerun()
+        except Exception as exc:
+            st.error(
+                f"Takeaway was not added: {sanitize_error(exc)}",
+                icon=":material/error:",
+            )
 
 
 def _conversation_caption(overview: AIConversationOverview) -> str:

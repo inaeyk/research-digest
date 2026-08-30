@@ -11,6 +11,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
+from research_digest.conversation_provenance import parse_rolling_summary_boundary
 from research_digest.errors import sanitize_error_text
 from research_digest.models import (
     AIArtifact,
@@ -85,6 +86,14 @@ class RunLockError(RuntimeError):
 
 class RunAlreadyActiveError(RunLockError):
     """Raised when another digest run is already active."""
+
+
+class AIConversationBusyError(RuntimeError):
+    """Raised when another local session is already sending to a discussion."""
+
+
+class AIConversationConflictError(RuntimeError):
+    """Raised when a conversation changed during an optimistic turn append."""
 
 
 class MigrationError(RuntimeError):
@@ -330,10 +339,7 @@ class Database:
                 """,
                 (source_name,),
             ).fetchall()
-        articles = (
-            _article_from_row(row)
-            for row in rows
-        )
+        articles = (_article_from_row(row) for row in rows)
         return tuple(
             article
             for article in articles
@@ -723,9 +729,7 @@ class Database:
                 generator_version=provenance.generator_version,
                 input_fingerprint=provenance.input_fingerprint,
                 retention_class=retention_class,
-                expires_at=(
-                    None if retain_digest else temporary_artifact_expiration(created)
-                ),
+                expires_at=(None if retain_digest else temporary_artifact_expiration(created)),
             )
             saved_artifact = _insert_ai_artifact(conn, artifact)
             assert saved_artifact.id is not None
@@ -858,9 +862,8 @@ class Database:
             existing = _get_ai_artifact(conn, artifact_id)
             if existing is None:
                 raise ValueError(f"AI artifact {artifact_id} does not exist")
-            if (
-                normalized == AIArtifactRetentionClass.LIBRARY
-                and not _is_article_saved(conn, existing.article_id)
+            if normalized == AIArtifactRetentionClass.LIBRARY and not _is_article_saved(
+                conn, existing.article_id
             ):
                 raise ValueError("LIBRARY artifacts require a saved Library article")
             conn.execute(
@@ -994,6 +997,41 @@ class Database:
         with self._connection() as conn:
             return _get_ai_conversation(conn, conversation_id)
 
+    def rename_ai_conversation(
+        self,
+        conversation_id: int,
+        title: str,
+    ) -> AIConversation:
+        if conversation_id <= 0:
+            raise ValueError("AI conversation id must be positive")
+        with self._connection() as conn:
+            existing = _get_ai_conversation(conn, conversation_id)
+            if existing is None:
+                raise ValueError(f"AI conversation {conversation_id} does not exist")
+            candidate = AIConversation(
+                id=existing.id,
+                article_id=existing.article_id,
+                title=title,
+                created_at=existing.created_at,
+                updated_at=utc_now(),
+                provider=existing.provider,
+                model_id=existing.model_id,
+                conversation_version=existing.conversation_version,
+                rolling_summary_artifact_id=existing.rolling_summary_artifact_id,
+            )
+            conn.execute(
+                "UPDATE ai_conversations SET title = ?, updated_at = ? WHERE id = ?",
+                (
+                    candidate.title,
+                    datetime_to_db(candidate.updated_at),
+                    conversation_id,
+                ),
+            )
+            updated = _get_ai_conversation(conn, conversation_id)
+        if updated is None:
+            raise RuntimeError("failed to load renamed AI conversation")
+        return updated
+
     def list_ai_conversations(self, article_id: int) -> list[AIConversation]:
         if article_id <= 0:
             raise ValueError("article id must be positive")
@@ -1037,6 +1075,253 @@ class Database:
         if updated is None:
             raise RuntimeError("failed to load updated AI conversation")
         return updated
+
+    def replace_ai_conversation_rolling_summary(
+        self,
+        *,
+        conversation_id: int,
+        content: str,
+        provenance: AIArtifactProvenance,
+        summarized_through_sequence: int,
+        created_at: datetime | None = None,
+    ) -> AIArtifact:
+        """Atomically install one rolling summary and release its predecessor."""
+
+        if conversation_id <= 0:
+            raise ValueError("AI conversation id must be positive")
+        if summarized_through_sequence <= 0:
+            raise ValueError("summarized-through sequence must be positive")
+        try:
+            fingerprint_boundary = parse_rolling_summary_boundary(
+                conversation_id=conversation_id,
+                input_fingerprint=provenance.input_fingerprint,
+            )
+        except ValueError as exc:
+            raise ValueError("rolling-summary input fingerprint is invalid") from exc
+        if fingerprint_boundary != summarized_through_sequence:
+            raise ValueError("rolling-summary boundary does not match its input fingerprint")
+        created = created_at or utc_now()
+        with self._immediate_connection() as conn:
+            conversation = _get_ai_conversation(conn, conversation_id)
+            if conversation is None:
+                raise ValueError(f"AI conversation {conversation_id} does not exist")
+            if not _is_article_saved(conn, conversation.article_id):
+                raise ValueError("rolling-summary generation requires a saved Library paper")
+            boundary = conn.execute(
+                """
+                SELECT role
+                FROM ai_conversation_messages
+                WHERE conversation_id = ? AND sequence_number = ?
+                """,
+                (conversation_id, summarized_through_sequence),
+            ).fetchone()
+            if boundary is None or str(boundary["role"]) != AIConversationRole.ASSISTANT.value:
+                raise ValueError("rolling summary must end at a stored assistant message")
+            artifact = AIArtifact(
+                id=None,
+                article_id=conversation.article_id,
+                artifact_type=AIArtifactType.CONVERSATION_SUMMARY,
+                content=content,
+                created_at=created,
+                provider=provenance.provider,
+                model_id=provenance.model_id,
+                reasoning_effort=provenance.reasoning_effort,
+                generator_version=provenance.generator_version,
+                input_fingerprint=provenance.input_fingerprint,
+                retention_class=AIArtifactRetentionClass.LIBRARY,
+                expires_at=None,
+            )
+            saved = _insert_ai_artifact(conn, artifact)
+            if saved.id is None:
+                raise RuntimeError("persisted rolling summary id is required")
+            previous_id = conversation.rolling_summary_artifact_id
+            conn.execute(
+                """
+                UPDATE ai_conversations
+                SET rolling_summary_artifact_id = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (saved.id, datetime_to_db(created), conversation_id),
+            )
+            if previous_id is not None and previous_id != saved.id:
+                still_referenced = conn.execute(
+                    """
+                    SELECT 1
+                    FROM ai_conversations
+                    WHERE rolling_summary_artifact_id = ?
+                    LIMIT 1
+                    """,
+                    (previous_id,),
+                ).fetchone()
+                if still_referenced is None:
+                    conn.execute(
+                        """
+                        UPDATE ai_artifacts
+                        SET retention_class = ?, expires_at = ?
+                        WHERE id = ? AND retention_class != ?
+                        """,
+                        (
+                            AIArtifactRetentionClass.TEMPORARY.value,
+                            datetime_to_db(temporary_artifact_expiration(created)),
+                            previous_id,
+                            AIArtifactRetentionClass.USER_PINNED.value,
+                        ),
+                    )
+            return saved
+
+    def acquire_ai_conversation_send_lock(
+        self,
+        conversation_id: int,
+        *,
+        owner: str,
+        stale_after_seconds: float,
+        now: datetime | None = None,
+    ) -> None:
+        """Acquire a durable per-conversation lease before any provider call."""
+
+        if conversation_id <= 0:
+            raise ValueError("AI conversation id must be positive")
+        if not owner.strip():
+            raise ValueError("conversation send-lock owner is required")
+        if stale_after_seconds <= 0:
+            raise ValueError("conversation send-lock stale interval must be positive")
+        acquired = now or utc_now()
+        name = _ai_conversation_lock_name(conversation_id)
+        with self._immediate_connection() as conn:
+            if _get_ai_conversation(conn, conversation_id) is None:
+                raise ValueError(f"AI conversation {conversation_id} does not exist")
+            existing = conn.execute(
+                "SELECT acquired_at FROM run_locks WHERE name = ?",
+                (name,),
+            ).fetchone()
+            if existing is not None:
+                locked_at = datetime_from_db(str(existing["acquired_at"]))
+                if locked_at > acquired - timedelta(seconds=stale_after_seconds):
+                    raise AIConversationBusyError(
+                        "Another session is already sending to this discussion."
+                    )
+                conn.execute("DELETE FROM run_locks WHERE name = ?", (name,))
+            timestamp = datetime_to_db(acquired)
+            conn.execute(
+                """
+                INSERT INTO run_locks (name, owner, acquired_at, updated_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (name, owner, timestamp, timestamp),
+            )
+
+    def release_ai_conversation_send_lock(
+        self,
+        conversation_id: int,
+        *,
+        owner: str,
+    ) -> None:
+        if conversation_id <= 0:
+            raise ValueError("AI conversation id must be positive")
+        with self._connection() as conn:
+            conn.execute(
+                "DELETE FROM run_locks WHERE name = ? AND owner = ?",
+                (_ai_conversation_lock_name(conversation_id), owner),
+            )
+
+    def begin_ai_conversation_turn(
+        self,
+        *,
+        conversation_id: int,
+        content: str,
+        expected_last_sequence: int,
+        created_at: datetime | None = None,
+    ) -> AIConversationMessage:
+        """Append a user message only if the durable transcript has not changed."""
+
+        if expected_last_sequence < 0:
+            raise ValueError("expected conversation sequence must not be negative")
+        timestamp = created_at or utc_now()
+        with self._immediate_connection() as conn:
+            if _get_ai_conversation(conn, conversation_id) is None:
+                raise ValueError(f"AI conversation {conversation_id} does not exist")
+            last = _last_ai_conversation_message_row(conn, conversation_id)
+            actual_sequence = int(last["sequence_number"]) if last is not None else 0
+            if actual_sequence != expected_last_sequence:
+                raise AIConversationConflictError(
+                    "The discussion changed in another session; reload before sending."
+                )
+            if last is not None and str(last["role"]) == AIConversationRole.USER.value:
+                raise AIConversationConflictError(
+                    "This discussion already has an unanswered user message."
+                )
+            message = AIConversationMessage(
+                id=None,
+                conversation_id=conversation_id,
+                sequence_number=actual_sequence + 1,
+                role=AIConversationRole.USER,
+                content=content,
+                created_at=timestamp,
+            )
+            return _insert_ai_conversation_message(conn, message)
+
+    def complete_ai_conversation_turn(
+        self,
+        *,
+        conversation_id: int,
+        pending_user_message_id: int,
+        content: str,
+        provider: str,
+        model_id: str,
+        conversation_version: int,
+        created_at: datetime | None = None,
+    ) -> AIConversationMessage:
+        """Append one assistant response only to the exact pending user turn."""
+
+        timestamp = created_at or utc_now()
+        with self._immediate_connection() as conn:
+            conversation = _get_ai_conversation(conn, conversation_id)
+            if conversation is None:
+                raise ValueError(f"AI conversation {conversation_id} does not exist")
+            last = _last_ai_conversation_message_row(conn, conversation_id)
+            if (
+                last is None
+                or int(last["id"]) != pending_user_message_id
+                or str(last["role"]) != AIConversationRole.USER.value
+            ):
+                raise AIConversationConflictError(
+                    "The pending conversation turn changed before the response was saved."
+                )
+            candidate = AIConversation(
+                id=conversation.id,
+                article_id=conversation.article_id,
+                title=conversation.title,
+                created_at=conversation.created_at,
+                updated_at=timestamp,
+                provider=provider,
+                model_id=model_id,
+                conversation_version=conversation_version,
+                rolling_summary_artifact_id=conversation.rolling_summary_artifact_id,
+            )
+            message = AIConversationMessage(
+                id=None,
+                conversation_id=conversation_id,
+                sequence_number=int(last["sequence_number"]) + 1,
+                role=AIConversationRole.ASSISTANT,
+                content=content,
+                created_at=timestamp,
+            )
+            saved = _insert_ai_conversation_message(conn, message)
+            conn.execute(
+                """
+                UPDATE ai_conversations
+                SET updated_at = ?, provider = ?, model_id = ?, conversation_version = ?
+                WHERE id = ?
+                """,
+                (
+                    datetime_to_db(candidate.updated_at),
+                    candidate.provider,
+                    candidate.model_id,
+                    candidate.conversation_version,
+                    conversation_id,
+                ),
+            )
+            return saved
 
     def append_ai_conversation_message(
         self,
@@ -1111,6 +1396,15 @@ class Database:
             ).fetchall()
         return [_ai_conversation_message_from_row(row) for row in rows]
 
+    def get_ai_conversation_message(
+        self,
+        message_id: int,
+    ) -> AIConversationMessage | None:
+        if message_id <= 0:
+            raise ValueError("AI conversation message id must be positive")
+        with self._connection() as conn:
+            return _get_ai_conversation_message(conn, message_id)
+
     def list_ai_conversation_overviews(
         self,
         article_id: int,
@@ -1134,10 +1428,7 @@ class Database:
                 """,
                 (article_id,),
             ).fetchall()
-        return [
-            (_ai_conversation_from_row(row), int(row["message_count"]))
-            for row in rows
-        ]
+        return [(_ai_conversation_from_row(row), int(row["message_count"])) for row in rows]
 
     def get_latest_relevance_context(
         self,
@@ -1199,10 +1490,7 @@ class Database:
                 ORDER BY article_id ASC
                 """
             ).fetchall()
-        return {
-            int(row["article_id"]): _library_relevance_context_from_row(row)
-            for row in rows
-        }
+        return {int(row["article_id"]): _library_relevance_context_from_row(row) for row in rows}
 
     def upsert_library_tag(
         self,
@@ -2288,22 +2576,16 @@ class Database:
                 article_id=int(row["article_id"]),
                 storage=storage,
                 artifact_id=(
-                    int(artifact_id)
-                    if storage == AnalysisSummaryStorage.ARTIFACT
-                    else None
+                    int(artifact_id) if storage == AnalysisSummaryStorage.ARTIFACT else None
                 ),
                 analyzed_at=datetime_from_db(str(row["analyzed_at"])),
                 provider=str(row["provider"]) if row["provider"] is not None else None,
                 model_id=str(row["model_id"]) if row["model_id"] is not None else None,
                 reasoning_effort=(
-                    str(row["reasoning_effort"])
-                    if row["reasoning_effort"] is not None
-                    else None
+                    str(row["reasoning_effort"]) if row["reasoning_effort"] is not None else None
                 ),
                 generator_version=(
-                    str(row["generator_version"])
-                    if row["generator_version"] is not None
-                    else None
+                    str(row["generator_version"]) if row["generator_version"] is not None else None
                 ),
             )
         return references
@@ -2870,7 +3152,7 @@ class Database:
             conn.execute(
                 f"""
                 UPDATE app_runs
-                SET {', '.join(assignments)}
+                SET {", ".join(assignments)}
                 WHERE id = ? AND completed_at IS NULL
                 """,
                 tuple(params),
@@ -2910,9 +3192,7 @@ class Database:
                 return str(current["status"])
             cancellation_won = current["cancel_requested_at"] is not None
             effective_status = (
-                APP_RUN_CANCELLED
-                if cancellation_won or status == APP_RUN_CANCELLED
-                else status
+                APP_RUN_CANCELLED if cancellation_won or status == APP_RUN_CANCELLED else status
             )
             effective_error = error_message
             if effective_status == APP_RUN_CANCELLED:
@@ -3737,9 +4017,7 @@ def _apply_schema_migrations(
     _create_schema_metadata_table(conn)
     current_version = _get_schema_version(conn)
     if current_version != old_version:
-        raise MigrationError(
-            "database schema version changed while initialization was in progress"
-        )
+        raise MigrationError("database schema version changed while initialization was in progress")
 
     for migration in MIGRATIONS:
         if migration.version <= old_version:
@@ -4867,7 +5145,7 @@ def _persist_app_run_retrieval_metadata(
     conn.execute(
         f"""
         UPDATE app_runs
-        SET {', '.join(assignments)}
+        SET {", ".join(assignments)}
         WHERE id = ? AND completed_at IS NULL
         """,
         tuple(params),
@@ -5138,9 +5416,7 @@ def _migrate_app_run_preselection_counts(conn: sqlite3.Connection) -> None:
         return
     columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(app_runs)").fetchall()}
     if "preselected_count" not in columns:
-        conn.execute(
-            "ALTER TABLE app_runs ADD COLUMN preselected_count INTEGER NOT NULL DEFAULT 0"
-        )
+        conn.execute("ALTER TABLE app_runs ADD COLUMN preselected_count INTEGER NOT NULL DEFAULT 0")
     if "skipped_analysis_count" not in columns:
         conn.execute(
             "ALTER TABLE app_runs ADD COLUMN skipped_analysis_count INTEGER NOT NULL DEFAULT 0"
@@ -5194,8 +5470,7 @@ def _migrate_relevance_analysis_profile_fingerprints(conn: sqlite3.Connection) -
 
 def _analysis_table_needs_profile_fingerprint_migration(conn: sqlite3.Connection) -> bool:
     columns = {
-        str(row["name"])
-        for row in conn.execute("PRAGMA table_info(relevance_analyses)").fetchall()
+        str(row["name"]) for row in conn.execute("PRAGMA table_info(relevance_analyses)").fetchall()
     }
     if "profile_fingerprint" not in columns:
         return True
@@ -5509,6 +5784,56 @@ def _get_ai_conversation_message(
         (message_id,),
     ).fetchone()
     return _ai_conversation_message_from_row(row) if row is not None else None
+
+
+def _last_ai_conversation_message_row(
+    conn: sqlite3.Connection,
+    conversation_id: int,
+) -> sqlite3.Row | None:
+    row = conn.execute(
+        """
+        SELECT *
+        FROM ai_conversation_messages
+        WHERE conversation_id = ?
+        ORDER BY sequence_number DESC, id DESC
+        LIMIT 1
+        """,
+        (conversation_id,),
+    ).fetchone()
+    return cast(sqlite3.Row | None, row)
+
+
+def _insert_ai_conversation_message(
+    conn: sqlite3.Connection,
+    message: AIConversationMessage,
+) -> AIConversationMessage:
+    cursor = conn.execute(
+        """
+        INSERT INTO ai_conversation_messages (
+            conversation_id, sequence_number, role, content, created_at
+        )
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            message.conversation_id,
+            message.sequence_number,
+            message.role.value,
+            message.content,
+            datetime_to_db(message.created_at),
+        ),
+    )
+    conn.execute(
+        "UPDATE ai_conversations SET updated_at = ? WHERE id = ?",
+        (datetime_to_db(message.created_at), message.conversation_id),
+    )
+    saved = _get_ai_conversation_message(conn, _lastrowid(cursor))
+    if saved is None:
+        raise RuntimeError("failed to load created AI conversation message")
+    return saved
+
+
+def _ai_conversation_lock_name(conversation_id: int) -> str:
+    return f"ai-conversation:{conversation_id}"
 
 
 def _validate_rolling_summary_artifact(
@@ -5831,9 +6156,7 @@ def _ai_artifact_from_row(row: sqlite3.Row) -> AIArtifact:
         input_fingerprint=str(row["input_fingerprint"]),
         retention_class=AIArtifactRetentionClass(str(row["retention_class"])),
         expires_at=(
-            datetime_from_db(str(row["expires_at"]))
-            if row["expires_at"] is not None
-            else None
+            datetime_from_db(str(row["expires_at"])) if row["expires_at"] is not None else None
         ),
     )
 
@@ -6062,9 +6385,7 @@ def _feedback_from_row(row: sqlite3.Row) -> ArticleFeedback:
             cast(FeedbackAnswer, str(profile_match)) if profile_match is not None else None
         ),
         personal_interest=(
-            cast(FeedbackAnswer, str(personal_interest))
-            if personal_interest is not None
-            else None
+            cast(FeedbackAnswer, str(personal_interest)) if personal_interest is not None else None
         ),
         created_at=datetime_from_db(str(row["created_at"])),
         updated_at=datetime_from_db(str(row["updated_at"])),
@@ -6088,9 +6409,7 @@ def _quantitative_calibration_from_row(
         state=cast(QuantitativeCalibrationState, str(row["state"])),
         user_relevance_score=float(user_score) if user_score is not None else None,
         created_at=datetime_from_db(str(row["created_at"])),
-        completed_at=(
-            datetime_from_db(str(completed_at)) if completed_at is not None else None
-        ),
+        completed_at=(datetime_from_db(str(completed_at)) if completed_at is not None else None),
     )
 
 
@@ -6115,7 +6434,5 @@ def _suggested_interest_profile_from_row(row: sqlite3.Row) -> SuggestedInterestP
         provenance=cast(dict[str, object], provenance),
         created_at=datetime_from_db(str(row["created_at"])),
         dismissed_at=datetime_from_db(str(dismissed_at)) if dismissed_at is not None else None,
-        accepted_profile_id=(
-            int(accepted_profile_id) if accepted_profile_id is not None else None
-        ),
+        accepted_profile_id=(int(accepted_profile_id) if accepted_profile_id is not None else None),
     )
