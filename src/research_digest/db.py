@@ -8,6 +8,7 @@ from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -70,6 +71,16 @@ SOURCE_ARXIV = "arxiv"
 SCHEMA_VERSION_KEY = "schema_version"
 LAST_MIGRATION_BACKUP_KEY = "last_migration_backup_path"
 CURRENT_SCHEMA_VERSION = 20
+PRE_METADATA_TABLES = frozenset(
+    {
+        "app_runs",
+        "article_feedback",
+        "articles",
+        "interest_profiles",
+        "relevance_analyses",
+        "source_configs",
+    }
+)
 APP_RUN_STARTING = "STARTING"
 APP_RUN_RUNNING = "RUNNING"
 APP_RUN_COMPLETED = "COMPLETED"
@@ -131,6 +142,22 @@ class SchemaMigration:
     version: int
     name: str
     apply: Callable[[sqlite3.Connection], None]
+
+
+class SchemaCompatibility(StrEnum):
+    FIRST_RUN = "first_run"
+    CURRENT = "current"
+    MIGRATABLE = "migratable"
+    UNSUPPORTED = "unsupported"
+    FUTURE = "future"
+    INVALID = "invalid"
+
+
+@dataclass(frozen=True)
+class DatabaseSchemaInspection:
+    compatibility: SchemaCompatibility
+    version: int | None
+    detail: str
 
 
 class Database:
@@ -4028,6 +4055,340 @@ def _apply_schema_migrations(
     if backup_path is not None:
         _set_metadata_value(conn, LAST_MIGRATION_BACKUP_KEY, str(backup_path))
     _ensure_default_source_config(conn)
+
+
+def inspect_database_schema(path: str | Path) -> DatabaseSchemaInspection:
+    """Classify one database without mutating it or creating migration backups."""
+
+    database_path = Path(path)
+    try:
+        if not database_path.exists() or database_path.stat().st_size == 0:
+            return DatabaseSchemaInspection(
+                compatibility=SchemaCompatibility.FIRST_RUN,
+                version=None,
+                detail="database does not exist yet",
+            )
+        if not database_path.is_file():
+            raise MigrationError("database path is not a regular file")
+
+        source_uri = database_path.resolve().as_uri() + "?mode=ro"
+        with sqlite3.connect(source_uri, uri=True) as source:
+            source.row_factory = sqlite3.Row
+            integrity = source.execute("PRAGMA integrity_check").fetchone()
+            if integrity is None or str(integrity[0]) != "ok":
+                raise MigrationError("SQLite integrity check failed")
+            if source.execute("PRAGMA foreign_key_check").fetchone() is not None:
+                raise MigrationError("SQLite foreign-key integrity check failed")
+
+            if not _connection_has_existing_schema(source):
+                return DatabaseSchemaInspection(
+                    compatibility=SchemaCompatibility.FIRST_RUN,
+                    version=None,
+                    detail="database has no application schema yet",
+                )
+
+            has_schema_metadata = _table_exists(source, "schema_metadata")
+            version = _get_schema_version(source)
+            if has_schema_metadata and version == 0:
+                raise MigrationError(
+                    "database schema metadata is missing a supported schema version"
+                )
+            if version > CURRENT_SCHEMA_VERSION:
+                return DatabaseSchemaInspection(
+                    compatibility=SchemaCompatibility.FUTURE,
+                    version=version,
+                    detail=(
+                        f"database schema version {version} is newer than supported "
+                        f"version {CURRENT_SCHEMA_VERSION}"
+                    ),
+                )
+            supported_versions = {0, *(migration.version for migration in MIGRATIONS)}
+            if version < 0 or version not in supported_versions:
+                return DatabaseSchemaInspection(
+                    compatibility=SchemaCompatibility.UNSUPPORTED,
+                    version=version,
+                    detail=f"database schema version {version} has no supported migration path",
+                )
+
+            _validate_schema_structure(source, version=version)
+            if version == CURRENT_SCHEMA_VERSION:
+                return DatabaseSchemaInspection(
+                    compatibility=SchemaCompatibility.CURRENT,
+                    version=version,
+                    detail=f"schema version {version}",
+                )
+
+            candidate = sqlite3.connect(":memory:", isolation_level=None)
+            try:
+                candidate.row_factory = sqlite3.Row
+                candidate.execute("PRAGMA foreign_keys = ON")
+                source.backup(candidate)
+                candidate.execute("BEGIN IMMEDIATE")
+                try:
+                    _apply_schema_migrations(
+                        candidate,
+                        old_version=version,
+                        backup_path=None,
+                    )
+                    candidate.commit()
+                except BaseException:
+                    candidate.rollback()
+                    raise
+                migrated_version = _get_schema_version(candidate)
+                if migrated_version != CURRENT_SCHEMA_VERSION:
+                    raise MigrationError(
+                        "database migration compatibility check did not reach the current schema"
+                    )
+                _validate_schema_structure(
+                    candidate,
+                    version=migrated_version,
+                    allow_pre_metadata_layout=not has_schema_metadata,
+                )
+                migrated_integrity = candidate.execute("PRAGMA integrity_check").fetchone()
+                if migrated_integrity is None or str(migrated_integrity[0]) != "ok":
+                    raise MigrationError("post-migration SQLite integrity check failed")
+                if candidate.execute("PRAGMA foreign_key_check").fetchone() is not None:
+                    raise MigrationError("post-migration foreign-key integrity check failed")
+            finally:
+                candidate.close()
+    except Exception as exc:
+        detail = sanitize_error_text(str(exc)) or type(exc).__name__
+        return DatabaseSchemaInspection(
+            compatibility=SchemaCompatibility.INVALID,
+            version=None,
+            detail=detail,
+        )
+
+    return DatabaseSchemaInspection(
+        compatibility=SchemaCompatibility.MIGRATABLE,
+        version=version,
+        detail=(
+            f"database schema version {version} can migrate to version "
+            f"{CURRENT_SCHEMA_VERSION}"
+        ),
+    )
+
+
+def _validate_schema_structure(
+    conn: sqlite3.Connection,
+    *,
+    version: int,
+    allow_pre_metadata_layout: bool = False,
+) -> None:
+    if version == 0:
+        return
+    reference = sqlite3.connect(":memory:")
+    try:
+        reference.row_factory = sqlite3.Row
+        reference.execute("PRAGMA foreign_keys = ON")
+        _create_schema_metadata_table(reference)
+        for migration in MIGRATIONS:
+            if migration.version > version:
+                break
+            migration.apply(reference)
+            _set_schema_version(reference, migration.version)
+
+        expected_tables = {
+            str(row["name"])
+            for row in reference.execute(
+                """
+                SELECT name FROM sqlite_master
+                WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+                """
+            )
+        }
+        actual_tables = {
+            str(row["name"])
+            for row in conn.execute(
+                """
+                SELECT name FROM sqlite_master
+                WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+                """
+            )
+        }
+        missing_tables = sorted(expected_tables - actual_tables)
+        if missing_tables:
+            raise MigrationError(
+                "database schema is missing required tables: " + ", ".join(missing_tables)
+            )
+        for table_name in sorted(expected_tables):
+            missing_columns = sorted(
+                _table_columns(reference, table_name) - _table_columns(conn, table_name)
+            )
+            if missing_columns:
+                raise MigrationError(
+                    f"database table {table_name} is missing required columns: "
+                    + ", ".join(missing_columns)
+                )
+            if allow_pre_metadata_layout and table_name in PRE_METADATA_TABLES:
+                if _semantic_table_definition(
+                    reference, table_name
+                ) != _semantic_table_definition(conn, table_name):
+                    raise MigrationError(
+                        f"database table {table_name} does not match its required definition"
+                    )
+            elif _schema_definition(reference, "table", table_name) != _schema_definition(
+                conn, "table", table_name
+            ):
+                raise MigrationError(
+                    f"database table {table_name} does not match its required definition"
+                )
+
+        expected_indexes = _explicit_schema_definitions(reference, object_type="index")
+        actual_indexes = _explicit_schema_definitions(conn, object_type="index")
+        for index_name, expected_definition in sorted(expected_indexes.items()):
+            actual_definition = actual_indexes.get(index_name)
+            if actual_definition is None:
+                raise MigrationError(f"database schema is missing required index: {index_name}")
+            if actual_definition != expected_definition:
+                raise MigrationError(
+                    f"database index {index_name} does not match its required definition"
+                )
+    finally:
+        reference.close()
+
+
+def _semantic_table_definition(
+    conn: sqlite3.Connection,
+    table_name: str,
+) -> tuple[str, tuple[str, ...], str]:
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table_name,),
+    ).fetchone()
+    if row is None or row["sql"] is None:
+        raise MigrationError(f"database schema definition is missing for {table_name}")
+    value = str(row["sql"])
+    opening: int | None = None
+    closing: int | None = None
+    depth = 0
+    for index, character in _unquoted_schema_characters(value):
+        if character == "(":
+            if opening is None:
+                opening = index
+            depth += 1
+        elif character == ")" and opening is not None:
+            depth -= 1
+            if depth == 0:
+                closing = index
+                break
+    if opening is None or closing is None:
+        raise MigrationError(f"database table {table_name} has an invalid SQL definition")
+
+    body = value[opening + 1 : closing]
+    item_start = 0
+    item_depth = 0
+    items: list[str] = []
+    for index, character in _unquoted_schema_characters(body):
+        if character == "(":
+            item_depth += 1
+        elif character == ")":
+            item_depth -= 1
+        elif character == "," and item_depth == 0:
+            items.append(_canonical_schema_sql(body[item_start:index]))
+            item_start = index + 1
+    items.append(_canonical_schema_sql(body[item_start:]))
+    if not all(items):
+        raise MigrationError(f"database table {table_name} has an invalid SQL definition")
+    return (
+        _canonical_schema_sql(value[:opening]),
+        tuple(sorted(items)),
+        _canonical_schema_sql(value[closing + 1 :]),
+    )
+
+
+def _unquoted_schema_characters(value: str) -> Iterator[tuple[int, str]]:
+    closing_quote: str | None = None
+    index = 0
+    while index < len(value):
+        character = value[index]
+        if closing_quote is not None:
+            if character == closing_quote:
+                if (
+                    closing_quote in {"'", '"', "`"}
+                    and index + 1 < len(value)
+                    and value[index + 1] == closing_quote
+                ):
+                    index += 1
+                else:
+                    closing_quote = None
+            index += 1
+            continue
+        if character in {"'", '"', "`", "["}:
+            closing_quote = "]" if character == "[" else character
+        else:
+            yield index, character
+        index += 1
+
+
+def _schema_definition(
+    conn: sqlite3.Connection,
+    object_type: str,
+    object_name: str,
+) -> str:
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = ? AND name = ?",
+        (object_type, object_name),
+    ).fetchone()
+    if row is None or row["sql"] is None:
+        raise MigrationError(f"database schema definition is missing for {object_name}")
+    return _canonical_schema_sql(str(row["sql"]))
+
+
+def _explicit_schema_definitions(
+    conn: sqlite3.Connection,
+    *,
+    object_type: str,
+) -> dict[str, str]:
+    rows = conn.execute(
+        """
+        SELECT name, sql
+        FROM sqlite_master
+        WHERE type = ? AND sql IS NOT NULL AND name NOT LIKE 'sqlite_%'
+        """,
+        (object_type,),
+    ).fetchall()
+    return {
+        str(row["name"]): _canonical_schema_sql(str(row["sql"]))
+        for row in rows
+    }
+
+
+def _canonical_schema_sql(value: str) -> str:
+    """Collapse formatting whitespace while preserving quoted SQL exactly."""
+
+    result: list[str] = []
+    pending_space = False
+    closing_quote: str | None = None
+    index = 0
+    while index < len(value):
+        character = value[index]
+        if closing_quote is not None:
+            result.append(character)
+            if character == closing_quote:
+                if (
+                    closing_quote in {"'", '"', "`"}
+                    and index + 1 < len(value)
+                    and value[index + 1] == closing_quote
+                ):
+                    index += 1
+                    result.append(value[index])
+                else:
+                    closing_quote = None
+            index += 1
+            continue
+        if character.isspace():
+            pending_space = True
+            index += 1
+            continue
+        if pending_space and result:
+            result.append(" ")
+        pending_space = False
+        result.append(character)
+        if character in {"'", '"', "`", "["}:
+            closing_quote = "]" if character == "[" else character
+        index += 1
+    return "".join(result).strip()
 
 
 def _create_schema_metadata_table(conn: sqlite3.Connection) -> None:

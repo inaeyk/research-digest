@@ -16,7 +16,12 @@ from unittest import mock
 from research_digest.backup import run_backup
 from research_digest.cli import run_cli
 from research_digest.config import CONFIG_VERSION, DEFAULT_CONFIG_FILENAME, load_config
-from research_digest.db import CURRENT_SCHEMA_VERSION, Database
+from research_digest.db import (
+    CURRENT_SCHEMA_VERSION,
+    Database,
+    SchemaCompatibility,
+    inspect_database_schema,
+)
 from research_digest.doctor import DoctorSeverity, run_doctor
 
 
@@ -90,6 +95,19 @@ class ReleaseQualificationMatrixTests(unittest.TestCase):
             self.assertTrue(backup.export_path.exists())
             with sqlite3.connect(backup.backup_path) as conn:
                 self.assertEqual(conn.execute("PRAGMA integrity_check").fetchone()[0], "ok")
+
+    def test_m2_style_schema_is_read_only_migratable_preflight(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            legacy = Path(tmp) / "legacy.sqlite3"
+            _create_representative_m2_qualified_db(legacy)
+            before = legacy.read_bytes()
+
+            inspection = inspect_database_schema(legacy)
+
+            self.assertEqual(inspection.compatibility, SchemaCompatibility.MIGRATABLE)
+            self.assertEqual(inspection.version, 0)
+            self.assertEqual(legacy.read_bytes(), before)
+            self.assertEqual(list(legacy.parent.glob("*.backup-v0-to-v20-*.sqlite3")), [])
 
     def test_v010_upgrade_preserves_history_config_and_legacy_source_settings(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

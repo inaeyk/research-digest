@@ -230,7 +230,7 @@ class EndUserInstallerTests(unittest.TestCase):
             runtime = home / ".local" / "share" / "research-digest" / "runtime"
             self.assertFalse(runtime.exists())
 
-    def test_failed_install_leaves_prior_current_runtime_unchanged(self) -> None:
+    def test_failed_candidate_verification_leaves_v041_current_unchanged(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp).resolve() / "home"
             home.mkdir()
@@ -244,15 +244,15 @@ class EndUserInstallerTests(unittest.TestCase):
             root.mkdir(parents=True)
             root.chmod(0o700)
             write_owned(root / installer.ROOT_MARKER)
-            previous_command = root / "0.4.0" / "venv" / "bin" / "research-digest"
+            previous_command = root / "0.4.1" / "venv" / "bin" / "research-digest"
             previous_command.parent.mkdir(parents=True)
-            (root / "0.4.0").chmod(0o700)
+            (root / "0.4.1").chmod(0o700)
             previous_command.write_text("working", encoding="utf-8")
             previous_command.chmod(0o755)
-            write_owned(root / "0.4.0" / installer.VERSION_MARKER, version="0.4.0")
+            write_owned(root / "0.4.1" / installer.VERSION_MARKER, version="0.4.1")
             write_owned(
                 root / installer.CURRENT_STATE,
-                version="0.4.0",
+                version="0.4.1",
                 command=str(previous_command),
             )
             before = (root / installer.CURRENT_STATE).read_bytes()
@@ -262,9 +262,14 @@ class EndUserInstallerTests(unittest.TestCase):
                 mock.patch.object(
                     installer,
                     "_create_versioned_runtime",
-                    side_effect=installer.InstallError("simulated pip failure"),
+                    side_effect=installer.InstallError(
+                        "simulated candidate verification failure"
+                    ),
                 ),
-                self.assertRaisesRegex(installer.InstallError, "simulated pip failure"),
+                self.assertRaisesRegex(
+                    installer.InstallError,
+                    "simulated candidate verification failure",
+                ),
             ):
                 installer.install(asset_dir=assets, distro="Research Debian")
 

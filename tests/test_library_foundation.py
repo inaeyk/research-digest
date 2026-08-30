@@ -697,7 +697,7 @@ class Schema19MigrationTests(unittest.TestCase):
         self.tempdir = tempfile.TemporaryDirectory()
         self.addCleanup(self.tempdir.cleanup)
         self.path = Path(self.tempdir.name) / "realistic-v041.sqlite3"
-        _create_realistic_schema_18_database(self.path)
+        create_realistic_schema_18_database(self.path)
 
     def test_realistic_v041_migration_preserves_all_stable_data_and_creates_backup(self) -> None:
         fail = AssertionError("migration invoked an AI execution boundary")
@@ -822,7 +822,7 @@ class Schema19MigrationTests(unittest.TestCase):
         self.assertEqual(payload["ai_conversation_messages"][0]["id"], message.id)  # type: ignore[index]
 
 
-def _create_realistic_schema_18_database(path: Path) -> None:
+def create_realistic_schema_18_database(path: Path) -> None:
     timestamp = "2026-08-29T12:00:00Z"
     with sqlite3.connect(path) as conn:
         conn.row_factory = sqlite3.Row

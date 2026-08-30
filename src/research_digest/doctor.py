@@ -33,7 +33,14 @@ from research_digest.config import (
     resolve_config_dir,
     resolve_data_dir,
 )
-from research_digest.db import CURRENT_SCHEMA_VERSION, Database, MigrationError
+from research_digest.db import (
+    CURRENT_SCHEMA_VERSION,
+    Database,
+    DatabaseSchemaInspection,
+    MigrationError,
+    SchemaCompatibility,
+    inspect_database_schema,
+)
 from research_digest.errors import sanitize_error, sanitize_error_text
 from research_digest.scheduler import (
     DEFAULT_TASK_NAME,
@@ -108,6 +115,9 @@ class ReadOnlyDoctorDatabase:
     def get_schema_version(self) -> int:
         with self._connection() as conn:
             return _read_schema_version(conn)
+
+    def inspect_schema(self) -> DatabaseSchemaInspection:
+        return inspect_database_schema(self.path)
 
     def get_app_runs(self) -> list[sqlite3.Row]:
         with self._connection() as conn:
@@ -308,8 +318,34 @@ def _sqlite_check(path: Path) -> DoctorCheck:
 
 
 def _schema_check(db: Database | ReadOnlyDoctorDatabase) -> DoctorCheck:
-    if isinstance(db, ReadOnlyDoctorDatabase) and not db.path.exists():
-        return DoctorCheck("schema_version", DoctorSeverity.WARNING, "Database does not exist yet.")
+    if isinstance(db, ReadOnlyDoctorDatabase):
+        inspection = db.inspect_schema()
+        if inspection.compatibility == SchemaCompatibility.FIRST_RUN:
+            return DoctorCheck(
+                "schema_version",
+                DoctorSeverity.WARNING,
+                "Database does not exist or has no application schema yet.",
+            )
+        if inspection.compatibility == SchemaCompatibility.MIGRATABLE:
+            assert inspection.version is not None
+            return DoctorCheck(
+                "schema_version",
+                DoctorSeverity.WARNING,
+                f"database schema {inspection.version} is supported and will migrate to "
+                f"schema {CURRENT_SCHEMA_VERSION} on normal application startup.",
+            )
+        if inspection.compatibility == SchemaCompatibility.CURRENT:
+            assert inspection.version is not None
+            return DoctorCheck(
+                "schema_version",
+                DoctorSeverity.PASS,
+                f"schema version {inspection.version}.",
+            )
+        return DoctorCheck(
+            "schema_version",
+            DoctorSeverity.FAILURE,
+            inspection.detail + ".",
+        )
     try:
         version = db.get_schema_version()
     except Exception as exc:
