@@ -49,6 +49,7 @@ function Get-ResearchDigestInstallerEnvironment {
 }
 # END RESEARCH DIGEST INSTALLER ENVIRONMENT
 
+# BEGIN RESEARCH DIGEST WSL DISTRIBUTION
 function Get-InstalledWslDistributions {
     $Output = & wsl.exe --list --quiet
     if ($LASTEXITCODE -ne 0) {
@@ -56,32 +57,118 @@ function Get-InstalledWslDistributions {
     }
     return @(
         $Output |
-            ForEach-Object { ($_ -replace "`0", "").Trim() } |
+            Where-Object { $null -ne $_ } |
+            ForEach-Object { ([string] $_ -replace "`0", "").Trim() } |
             Where-Object { $_ -ne "" }
     )
 }
 
-try {
+function Resolve-ResearchDigestWslDistribution {
+    param([string] $RequestedDistribution)
     $Distributions = @(Get-InstalledWslDistributions)
-    if ($Distribution) {
-        $ExactMatches = @($Distributions | Where-Object { $_ -ceq $Distribution })
+    if ($RequestedDistribution) {
+        $ExactMatches = @(
+            $Distributions | Where-Object { $_ -ceq $RequestedDistribution }
+        )
         if ($ExactMatches.Count -ne 1) {
-            throw "The requested WSL distribution '$Distribution' is not installed."
+            throw (
+                "The requested WSL distribution '$RequestedDistribution' is not installed."
+            )
         }
-        $Distribution = $ExactMatches[0]
+        return $ExactMatches[0]
     }
-    elseif ($Distributions.Count -eq 1) {
-        $Distribution = $Distributions[0]
+    if ($Distributions.Count -eq 1) {
+        return $Distributions[0]
     }
-    elseif ($Distributions.Count -eq 0) {
+    if ($Distributions.Count -eq 0) {
         throw "WSL2 is installed, but no WSL distribution is available."
     }
-    else {
+    throw (
+        "More than one WSL distribution is installed. Rerun with " +
+        "-Distribution followed by the exact name from 'wsl.exe --list --quiet'."
+    )
+}
+# END RESEARCH DIGEST WSL DISTRIBUTION
+
+# BEGIN RESEARCH DIGEST WSL LOGIN SHELL
+function Get-ResearchDigestWslLoginShell {
+    param([string] $Distribution)
+
+    $UidLines = @(& wsl.exe -d $Distribution --exec id -u)
+    $UidExitCode = $LASTEXITCODE
+    if ($UidExitCode -ne 0) {
         throw (
-            "More than one WSL distribution is installed. Rerun with " +
-            "-Distribution followed by the exact name from 'wsl.exe --list --quiet'."
+            "Could not determine the target WSL user's UID in distribution " +
+            "'$Distribution': 'id -u' exited with code $UidExitCode."
         )
     }
+    $UidValues = @(
+        $UidLines |
+            Where-Object { $null -ne $_ } |
+            ForEach-Object { ([string] $_).Trim() } |
+            Where-Object { $_ -ne "" }
+    )
+    if ($UidValues.Count -ne 1) {
+        throw (
+            "Could not determine the target WSL user's UID in distribution " +
+            "'$Distribution': 'id -u' did not return exactly one numeric UID."
+        )
+    }
+    $UidOutput = $UidValues[0]
+    [long] $NumericUid = 0
+    if (
+        $UidOutput -notmatch '^(0|[1-9][0-9]{0,9})$' -or
+        -not [long]::TryParse($UidOutput, [ref] $NumericUid) -or
+        $NumericUid -gt 4294967294
+    ) {
+        throw (
+            "Could not determine the target WSL user's UID in distribution " +
+            "'$Distribution': 'id -u' did not return exactly one numeric UID."
+        )
+    }
+
+    $PasswdLines = @(& wsl.exe -d $Distribution --exec getent passwd $UidOutput)
+    $PasswdExitCode = $LASTEXITCODE
+    if ($PasswdExitCode -ne 0) {
+        throw (
+            "Could not identify the target WSL user's login shell in distribution " +
+            "'$Distribution': 'getent passwd $UidOutput' exited with code " +
+            "$PasswdExitCode."
+        )
+    }
+    $PasswdRows = @(
+        $PasswdLines |
+            Where-Object { $null -ne $_ } |
+            ForEach-Object { ([string] $_).Trim() } |
+            Where-Object { $_ -ne "" }
+    )
+    if ($PasswdRows.Count -ne 1) {
+        throw (
+            "Could not identify the target WSL user's login shell in distribution " +
+            "'$Distribution': getent did not return exactly one passwd row."
+        )
+    }
+    $PasswdFields = @($PasswdRows[0] -split ':')
+    if (
+        $PasswdFields.Count -ne 7 -or
+        -not $PasswdFields[0] -or
+        $PasswdFields[2] -cne $UidOutput -or
+        $PasswdFields[3] -notmatch '^[0-9]+$' -or
+        -not $PasswdFields[5].StartsWith('/') -or
+        -not $PasswdFields[6].StartsWith('/')
+    ) {
+        throw (
+            "Could not identify the target WSL user's login shell in distribution " +
+            "'$Distribution': getent returned an invalid passwd row."
+        )
+    }
+    return $PasswdFields[6]
+}
+# END RESEARCH DIGEST WSL LOGIN SHELL
+
+try {
+    $Distribution = Resolve-ResearchDigestWslDistribution `
+        -RequestedDistribution $Distribution
 
     New-Item -ItemType Directory -Path $TemporaryDirectory | Out-Null
     $ManifestPath = Join-Path $TemporaryDirectory "SHA256SUMS"
@@ -111,18 +198,19 @@ try {
             -OutFile $WheelPath
     }
 
-    $InstallerWslPath = (& wsl.exe -d $Distribution --exec wslpath -a $InstallerPath).Trim()
-    if ($LASTEXITCODE -ne 0 -or -not $InstallerWslPath) {
+    $InstallerWslPathOutput = @(
+        & wsl.exe -d $Distribution --exec wslpath -a $InstallerPath
+    )
+    $InstallerWslPathExitCode = $LASTEXITCODE
+    if ($InstallerWslPathExitCode -ne 0 -or $InstallerWslPathOutput.Count -ne 1) {
         throw "Could not translate the verified installer path into the selected WSL distribution."
     }
-    $PasswdLine = (& wsl.exe -d $Distribution --exec /bin/sh -c 'getent passwd "$(id -u)"').Trim()
-    if ($LASTEXITCODE -ne 0 -or -not $PasswdLine.Contains(":")) {
-        throw "Could not identify the target WSL user's login shell."
+    $InstallerWslPath = [string] $InstallerWslPathOutput[0]
+    if ([string]::IsNullOrWhiteSpace($InstallerWslPath)) {
+        throw "Could not translate the verified installer path into the selected WSL distribution."
     }
-    $LoginShell = ($PasswdLine -split ':')[-1]
-    if (-not $LoginShell.StartsWith("/")) {
-        throw "The target WSL user's login shell path is invalid."
-    }
+    $InstallerWslPath = $InstallerWslPath.Trim()
+    $LoginShell = Get-ResearchDigestWslLoginShell -Distribution $Distribution
     $LoginEnvironment = @(& wsl.exe -d $Distribution --exec $LoginShell -lic env)
     if ($LASTEXITCODE -ne 0) {
         throw "Could not read the selected WSL user's login environment."
@@ -179,10 +267,18 @@ exit 2
 
     $InstallerArguments = @($InstallerWslPath, $Action.ToLowerInvariant())
     if ($Action -eq "Install") {
-        $AssetsWslPath = (& wsl.exe -d $Distribution --exec wslpath -a $TemporaryDirectory).Trim()
-        if ($LASTEXITCODE -ne 0 -or -not $AssetsWslPath) {
+        $AssetsWslPathOutput = @(
+            & wsl.exe -d $Distribution --exec wslpath -a $TemporaryDirectory
+        )
+        $AssetsWslPathExitCode = $LASTEXITCODE
+        if ($AssetsWslPathExitCode -ne 0 -or $AssetsWslPathOutput.Count -ne 1) {
             throw "Could not translate the verified release-asset directory into WSL."
         }
+        $AssetsWslPath = [string] $AssetsWslPathOutput[0]
+        if ([string]::IsNullOrWhiteSpace($AssetsWslPath)) {
+            throw "Could not translate the verified release-asset directory into WSL."
+        }
+        $AssetsWslPath = $AssetsWslPath.Trim()
         $InstallerArguments += @(
             "--asset-dir", $AssetsWslPath, "--distro", $Distribution
         )
