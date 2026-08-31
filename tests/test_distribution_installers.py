@@ -155,21 +155,33 @@ class WindowsDistributionInstallerTests(unittest.TestCase):
             maxsplit=1,
         )[0]
 
-    def discovery_script(self) -> str:
-        text = Path("installers/install-research-digest-windows.ps1").read_text(
-            encoding="utf-8"
-        )
-        return text.split("$DiscoveryScript = @'\n", maxsplit=1)[1].split(
-            "\n'@",
-            maxsplit=1,
-        )[0]
-
-    def make_command(self, path: Path, body: str) -> None:
-        path.write_text("#!/bin/sh\n" + body, encoding="utf-8")
-        path.chmod(0o755)
-
     def installer_environment_function(self) -> str:
         return self.marked_source("RESEARCH DIGEST INSTALLER ENVIRONMENT")
+
+    def run_native_runtime_discovery_boundary(
+        self,
+        body: list[str],
+    ) -> subprocess.CompletedProcess[str]:
+        script = "\n".join(
+            [
+                "$ErrorActionPreference = 'Stop'",
+                self.marked_source("RESEARCH DIGEST WSL RUNTIME DISCOVERY"),
+                *body,
+            ]
+        )
+        return subprocess.run(
+            [
+                str(WINDOWS_POWERSHELL),
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                script,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
 
     def run_native_login_shell_boundary(
         self,
@@ -286,7 +298,8 @@ class WindowsDistributionInstallerTests(unittest.TestCase):
         self.assertIn("--distro", script)
         self.assertIn("@InstallerEnvironment $Python @InstallerArguments", script)
         self.assertIn("$LoginShell -lic env", script)
-        self.assertIn("env @InstallerEnvironment /bin/sh -c $DiscoveryScript", script)
+        self.assertIn("$Candidate -c $VersionCheckProgram", script)
+        self.assertIn("which codex", script)
         for name in (
             "XDG_DATA_HOME",
             "XDG_CONFIG_HOME",
@@ -316,7 +329,22 @@ class WindowsDistributionInstallerTests(unittest.TestCase):
         self.assertNotIn("$(id -u)", script)
         self.assertNotIn("$UidLines.Trim()", login_shell_source)
         self.assertNotIn("$PasswdLines.Trim()", login_shell_source)
-        self.assertEqual(script.count("/bin/sh -c"), 1)
+
+    def test_runtime_discovery_has_no_shell_command_string_boundary(self) -> None:
+        script = Path("installers/install-research-digest-windows.ps1").read_text(
+            encoding="utf-8"
+        )
+        discovery_source = self.marked_source(
+            "RESEARCH DIGEST WSL RUNTIME DISCOVERY"
+        )
+
+        self.assertNotIn("$DiscoveryScript", script)
+        self.assertNotIn("/bin/sh -c", script)
+        self.assertNotIn("/bin/bash -c", script)
+        self.assertNotIn("$(", discovery_source)
+        self.assertIn("--exec env @InstallerEnvironment", discovery_source)
+        self.assertIn("$Candidate -c $VersionCheckProgram", discovery_source)
+        self.assertIn("which codex", discovery_source)
 
     def test_public_download_and_shared_installer_boundaries_are_unchanged(self) -> None:
         script = Path("installers/install-research-digest-windows.ps1").read_text(
@@ -439,54 +467,230 @@ class WindowsDistributionInstallerTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn("RESULT=Ubuntu", completed.stdout)
 
-    def test_embedded_wsl_discovery_skips_old_default_for_versioned_python(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            commands = Path(tmp) / "commands"
-            commands.mkdir()
-            self.make_command(
-                commands / "python3",
-                "printf 'old' >/dev/null\nexit 1\n",
-            )
-            self.make_command(commands / "python3.12", "exit 0\n")
-            self.make_command(commands / "codex", "exit 0\n")
-            environment = {
-                "PATH": str(commands),
-            }
+    @unittest.skipUnless(
+        RUN_WINDOWS_NATIVE_TESTS,
+        "requires explicitly enabled native Windows PowerShell argument boundary",
+    )
+    def test_native_python314_and_nvm_codex_discovery_arguments(self) -> None:
+        completed = self.run_native_runtime_discovery_boundary(
+            [
+                "$installerEnvironment = @(",
+                "  'PATH=/usr/bin:/home/inaeyk/.nvm/versions/node/v22.22.2/bin'",
+                ")",
+                "$script:InvocationCount = 0",
+                "function global:wsl.exe {",
+                "  $script:InvocationCount += 1",
+                "  if ($script:InvocationCount -eq 1) {",
+                "    if ($args.Count -ne 8 -or (($args[0..6] -join '|') -cne ",
+                "'-d|Ubuntu|--exec|env|PATH=/usr/bin:/home/inaeyk/.nvm/versions/"
+                "node/v22.22.2/bin|python3|-c')) {",
+                "      throw ('unexpected Python argv: ' + ($args -join '|'))",
+                "    }",
+                "    if ($args[7] -notlike '*sys.version_info>=(3,11)*' -or ",
+                "$args[7] -like \"*`n*\") { throw 'invalid fixed Python program' }",
+                "    $global:LASTEXITCODE = 0",
+                "    Write-Output '/usr/bin/python3'",
+                "    return",
+                "  }",
+                "  if (($args -join '|') -cne ",
+                "'-d|Ubuntu|--exec|env|PATH=/usr/bin:/home/inaeyk/.nvm/versions/"
+                "node/v22.22.2/bin|which|codex') {",
+                "    throw ('unexpected Codex argv: ' + ($args -join '|'))",
+                "  }",
+                "  $global:LASTEXITCODE = 0",
+                "  Write-Output '/home/inaeyk/.nvm/versions/node/v22.22.2/bin/codex'",
+                "}",
+                "$python = Get-ResearchDigestWslPython -Distribution 'Ubuntu' `",
+                "  -InstallerEnvironment $installerEnvironment",
+                "$codex = Get-ResearchDigestWslCodex -Distribution 'Ubuntu' `",
+                "  -InstallerEnvironment $installerEnvironment",
+                "if ($python -cne '/usr/bin/python3') { throw 'Python path changed' }",
+                "if ($codex -cne ",
+                "'/home/inaeyk/.nvm/versions/node/v22.22.2/bin/codex') { ",
+                "throw 'Codex path changed' }",
+                "Write-Output 'native Python 3.14/Codex discovery: passed'",
+            ]
+        )
 
-            completed = subprocess.run(
-                ["/bin/sh", "-c", self.discovery_script()],
-                env=environment,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn(
+            "native Python 3.14/Codex discovery: passed",
+            completed.stdout,
+        )
 
-            self.assertEqual(completed.returncode, 0, completed.stderr)
-            self.assertIn(f"RD_PYTHON={commands / 'python3.12'}", completed.stdout)
-            self.assertIn(f"RD_CODEX={commands / 'codex'}", completed.stdout)
+    @unittest.skipUnless(
+        RUN_WINDOWS_NATIVE_TESTS,
+        "requires explicitly enabled native Windows PowerShell argument boundary",
+    )
+    def test_native_supported_versioned_python_candidate_is_selected(self) -> None:
+        completed = self.run_native_runtime_discovery_boundary(
+            [
+                "$installerEnvironment = @('PATH=/usr/bin')",
+                "$script:Candidates = @()",
+                "function global:wsl.exe {",
+                "  if (($args[0..4] -join '|') -cne ",
+                "'-d|Ubuntu|--exec|env|PATH=/usr/bin') { throw 'prefix changed' }",
+                "  $script:Candidates += $args[5]",
+                "  switch ($args[5]) {",
+                "    'python3' { $global:LASTEXITCODE = 42; return }",
+                "    'python3.14' { $global:LASTEXITCODE = 127; return }",
+                "    'python3.13' { $global:LASTEXITCODE = 127; return }",
+                "    'python3.12' {",
+                "      $global:LASTEXITCODE = 0",
+                "      Write-Output '/opt/Python Builds/python3.12'",
+                "      return",
+                "    }",
+                "    default { throw ('unexpected candidate: ' + $args[5]) }",
+                "  }",
+                "}",
+                "$python = Get-ResearchDigestWslPython -Distribution 'Ubuntu' `",
+                "  -InstallerEnvironment $installerEnvironment",
+                "if ($python -cne '/opt/Python Builds/python3.12') { ",
+                "throw 'supported candidate path changed' }",
+                "if (($script:Candidates -join '|') -cne ",
+                "'python3|python3.14|python3.13|python3.12') { ",
+                "throw 'candidate order changed' }",
+                "Write-Output 'native candidate selection: passed'",
+            ]
+        )
 
-    def test_embedded_wsl_discovery_honors_explicit_python_path_with_spaces(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            commands = Path(tmp) / "commands"
-            commands.mkdir()
-            override = Path(tmp) / "Compatible Python With Spaces"
-            self.make_command(override, "exit 0\n")
-            self.make_command(commands / "codex", "exit 0\n")
-            environment = {
-                "PATH": str(commands),
-                "RESEARCH_DIGEST_PYTHON": str(override),
-            }
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("native candidate selection: passed", completed.stdout)
 
-            completed = subprocess.run(
-                ["/bin/sh", "-c", self.discovery_script()],
-                env=environment,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
+    @unittest.skipUnless(
+        RUN_WINDOWS_NATIVE_TESTS,
+        "requires explicitly enabled native Windows PowerShell argument boundary",
+    )
+    def test_native_configured_python_path_with_spaces_is_one_argument(self) -> None:
+        completed = self.run_native_runtime_discovery_boundary(
+            [
+                "$installerEnvironment = @(",
+                "  'PATH=/opt/Python Builds:/usr/bin',",
+                "  'RESEARCH_DIGEST_PYTHON=/opt/Python Builds/python3.14'",
+                ")",
+                "function global:wsl.exe {",
+                "  if ($args.Count -ne 9 -or $args[4] -cne ",
+                "'PATH=/opt/Python Builds:/usr/bin' -or $args[5] -cne ",
+                "'RESEARCH_DIGEST_PYTHON=/opt/Python Builds/python3.14' -or ",
+                "$args[6] -cne '/opt/Python Builds/python3.14') {",
+                "    throw ('space-containing argv changed: ' + ($args -join '|'))",
+                "  }",
+                "  $global:LASTEXITCODE = 0",
+                "  Write-Output '/opt/Python Builds/python3.14'",
+                "}",
+                "$python = Get-ResearchDigestWslPython -Distribution 'Ubuntu' `",
+                "  -InstallerEnvironment $installerEnvironment",
+                "if ($python -cne '/opt/Python Builds/python3.14') { ",
+                "throw 'configured Python path changed' }",
+                "Write-Output 'native configured Python spacing: passed'",
+            ]
+        )
 
-            self.assertEqual(completed.returncode, 0, completed.stderr)
-            self.assertIn(f"RD_PYTHON={override}", completed.stdout)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("native configured Python spacing: passed", completed.stdout)
+
+    @unittest.skipUnless(
+        RUN_WINDOWS_NATIVE_TESTS,
+        "requires explicitly enabled native Windows PowerShell argument boundary",
+    )
+    def test_native_unsupported_configured_python_is_rejected_contextually(self) -> None:
+        completed = self.run_native_runtime_discovery_boundary(
+            [
+                "$installerEnvironment = @(",
+                "  'PATH=/usr/bin',",
+                "  'RESEARCH_DIGEST_PYTHON=/usr/bin/python3.10'",
+                ")",
+                "function global:wsl.exe {",
+                "  $global:LASTEXITCODE = 42",
+                "}",
+                "$message = ''",
+                "try { $ignored = Get-ResearchDigestWslPython `",
+                "  -Distribution 'Ubuntu' -InstallerEnvironment $installerEnvironment ",
+                "} catch { $message = $_.Exception.Message }",
+                "if ($message -notlike '*older than Python 3.11*') { ",
+                "throw ('wrong unsupported error: ' + $message) }",
+                "Write-Output 'native unsupported Python: passed'",
+            ]
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("native unsupported Python: passed", completed.stdout)
+
+    @unittest.skipUnless(
+        RUN_WINDOWS_NATIVE_TESTS,
+        "requires explicitly enabled native Windows PowerShell argument boundary",
+    )
+    def test_native_absent_python_is_distinct_from_unsupported(self) -> None:
+        completed = self.run_native_runtime_discovery_boundary(
+            [
+                "$installerEnvironment = @('PATH=/usr/bin')",
+                "$script:Candidates = @()",
+                "function global:wsl.exe {",
+                "  $script:Candidates += $args[5]",
+                "  $global:LASTEXITCODE = 127",
+                "}",
+                "$message = ''",
+                "try { $ignored = Get-ResearchDigestWslPython `",
+                "  -Distribution 'Ubuntu' -InstallerEnvironment $installerEnvironment ",
+                "} catch { $message = $_.Exception.Message }",
+                "if ($message -notlike '*was not found*') { ",
+                "throw ('wrong absent error: ' + $message) }",
+                "if ($script:Candidates.Count -ne 9) { ",
+                "throw 'not all candidates were checked' }",
+                "Write-Output 'native absent Python: passed'",
+            ]
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("native absent Python: passed", completed.stdout)
+
+    @unittest.skipUnless(
+        RUN_WINDOWS_NATIVE_TESTS,
+        "requires explicitly enabled native Windows PowerShell argument boundary",
+    )
+    def test_native_python_subprocess_failure_is_not_version_error(self) -> None:
+        completed = self.run_native_runtime_discovery_boundary(
+            [
+                "$installerEnvironment = @('PATH=/usr/bin')",
+                "function global:wsl.exe { $global:LASTEXITCODE = 23 }",
+                "$message = ''",
+                "try { $ignored = Get-ResearchDigestWslPython `",
+                "  -Distribution 'Ubuntu' -InstallerEnvironment $installerEnvironment ",
+                "} catch { $message = $_.Exception.Message }",
+                "if ($message -notlike '*failed unexpectedly with exit code 23*') { ",
+                "throw ('wrong subprocess error: ' + $message) }",
+                "if ($message -like '*was not found*' -or ",
+                "$message -like '*none is Python*') { throw 'failure collapsed' }",
+                "Write-Output 'native Python subprocess failure: passed'",
+            ]
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("native Python subprocess failure: passed", completed.stdout)
+
+    @unittest.skipUnless(
+        RUN_WINDOWS_NATIVE_TESTS,
+        "requires explicitly enabled native Windows PowerShell argument boundary",
+    )
+    def test_native_absent_codex_returns_no_path(self) -> None:
+        completed = self.run_native_runtime_discovery_boundary(
+            [
+                "$installerEnvironment = @('PATH=/usr/bin')",
+                "function global:wsl.exe {",
+                "  if (($args -join '|') -cne ",
+                "'-d|Ubuntu|--exec|env|PATH=/usr/bin|which|codex') { ",
+                "throw 'Codex argv changed' }",
+                "  $global:LASTEXITCODE = 1",
+                "}",
+                "$codex = Get-ResearchDigestWslCodex -Distribution 'Ubuntu' `",
+                "  -InstallerEnvironment $installerEnvironment",
+                "if ($null -ne $codex) { throw 'absent Codex returned a path' }",
+                "Write-Output 'native absent Codex: passed'",
+            ]
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("native absent Codex: passed", completed.stdout)
 
     @unittest.skipUnless(
         RUN_WINDOWS_NATIVE_TESTS,

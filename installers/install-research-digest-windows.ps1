@@ -166,6 +166,148 @@ function Get-ResearchDigestWslLoginShell {
 }
 # END RESEARCH DIGEST WSL LOGIN SHELL
 
+# BEGIN RESEARCH DIGEST WSL RUNTIME DISCOVERY
+function Get-ResearchDigestNonEmptyOutputValues {
+    param([object[]] $OutputLines)
+    return @(
+        $OutputLines |
+            Where-Object { $null -ne $_ } |
+            ForEach-Object { ([string] $_).Trim() } |
+            Where-Object { $_ -ne "" }
+    )
+}
+
+function Get-ResearchDigestWslPython {
+    param(
+        [string] $Distribution,
+        [string[]] $InstallerEnvironment
+    )
+
+    $UnsupportedPythonExitCode = 42
+    $CommandNotFoundExitCode = 127
+    $VersionCheckProgram = (
+        'import os,sys;ok=sys.version_info>=(3,11);' +
+        'print(os.path.abspath(sys.executable)) if ok else None;' +
+        'raise SystemExit(0 if ok else 42)'
+    )
+    $ConfiguredPythonLines = @(
+        $InstallerEnvironment |
+            Where-Object { $_ -clike 'RESEARCH_DIGEST_PYTHON=*' }
+    )
+    $ConfiguredPython = ""
+    if ($ConfiguredPythonLines.Count -eq 1) {
+        $ConfiguredPython = $ConfiguredPythonLines[0].Substring(
+            'RESEARCH_DIGEST_PYTHON='.Length
+        )
+    }
+    if ($ConfiguredPython) {
+        $Candidates = @($ConfiguredPython)
+    }
+    else {
+        $Candidates = @(
+            "python3",
+            "python3.14",
+            "python3.13",
+            "python3.12",
+            "python3.11",
+            "/usr/local/bin/python3.14",
+            "/usr/local/bin/python3.13",
+            "/usr/local/bin/python3.12",
+            "/usr/local/bin/python3.11"
+        )
+    }
+
+    $SawUnsupportedPython = $false
+    foreach ($Candidate in $Candidates) {
+        $CandidateOutput = @(
+            & wsl.exe -d $Distribution --exec env @InstallerEnvironment `
+                $Candidate -c $VersionCheckProgram 2>$null
+        )
+        $CandidateExitCode = $LASTEXITCODE
+        if ($CandidateExitCode -eq 0) {
+            $ExecutablePaths = @(
+                Get-ResearchDigestNonEmptyOutputValues -OutputLines $CandidateOutput
+            )
+            if (
+                $ExecutablePaths.Count -ne 1 -or
+                -not $ExecutablePaths[0].StartsWith('/')
+            ) {
+                throw (
+                    "Python discovery for candidate '$Candidate' in WSL distribution " +
+                    "'$Distribution' returned invalid executable-path data."
+                )
+            }
+            return $ExecutablePaths[0]
+        }
+        if ($CandidateExitCode -eq $UnsupportedPythonExitCode) {
+            if ($ConfiguredPython) {
+                throw (
+                    "The configured RESEARCH_DIGEST_PYTHON '$ConfiguredPython' " +
+                    "is older than Python 3.11."
+                )
+            }
+            $SawUnsupportedPython = $true
+            continue
+        }
+        if ($CandidateExitCode -eq $CommandNotFoundExitCode) {
+            if ($ConfiguredPython) {
+                throw (
+                    "The configured RESEARCH_DIGEST_PYTHON '$ConfiguredPython' " +
+                    "could not be executed in WSL distribution '$Distribution'."
+                )
+            }
+            continue
+        }
+        throw (
+            "Python discovery for candidate '$Candidate' in WSL distribution " +
+            "'$Distribution' failed unexpectedly with exit code $CandidateExitCode."
+        )
+    }
+
+    if ($SawUnsupportedPython) {
+        throw (
+            "Python interpreters were found in WSL distribution '$Distribution', " +
+            "but none is Python 3.11 or newer."
+        )
+    }
+    throw (
+        "Python 3.11 or newer was not found in WSL distribution '$Distribution'."
+    )
+}
+
+function Get-ResearchDigestWslCodex {
+    param(
+        [string] $Distribution,
+        [string[]] $InstallerEnvironment
+    )
+
+    $CodexOutput = @(
+        & wsl.exe -d $Distribution --exec env @InstallerEnvironment `
+            which codex 2>$null
+    )
+    $CodexExitCode = $LASTEXITCODE
+    if ($CodexExitCode -eq 1) {
+        return $null
+    }
+    if ($CodexExitCode -ne 0) {
+        throw (
+            "Codex discovery in WSL distribution '$Distribution' failed " +
+            "unexpectedly with exit code $CodexExitCode."
+        )
+    }
+    $CodexPaths = @(
+        Get-ResearchDigestNonEmptyOutputValues -OutputLines $CodexOutput
+    )
+    if ($CodexPaths.Count -ne 1 -or -not $CodexPaths[0].StartsWith('/')) {
+        throw (
+            "Codex discovery in WSL distribution '$Distribution' returned " +
+            "invalid executable-path data."
+        )
+    }
+    return $CodexPaths[0]
+}
+# END RESEARCH DIGEST WSL RUNTIME DISCOVERY
+
 try {
     $Distribution = Resolve-ResearchDigestWslDistribution `
         -RequestedDistribution $Distribution
@@ -218,52 +360,18 @@ try {
     $InstallerEnvironment = @(
         Get-ResearchDigestInstallerEnvironment -LoginEnvironment $LoginEnvironment
     )
-    $DiscoveryScript = @'
-emit_runtime() {
-    resolved=$1
-    "$resolved" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' >/dev/null 2>&1 || return 1
-    codex_path=$(command -v codex 2>/dev/null || true)
-    printf 'RD_PYTHON=%s\n' "$resolved"
-    if [ -n "$codex_path" ] && [ -x "$codex_path" ]; then
-        printf 'RD_CODEX=%s\n' "$codex_path"
-    fi
-    return 0
-}
-if [ -n "${RESEARCH_DIGEST_PYTHON:-}" ]; then
-    case "$RESEARCH_DIGEST_PYTHON" in
-        /*) resolved=$RESEARCH_DIGEST_PYTHON ;;
-        *) resolved=$(command -v "$RESEARCH_DIGEST_PYTHON" 2>/dev/null || true) ;;
-    esac
-    [ -n "$resolved" ] && [ -x "$resolved" ] || exit 2
-    emit_runtime "$resolved" || exit 2
-    exit 0
-fi
-for candidate in python3 python3.14 python3.13 python3.12 python3.11 /usr/local/bin/python3.14 /usr/local/bin/python3.13 /usr/local/bin/python3.12 /usr/local/bin/python3.11; do
-    resolved=$(command -v "$candidate" 2>/dev/null || true)
-    [ -n "$resolved" ] || continue
-    emit_runtime "$resolved" || continue
-    exit 0
-done
-exit 2
-'@
-    $DiscoveryOutput = @(
-        & wsl.exe -d $Distribution --exec env @InstallerEnvironment /bin/sh -c $DiscoveryScript
-    )
-    if ($LASTEXITCODE -ne 0) {
-        throw "Python 3.11 or newer is required inside the selected WSL distribution."
-    }
-    $PythonLines = @($DiscoveryOutput | Where-Object { $_ -like 'RD_PYTHON=*' })
-    $CodexLines = @($DiscoveryOutput | Where-Object { $_ -like 'RD_CODEX=*' })
-    if ($PythonLines.Count -ne 1 -or $CodexLines.Count -gt 1) {
-        throw "The selected WSL login environment returned ambiguous runtime discovery data."
-    }
-    if ($Action -eq "Install" -and $CodexLines.Count -ne 1) {
+    $Python = Get-ResearchDigestWslPython `
+        -Distribution $Distribution `
+        -InstallerEnvironment $InstallerEnvironment
+    $Codex = Get-ResearchDigestWslCodex `
+        -Distribution $Distribution `
+        -InstallerEnvironment $InstallerEnvironment
+    if ($Action -eq "Install" -and -not $Codex) {
         throw (
             "Codex CLI was not found in the selected WSL user's login environment. " +
             "Install and authenticate Codex before installing Research Digest."
         )
     }
-    $Python = $PythonLines[0].Substring('RD_PYTHON='.Length)
 
     $InstallerArguments = @($InstallerWslPath, $Action.ToLowerInvariant())
     if ($Action -eq "Install") {
